@@ -1444,6 +1444,40 @@ fn always_leaves(expression: &h::Expr) -> bool {
     }
 }
 
+/// Each name `pattern` binds, in order.
+fn names_in(pattern: &s::Pattern, found: &mut Vec<s::Name>) {
+    match pattern {
+        s::Pattern::Bind(name) => found.push(*name),
+        s::Pattern::As { name, pattern, .. } => {
+            found.push(*name);
+            names_in(pattern, found);
+        }
+        s::Pattern::Constructor { fields: parts, .. }
+        | s::Pattern::Tuple { members: parts, .. }
+        | s::Pattern::Or {
+            alternatives: parts,
+            ..
+        } => parts.iter().for_each(|part| names_in(part, found)),
+        s::Pattern::List { elements, rest, .. } => elements
+            .iter()
+            .chain(rest.as_deref())
+            .for_each(|part| names_in(part, found)),
+        s::Pattern::Ending { front, last, .. } => std::iter::once(&**front)
+            .chain(last)
+            .for_each(|part| names_in(part, found)),
+        s::Pattern::Record { fields, .. } => {
+            for (_, field) in fields {
+                names_in(field, found);
+            }
+        }
+        s::Pattern::Wild(_)
+        | s::Pattern::Equal { .. }
+        | s::Pattern::Number { .. }
+        | s::Pattern::Range { .. }
+        | s::Pattern::String { .. } => {}
+    }
+}
+
 /// Where `pattern` names a whole value it also takes apart, if anywhere.
 fn named_whole(pattern: &s::Pattern) -> Option<s::Span> {
     match pattern {
@@ -1498,7 +1532,6 @@ fn resolve_clause(
         shadowing: None,
         compared: Some(Vec::new()),
         choosing: false,
-        tested: None,
         testing: false,
         hidden: HashMap::new(),
         merged: Vec::new(),
@@ -1609,9 +1642,6 @@ struct ClauseResolver<'a> {
     compared: Option<Vec<Compared>>,
     /// Whether an alternative of an `|` pattern is being resolved.
     choosing: bool,
-    /// While a test's pattern is resolved, the name of the value it tests,
-    /// where that is a name.
-    tested: Option<Symbol>,
     /// Each local a name bound again in a branch is after it, and the name.
     merged: Vec<(h::LocalId, Symbol)>,
     /// Inside a lambda, the names its body sees from around it, which it
@@ -1659,14 +1689,11 @@ impl ClauseResolver<'_> {
                 self.part_compared(pattern, tested.span.text(self.source))?;
                 let value = self.expr(tested)?;
                 let outer = std::mem::replace(&mut self.testing, true);
-                let named = self.tested_name(tested);
-                let outer_named = std::mem::replace(&mut self.tested, named);
                 let comparing = self.compared.replace(Vec::new());
                 self.shadowing = Some(HashSet::new());
                 let pattern = self.pattern(pattern);
                 self.shadowing = None;
                 self.testing = outer;
-                self.tested = outer_named;
                 let compared = std::mem::replace(&mut self.compared, comparing);
                 let tested = h::ExprKind::Is(Box::new(value), pattern?);
                 let tested = self.sites.expr(expression.span, tested);
@@ -1739,14 +1766,6 @@ impl ClauseResolver<'_> {
         )))
     }
 
-    /// The name `expression` is, where it is one.
-    fn tested_name(&mut self, expression: &s::Expr) -> Option<Symbol> {
-        match expression.kind {
-            s::ExprKind::Name(name) => Some(self.symbols.intern(name.text(self.source))),
-            _ => None,
-        }
-    }
-
     /// `name = …` where `name` is in scope: a new local the name is from
     /// here on, at whatever type it is given.
     fn assign(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, ResolveError> {
@@ -1760,6 +1779,13 @@ impl ClauseResolver<'_> {
             .label("in a condition, or the right of `&` or `|`")
             .help("assign it on a line of its own, before or after"));
         }
+        self.rebind(name, spelling)
+    }
+
+    /// `name` in a pattern where it is in scope, a binding's or a test's: a
+    /// new local the name is from here on, where the pattern matched.
+    fn rebind(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, ResolveError> {
+        let shown = name.text(self.source);
         if self
             .lambda_outer
             .as_ref()
@@ -1845,11 +1871,38 @@ impl ClauseResolver<'_> {
         let head = match (head, list) {
             (s::LoopHead::While(condition), _) => h::LoopHead::While(self.condition(condition)?),
             (s::LoopHead::For(pattern, _), Some(list)) => {
+                self.element_names_own(pattern)?;
                 h::LoopHead::For(self.total_pattern(pattern)?, list)
             }
             (s::LoopHead::For(..), None) => unreachable!("a `for` loop's list is read first"),
         };
         Ok((head, self.body(body)?))
+    }
+
+    /// Refuse a `for` naming its element as a name in scope: whether the
+    /// name after the loop were the last element or what it was before,
+    /// one reader or another would be surprised.
+    fn element_names_own(&mut self, pattern: &s::Pattern) -> Result<(), ResolveError> {
+        let mut names = Vec::new();
+        names_in(pattern, &mut names);
+        let Some(name) = names.into_iter().find(|name| {
+            let spelling = self.symbols.intern(name.text(self.source));
+            self.locals.contains_key(&spelling)
+        }) else {
+            return Ok(());
+        };
+        let shown = name.text(self.source);
+        Err(error(
+            self.module,
+            name.0,
+            format!(
+                "`{shown}` is a name already, and a `for` names each element with a name of its own"
+            ),
+        )
+        .label("named again here")
+        .help(
+            "name the element otherwise, and bind the name to it in the round if it should carry",
+        ))
     }
 
     /// The names of `before` a loop's head and body bind again, in order:
@@ -2047,7 +2100,7 @@ impl ClauseResolver<'_> {
         let newly = |locals: &HashMap<Symbol, h::LocalId>| -> HashMap<Symbol, h::LocalId> {
             locals
                 .iter()
-                .filter(|(name, _)| !before.contains_key(*name))
+                .filter(|(name, local)| before.get(*name) != Some(*local))
                 .map(|(&name, &local)| (name, local))
                 .collect()
         };
@@ -2111,10 +2164,9 @@ impl ClauseResolver<'_> {
             s::Pattern::Wild(_) => Ok(h::Pattern::Wild),
             s::Pattern::Bind(name) => {
                 let spelling = self.symbols.intern(name.text(self.source));
-                // A binding's pattern assigns a name already in scope; a
-                // test's declares only, so binding one is refused, as is a
-                // clause's head or a lambda's parameters binding one twice,
-                // which the checks below look after.
+                // A binding's pattern or a test's binds a name already in
+                // scope again, where it matched; a clause's head binding
+                // one twice is looked after below.
                 if let Some(bound) = &self.shadowing
                     && !bound.contains(&spelling)
                     && self.locals.contains_key(&spelling)
@@ -2123,26 +2175,10 @@ impl ClauseResolver<'_> {
                         .as_ref()
                         .is_some_and(|first| first.contains_key(&spelling))
                 {
-                    if !self.testing {
-                        return self.assign(*name, spelling);
+                    if self.testing {
+                        return self.rebind(*name, spelling);
                     }
-                    let shown = name.text(self.source);
-                    let help = if self.tested == Some(spelling) {
-                        format!(
-                            "to go on with what is left of `{shown}`, bind a name of its own and bind `{shown}` to it after: `{shown} is [x, *rest]`, then `{shown} = rest`"
-                        )
-                    } else {
-                        format!(
-                            "to compare, write `=={shown}` in its place; to bind, use a name of its own"
-                        )
-                    };
-                    return Err(error(
-                        self.module,
-                        name.0,
-                        format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
-                    )
-                    .label("bound again here")
-                    .help(help));
+                    return self.assign(*name, spelling);
                 }
                 // An alternative after the first binds the names the first did.
                 let alternate = self
@@ -2327,7 +2363,7 @@ impl ClauseResolver<'_> {
                         *span,
                         format!("`{shown}` compares only in a clause's head or a test"),
                     )
-                    .help("a binding's pattern cannot fail: test the value with `expect value is pattern else …`"));
+                    .help("a binding's pattern cannot fail: test the value with `value is pattern else return …`"));
                 }
                 // Within its own pattern, a name asks equality by being
                 // written again.
@@ -2438,18 +2474,26 @@ impl ClauseResolver<'_> {
                 let base = Box::new(self.expr(base)?);
                 h::ExprKind::Update(base, self.record_fields(fields, expression.span)?)
             }
+            // A lambda's parameters are its own names, shadowing any around
+            // it of the same spelling.
             s::ExprKind::Lambda(patterns, body) => {
-                let saved = self.locals.clone();
-                let seen: HashSet<Symbol> = saved.keys().copied().collect();
+                let saved = std::mem::take(&mut self.locals);
+                let patterns = patterns
+                    .iter()
+                    .map(|pattern| self.total_pattern(pattern))
+                    .collect::<Result<Vec<_>, _>>();
+                let parameters = std::mem::replace(&mut self.locals, saved.clone());
+                let seen: HashSet<Symbol> = saved
+                    .keys()
+                    .filter(|name| !parameters.contains_key(*name))
+                    .copied()
+                    .collect();
+                self.locals.extend(parameters);
                 let outer = self.lambda_outer.replace(seen);
                 // A lambda's body is no loop's, whatever loop it is written in.
                 let loops = std::mem::take(&mut self.loops);
                 let hidden = self.loops_hidden;
                 self.loops_hidden |= !loops.is_empty();
-                let patterns = patterns
-                    .iter()
-                    .map(|pattern| self.total_pattern(pattern))
-                    .collect::<Result<Vec<_>, _>>();
                 let body = patterns.and_then(|patterns| Ok((patterns, self.expr(body)?)));
                 self.loops = loops;
                 self.loops_hidden = hidden;
@@ -2639,16 +2683,12 @@ impl ClauseResolver<'_> {
             s::ExprKind::Continue => h::ExprKind::Continue(self.carried_now(expression.span)?),
             s::ExprKind::Break => h::ExprKind::Break(self.carried_now(expression.span)?),
             s::ExprKind::Match(value, arms) => {
-                let named = self.tested_name(value);
                 let value = self.expr(value)?;
                 let before = self.locals.clone();
                 let mut resolved = Vec::with_capacity(arms.len());
                 let mut branches = Vec::with_capacity(arms.len());
                 for arm in arms {
-                    let outer = std::mem::replace(&mut self.tested, named);
-                    let arm = self.arm(arm);
-                    self.tested = outer;
-                    let (arm, end) = arm?;
+                    let (arm, end) = self.arm(arm)?;
                     branches.push((arm.body.clone(), Some(end)));
                     resolved.push(arm);
                 }

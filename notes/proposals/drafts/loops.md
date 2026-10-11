@@ -62,7 +62,7 @@ def toposort(graph):
     return order
 ```
 
-With this proposal Faun writes it in 16, counting the in-degrees itself, so
+With this proposal Faun writes it in 15, counting the in-degrees itself, so
 the graph answers only `node_count` and `neighbors`:
 
 ```
@@ -71,8 +71,7 @@ toposort(graph) -> (
   degrees = Map.counted(nodes.flat_map(|node| graph.neighbors(node)))
   ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
   order = []
-  while ready is [node, *rest] do (
-    ready = rest
+  while ready is [node, *ready] do (
     order = order.append(node)
     for target in graph.neighbors(node) do (
       degrees = degrees.update(target, |degree| degree - 1)
@@ -103,7 +102,7 @@ The spelling is Python's; what a reader may assume is not.
 - **The function stays pure.** No lambda assigns a name of its body, and
   each loop is a recursive function underneath, so `toposort` is a function
   of `graph` alone, as it is today. Effects stay marked by `!`.
-- **The failures are checked.** `while ready is [node, *rest]` cannot take
+- **The failures are checked.** `while ready is [node, *ready]` cannot take
   from an empty list; `get_or` cannot raise; `Err(Cycle)` is in the
   signature, where Python's `raise Cycle` is in no signature at all.
 
@@ -123,8 +122,9 @@ line on, and a lambda binds again only its own names. A loop adds:
   branch's paths meet.
 - **A name first bound in a loop's body is the round's.** It is new each
   round and unseen after the loop.
-- **Patterns bind new names,** so a worklist takes its head into a new name
-  and binds its rest again: `while ready is [node, *rest] ( ready = rest …`.
+- **A test binds as `=` does,** so a worklist takes its head and binds its
+  rest again in one: `while ready is [node, *ready] do (`, carried as any
+  name the round binds again is.
 
 ### Loops
 
@@ -196,8 +196,6 @@ answers.
   body of several steps. Style holds this, not the grammar.
 - **Six keywords.** `for`, `in`, `while`, `loop`, `break` and `continue`.
   The HTML library's `for` attribute must be renamed.
-- **The worklist's extra line.** A pattern declares, so the rest of the
-  list is a new name assigned back: `ready = rest`.
 - **Order matters in a body.** Moving a line past an assignment of the name
   it reads changes what it reads, as in any language with variables.
 

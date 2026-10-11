@@ -1,7 +1,0 @@
-error: `limit` is a name already, and a test binds it anew rather than comparing with it
- --> a_test_binds_anew_rather_than_comparing_with_a_name_in_scope.fn:4:31
-  |
-4 | at_limit(r, limit) -> r is Ok(limit)
-  |                               ^^^^^ bound again here
-  |
-  = help: to compare, write `==limit` in its place; to bind, use a name of its own

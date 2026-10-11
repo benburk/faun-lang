@@ -281,8 +281,9 @@ while $stack is [node, *$stack] (
 )
 ```
 
-With no rebinding, `r is Ok(limit)` where `limit` is a name already is
-refused, offering `Ok(==limit)` to compare or a fresh name to bind.
+`r is Ok(limit)` where `limit` is a name already binds it again, as `=`
+would, where the test holds; `Ok(==limit)` compares. Refused until
+2026-10-11.
 
 ## What Faun has today
 

@@ -611,11 +611,14 @@ bumped(up, n) -> (
 )
 ```
 
-Only `=` binds a name again. A test, an arm, a clause's head and a
-lambda's parameters bind new names, and one already in scope is refused.
-A lambda binds again only its own names, since what calls it may call it
-any number of times; and no name of the body is bound again in a
-condition, or on the right of `&` or `|`, where it may not be worked out.
+A test's or an arm's pattern binds a name in scope again as `=` does,
+where it matched: `r is Ok(limit) else return 0` binds `limit` for the
+lines below, and `while ready is [node, *ready] do (` steps a worklist. A
+name in a pattern always binds; `==limit` compares. A lambda's parameters
+are its own, shadowing names around it within the lambda. A lambda binds
+again only its own names, since what calls it may call it any number of
+times; and `=` binds no name of the body in a condition, or on the right
+of `&` or `|`, where it may not be worked out.
 
 A clause's head, or a test's pattern, may bind a name twice, and then
 matches only where both are equal by their type's `equals`: `doubled([a, a]) -> True` is

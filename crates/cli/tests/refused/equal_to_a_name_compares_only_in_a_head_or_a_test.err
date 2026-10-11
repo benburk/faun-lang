@@ -4,4 +4,4 @@ error: `==x` compares only in a clause's head or a test
 5 |   (==x, y) = pair
   |    ^^^
   |
-  = help: a binding's pattern cannot fail: test the value with `expect value is pattern else …`
+  = help: a binding's pattern cannot fail: test the value with `value is pattern else return …`

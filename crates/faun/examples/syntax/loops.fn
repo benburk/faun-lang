@@ -14,13 +14,11 @@ summed(xs) -> (
 expect summed([1, 2, 3]) == 6 & summed([]) == 0
 
 # `while` with a test, whose names the round sees: a worklist taken apart a
-# head at a time, its rest bound again.
+# head at a time, the test binding its rest again as `=` would.
 counted : List(Nat) -> Nat
-counted(xs) -> (
-  ready = xs
+counted(ready) -> (
   seen = 0
-  while ready is [_, *rest] do (
-    ready = rest
+  while ready is [_, *ready] do (
     seen = seen + 1
   )
   seen
@@ -75,8 +73,7 @@ toposort(graph) -> (
   degrees = Map.counted(graph.flatten())
   ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
   order = []
-  while ready is [node, *rest] do (
-    ready = rest
+  while ready is [node, *ready] do (
     order = order.append(node)
     for target in graph.get_or(node, []) do (
       degrees = degrees.update(target, |degree| degree - 1)
@@ -88,3 +85,15 @@ toposort(graph) -> (
 )
 
 expect toposort([[1, 2], [2], []]) == Ok([0, 1, 2]) & toposort([[1], [0]]) == Err(Cycle)
+
+# A lambda's parameters are its own, so a fold may name its record's fields
+# as the names it folds into.
+mean : List(Nat) -> Nat
+mean(xs) -> (
+  total = 0
+  count = 0
+  {total, count} = xs.fold({total, count}, |{total, count}, x| {total: total + x, count: count + 1})
+  if count == 0 then 0 else total / count
+)
+
+expect mean([2, 4, 9]) == 5 & mean([]) == 0

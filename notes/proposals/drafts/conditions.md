@@ -112,11 +112,11 @@ job, so a default for a failed `Result` stays `ok_or`.
   body, and the lines below an `else` line. Past an `|`, a name both sides
   bind, from whichever held; under `!` or an argument, nowhere. A use where
   a name is not seen is refused, naming what hid it.
-- **A pattern declares.** A pattern may not bind a name already in scope:
-  `r is Ok(limit)` with `limit` in scope reads as a comparison and would be
-  a fresh binding, so it is refused, offering `Ok(==limit)` to compare or a
-  fresh name to bind. Changing a name is `=`'s alone; see
-  [Names](#names-assignment-not-shadowing).
+- **A name in a pattern binds,** wherever the pattern stands, and one
+  already in scope is bound again where the test holds, as `=` binds it:
+  `r is Ok(limit)` binds `limit`, whatever `limit` was. Comparing is
+  `Ok(==limit)`. So a pattern reads one way whatever is in scope; see
+  [Names](#names--binds-from-here-on).
 - **`==name`** in a pattern matches a value equal, by its type's `equals`,
   to a name from outside the pattern, binding nothing: `r is Some(==node)`.
   It compares a part: as a test's or an arm's whole pattern it is refused,
@@ -221,11 +221,17 @@ partway through a body is.
 - **A name first bound in a block leaves with it.** Only names bound before
   a branch or a loop carry past it; one first bound inside is the block's,
   so a name is never unbound where it is read, as Python's may be.
-- **Patterns bind new names.** A name in a pattern, a clause's head, a
-  lambda's parameters, a test or an arm, is a new one, and one already in
-  scope is refused: `r is Ok(limit)` would read as a comparison, written
-  `Ok(==limit)`. Only `=` binds a name again. A destructuring binding binds
-  each name it holds: `(a, b) = (b, a)` swaps.
+- **A test binds as `=` does.** A name already in scope that a test's or
+  an arm's pattern holds is bound again where the pattern matched: for the
+  lines below an `else` line, in `then` and an arm, and in a `while` loop's
+  round, carrying to the next. Where the ways meet, it has one type, as
+  after `=` in a branch. So `while ready is [node, *ready] do (` steps its
+  worklist itself. A destructuring binding binds each name it holds:
+  `(a, b) = (b, a)` swaps. Comparing with a name is `==name`.
+- **A lambda's parameters are its own,** shadowing a name of the body
+  around it within the lambda alone: `|{total, count}, x| …` folds into
+  names the body also has. A clause's head binds each name once; a name
+  written twice there asks the two parts equal.
 - **Nothing changes in place.** A method answers a new value and changes
   nothing it was given: `order = order.append(node)`, never a bare
   `order.append(node)`, which throws its answer away and is refused. A list
@@ -303,13 +309,16 @@ partway through a body is.
   block's line, read where the token after an `if`'s condition is a leaving
   keyword; resolution makes it the `if` an `else` line is the other way
   round, its `then` the leave, which alone sees the condition's names.
-  `continue` and `break` are keywords, refused until loops. A test binding
-  the very name it tests is told to bind a name of its own and bind the
-  tested name to it after.
+  `continue` and `break` are keywords, refused until loops.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.
-  Assignment replaces it for `=`; patterns keep the refusal.
+  Assignment replaces it for `=`; patterns kept the refusal until
+  2026-10-11.
+- **A test binds again,** 2026-10-11: a test's or an arm's pattern binds a
+  name in scope again, where it matched, as `=` does, and a lambda's
+  parameters shadow names of the body around it. The refusal had made a
+  pattern's name read by what was in scope; `==name` compares.
 
 ## Costs
 
@@ -374,9 +383,11 @@ partway through a body is.
 - **Shadowing,** a name bound again hiding the one before for the rest of
   its block. Straight-line code reads the same, but a branch's `count =
   count + 1` would vanish after the branch, silently.
-- **A pattern binding the very name it tests,** `ready is [node, *ready]`.
-  It saves `ready = rest` on a worklist, but the same name would be read on
-  the left and bound on the right of one `is`, the reading `=` mirrors.
+- **A pattern only declaring,** `r is Ok(limit)` refused where `limit` is
+  in scope, as first built: it guarded against meaning a comparison, but
+  made a name in a pattern read by what was in scope, and cost a worklist
+  `ready = rest`, a step a `continue` above it would skip forever.
+  `==name` already says compare.
 - **Writing back,** a bare `order.append(node)` changing `order`. Whether a
   line changes a name would hang on the line's shape and the method's type.
 - **Word operators, `and` and `or`,** freeing `|` for patterns. Every

@@ -1,0 +1,7 @@
+error: `x` is a name already, and a `for` names each element with a name of its own
+ --> a_for_names_each_element_with_a_name_of_its_own.fn:5:7
+  |
+5 |   for x in xs do (
+  |       ^ named again here
+  |
+  = help: name the element otherwise, and bind the name to it in the round if it should carry
