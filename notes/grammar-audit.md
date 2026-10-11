@@ -72,9 +72,12 @@ a spaced infix operator.
    and `[a *b]` read as `a * b`, though it looks like a rest. Resolved
    2026-10-09: a rest touches what it takes, as a prefix `-` does, and `a
    *b` is refused.
-2. **`if a then b else c else return 0`** parses, as a ternary on a line
-   whose `else` leaves; it reads badly. A linter's to flag, as the
-   conditions draft leaves which form to write.
+2. **`if a then b else c else return 0`** parsed, as a ternary on a line
+   whose `else` leaves, two `else`s meaning two things. Resolved
+   2026-10-10 in the grammar, which got smaller: a line beginning with a
+   ternary takes no `=` and no `else`, and `(if a then b else c) else
+   return 0` says it. A binding's `else`, `w = if x then y else z else
+   return 0`, is refused with a message of its own.
 3. **Three readings of `|`.** Each is decided by position, but a reader
    learns three. Word operators, `and` and `or`, would free `|` for
    alternatives; the conditions draft considered and declined them, since

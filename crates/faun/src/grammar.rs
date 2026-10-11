@@ -105,6 +105,8 @@ const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
 /// A block's line as far as its first value; see [`Parser::begun`].
 enum Begun {
     Value(Expr),
+    /// A ternary, which a line's `=` or `else` does not follow.
+    Ternary(Expr),
     Line(Statement),
 }
 
@@ -417,6 +419,10 @@ impl Parser<'_> {
         self.no_expect_in_a_block()?;
         match self.begun()? {
             Begun::Value(value) => self.statement_after(value),
+            Begun::Ternary(value) => {
+                self.after_ternary()?;
+                Ok(Statement::Value(value))
+            }
             Begun::Line(line) => Ok(line),
         }
     }
@@ -437,7 +443,7 @@ impl Parser<'_> {
             Kind::KwReturn | Kind::KwContinue | Kind::KwBreak
         ) {
             self.note("`return`");
-            return Ok(Begun::Value(self.if_after(keyword, condition)?));
+            return Ok(Begun::Ternary(self.if_after(keyword, condition)?));
         }
         let out = self.leaving()?;
         Ok(Begun::Line(Statement::If(
@@ -519,11 +525,33 @@ impl Parser<'_> {
         .help("to leave where a condition fails, write `condition else return value`"))
     }
 
+    /// Refuse a line's `=` or `else` after a ternary that begins the line:
+    /// nothing is bound to one, and an `else` after its own would read as
+    /// its.
+    fn after_ternary(&self) -> Parsed<()> {
+        let message = match self.peek() {
+            Kind::Eq => "a ternary is no pattern: nothing is bound to one",
+            Kind::KwElse => "a line beginning with a ternary takes no `else` of its own",
+            _ => return Ok(()),
+        };
+        Err(SyntaxError::new(self.tokens[self.at].span(), message).help(
+            "to leave where it fails, put it in parentheses: `(if a then b else c) else return x`",
+        ))
+    }
+
     /// The statement `value` begins: a binding, `condition else otherwise`,
     /// or a value.
     fn statement_after(&mut self, value: Expr) -> Parsed<Statement> {
         if self.eat(Kind::Eq).is_some() {
-            return Ok(Statement::Binding(value, self.expr()?));
+            let bound = self.expr()?;
+            if self.peek() == Kind::KwElse {
+                return Err(SyntaxError::new(
+                    self.tokens[self.at].span(),
+                    "a binding takes no `else`",
+                )
+                .help("to leave where a test fails, write the test on a line of its own: `c else return x`"));
+            }
+            return Ok(Statement::Binding(value, bound));
         }
         if self.eat(Kind::KwElse).is_some() {
             let otherwise = self.leaving()?;
@@ -1156,6 +1184,7 @@ impl Parser<'_> {
         self.no_expect_in_a_block()?;
         let first = match self.begun()? {
             Begun::Value(first) => first,
+            Begun::Ternary(first) => return self.after_first_ternary(open, first),
             Begun::Line(line) => return self.lines_from(open, line),
         };
         match self.peek() {
@@ -1166,6 +1195,25 @@ impl Parser<'_> {
                 self.note("`,`");
                 self.note("`=`");
                 self.note("`->`");
+                let close = self.expect(Kind::RParen, "`)`")?;
+                Ok(Expr {
+                    span: open.span().through(close.span()),
+                    ..first
+                })
+            }
+        }
+    }
+
+    /// After `(` and a ternary: a tuple, a block's first line, or one value
+    /// grouped; never a binding, an `else` line, or arms.
+    fn after_first_ternary(&mut self, open: Token, first: Expr) -> Parsed<Expr> {
+        self.after_ternary()?;
+        match self.peek() {
+            Kind::Comma => self.tuple(open, first),
+            Kind::Newline => self.block(open, first),
+            _ => {
+                self.note("`,`");
+                self.note("a new line");
                 let close = self.expect(Kind::RParen, "`)`")?;
                 Ok(Expr {
                     span: open.span().through(close.span()),

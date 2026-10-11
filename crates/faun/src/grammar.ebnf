@@ -120,11 +120,14 @@ exprs             = expr [ "," [ exprs ] ] ;
    `else` or a line's end a block, whose lines are bindings, leaving lines
    and loops and then its answer, `->` or `if` arms, and `)` one value
    grouped. *)
-parenthesized     = if-head ( "then" expr "else" expr after-first | leave NEWLINE statements )
+parenthesized     = if-head ( "then" expr "else" expr after-ternary | leave NEWLINE statements )
                   | loop-line NEWLINE statements
                   | plain after-first ;
 after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
                     | arm-tail { NEWLINE arm } ] ;
+(* A line beginning with a ternary takes no `=` and no `else` of its own:
+   `(if a then b else c) else return x` puts it in parentheses. *)
+after-ternary     = [ "," [ exprs ] | NEWLINE statements ] ;
 (* Arms a line apiece, which an `is` takes: `x is (P -> a` … `)`. Arms no
    `is` takes are refused after parsing. *)
 arm               = expr arm-tail ;
@@ -134,14 +137,14 @@ arm-tail          = [ "if" expr ] "->" expr ;
    ternary, or, where a leave follows its condition, a line leaving where
    the condition holds. That `continue` and `break` stand in a loop's body
    is told after parsing. *)
-statements        = if-head ( "then" expr "else" expr statement-tail | leave NEWLINE statements )
+statements        = if-head ( "then" expr "else" expr [ NEWLINE statements ] | leave NEWLINE statements )
                   | loop-line NEWLINE statements
                   | plain statement-tail ;
 statement-tail    = [ line-tail NEWLINE statements | NEWLINE statements ] ;
 (* A loop's body: lines, any of which may be the last, the round going on
    to the next where nothing leaves it. *)
 round             = block-line { NEWLINE block-line } ;
-block-line        = if-head ( "then" expr "else" expr [ line-tail ] | leave )
+block-line        = if-head ( "then" expr "else" expr | leave )
                   | loop-line
                   | plain [ line-tail ] ;
 (* A binding, or a line going on where its condition holds and leaving by
