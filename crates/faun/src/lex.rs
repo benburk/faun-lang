@@ -18,8 +18,9 @@
 //! where it stands, as in any expression grammar. What joins by adjacency is
 //! read here, so the grammar reads kinds alone: a `(` against an operand is a
 //! call's, [`Kind::CallParen`]; `.`, `..`, `.*` and `?` go against what they
-//! join, or they are [`Kind::Detached`]; and a prefix `-` or `!`, or a
-//! rest's `*`, touches what it takes, or it is [`Kind::Apart`]. Space never chooses between two
+//! join, or they are [`Kind::Detached`]; and a prefix `-` or `!`, a rest's
+//! `*`, or a pattern's `==`, touches what it takes, or it is
+//! [`Kind::Apart`]. Space never chooses between two
 //! readings: each spelling has one, or none.
 
 // Token recognition is clearer as one exhaustive byte match than as forwarding
@@ -372,8 +373,8 @@ impl Lexer<'_> {
             Kind::DotStar | Kind::Question if before => Kind::Detached,
             // A prefix touches its operand; an infix `-` has an operand
             // before it, spaced or touching on both sides alike.
-            Kind::Minus | Kind::Star if operand && before && !after => Kind::Apart,
-            Kind::Minus | Kind::Bang | Kind::Star if !operand && after => Kind::Apart,
+            Kind::Minus | Kind::Star | Kind::EqEq if operand && before && !after => Kind::Apart,
+            Kind::Minus | Kind::Bang | Kind::Star | Kind::EqEq if !operand && after => Kind::Apart,
             kind => kind,
         }
     }
@@ -787,7 +788,7 @@ mod tests {
 
     #[test]
     fn an_operator_is_one_kind_however_it_is_spaced_but_a_prefix_touches() {
-        use Kind::{Apart, Bang, Bar, Minus, Star};
+        use Kind::{Apart, Bang, Bar, EqEq, Minus, Star};
         for (source, at, kind) in [
             ("a - b", 1, Minus),
             ("a-b", 1, Minus),
@@ -805,6 +806,11 @@ mod tests {
             ("[a, * rest]", 3, Apart),
             ("a *b", 1, Apart),
             ("{x, *}", 3, Star),
+            ("a == b", 1, EqEq),
+            ("a==b", 1, EqEq),
+            ("[a, ==b]", 3, EqEq),
+            ("a ==b", 1, Apart),
+            ("[a, == b]", 3, Apart),
             ("a | b", 1, Bar),
             ("f(a, |x| x)", 4, Bar),
         ] {

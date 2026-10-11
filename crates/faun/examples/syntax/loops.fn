@@ -40,6 +40,20 @@ evens_until(xs, stop) -> (
   total
 )
 
+# A name bound before the loop that `for` names its element with carries
+# out of it, as any name the round binds again: here, the last element
+# taken.
+last_taken : List(Nat) -> Nat
+last_taken(xs) -> (
+  x = 0
+  for x in xs do (
+    if x > 5 break
+  )
+  x
+)
+
+expect last_taken([1, 7, 2]) == 7 & last_taken([1, 2]) == 2 & last_taken([]) == 0
+
 first_over : (List(Nat), Nat) -> Nat
 first_over(xs, limit) -> (
   for x in xs do (

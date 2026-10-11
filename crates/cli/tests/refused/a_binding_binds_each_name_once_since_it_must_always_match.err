@@ -1,5 +1,7 @@
-error: local `a` is bound more than once
+error: `a` is written twice in a pattern that cannot fail
  --> a_binding_binds_each_name_once_since_it_must_always_match.fn:5:7
   |
 5 |   (a, a) = (n, n)
-  |       ^
+  |       ^ written again here
+  |
+  = help: a name written twice asks its parts equal, which only a clause's head or a test may ask: give each part a name of its own

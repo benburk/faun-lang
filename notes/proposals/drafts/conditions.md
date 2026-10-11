@@ -120,8 +120,9 @@ job, so a default for a failed `Result` stays `ok_or`.
 - **`==name`** in a pattern matches a value equal, by its type's `equals`,
   to a name from outside the pattern, binding nothing: `r is Some(==node)`.
   It compares a part: as a test's or an arm's whole pattern it is refused,
-  `x == y` comparing the whole value. So no arm begins with `==`, which a
-  line break before would join to the line above as an infix `==`.
+  `x == y` comparing the whole value, so no line begins with one. It
+  touches the name, as a prefix does: `a ==b` and `[== b]` are refused, so
+  a missing comma is never read as a comparison.
   Within one pattern, a clause's parameters too, a name written twice asks
   its two parts equal, `[a, a, *_]`; `[a, ==a]` would read as if `a` were
   bound before the pattern, and is refused.
@@ -239,9 +240,11 @@ partway through a body is.
   mutation would.
 - **No aliasing.** `snapshot = order` stays a snapshot when `order`
   changes: values have no identity.
-- **A lambda binds again only its own names.** One binding a name of the
-  body around it is refused: a callee may call it any number of times, or
-  none. A lambda captures values, never a name.
+- **`=` in a lambda binds only the lambda's names.** One binding a name of
+  the body around it is refused: a callee may call it any number of times,
+  or none, and the body around would not see it change. A test's names and
+  a `for`'s element in a lambda shadow the body's within the lambda, as its
+  parameters do. A lambda captures values, never a name.
 - **Meaning.** Each binding is a new version of the name. Where branches
   meet, after an `if`, an `is` with arms, or an `else` line's block, the
   names a branch bound again are the parameters of the code after it, a
@@ -318,7 +321,10 @@ partway through a body is.
 - **A test binds again,** 2026-10-11: a test's or an arm's pattern binds a
   name in scope again, where it matched, as `=` does, and a lambda's
   parameters shadow names of the body around it. The refusal had made a
-  pattern's name read by what was in scope; `==name` compares.
+  pattern's name read by what was in scope; `==name` compares. Then a
+  `for`'s element too, carried out of the loop as Python's is, a test's
+  names in a lambda shadowing, and `==` touching the name it compares
+  with.
 
 ## Costs
 

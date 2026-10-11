@@ -1,0 +1,7 @@
+error: `Result(Nat, [Gone])` has no field or method `not`
+ --> a_prefix_takes_the_operand_it_touches_before_is_tests_it.fn:4:15
+  |
+4 | missing(r) -> !r is Ok(_)
+  |               ^^
+  |
+  = help: `!` takes only the operand it touches, which `is` then tests: to negate the test, `!(x is P)`

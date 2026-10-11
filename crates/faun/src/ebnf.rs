@@ -609,6 +609,8 @@ const REFUSED: &[&str] = &[
     "f(x) -> (\n  y = x\n  expect y else return 0\n  y\n)\n",
     "f(x) -> x is Some(==)\n",
     "f(x) -> x is Some(==Y)\n",
+    "f(a, b) -> a ==b\n",
+    "f(x) -> x is [== b]\n",
     "f(x) -> (\n  y = x\n  if y return 0\n)\n",
     "f(x) -> (\n  if x then 1\n  2\n)\n",
     "f(x) -> (\n  if x then True else False else return 0\n  1\n)\n",

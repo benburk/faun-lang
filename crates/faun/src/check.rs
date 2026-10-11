@@ -1158,6 +1158,9 @@ struct Checker<'a> {
     /// In the clause being checked, each local a name bound again in a
     /// branch is after it, and the name.
     merges: HashMap<h::LocalId, Symbol>,
+    /// Prefix operators read otherwise than they may look, with what to say
+    /// where their operand has no method for them.
+    prefix_helps: HashMap<h::SiteId, &'static str>,
     /// The types of the names each loop around the expression being checked
     /// carries, innermost last.
     loops: Vec<Vec<Ty>>,
@@ -1191,6 +1194,7 @@ impl<'a> Checker<'a> {
             answers: Vec::new(),
             clause_marks: None,
             merges: HashMap::new(),
+            prefix_helps: HashMap::new(),
             loops: Vec::new(),
             bounds: HashMap::new(),
             variable_names: HashMap::new(),
@@ -2449,6 +2453,12 @@ impl<'a> Checker<'a> {
             // A test answers a `Bool`; its pattern types what it binds,
             // each at one type, as a binding's names are.
             h::ExprKind::Is(value, pattern) => {
+                if let h::ExprKind::Unary(super::ast::UnaryOp::Not, _) = value.kind {
+                    self.prefix_helps.insert(
+                        value.site,
+                        "`!` takes only the operand it touches, which `is` then tests: to negate the test, `!(x is P)`",
+                    );
+                }
                 let tested = self.expr(module, value, locals)?;
                 self.tested_pattern(module, pattern, &tested, locals, value.span)?;
                 Ok(self.bool_type())
@@ -2721,9 +2731,22 @@ impl<'a> Checker<'a> {
                 });
                 Ok(ty)
             }
+            // A prefix takes its operand's postfixes with it: `-x.abs()` is
+            // `-(x.abs())`, as in most languages, which a reader may not expect.
             h::ExprKind::Unary(operator, value) => {
                 let name = unary_member(*operator);
                 let method = self.method_symbol(module, expression.span, name)?;
+                if matches!(
+                    value.kind,
+                    h::ExprKind::Method(..)
+                        | h::ExprKind::Call(..)
+                        | h::ExprKind::Member(..)
+                        | h::ExprKind::Try(..)
+                ) {
+                    self.prefix_helps.entry(expression.site).or_insert(
+                        "a prefix takes the whole call, field or `?` after it, which binds tighter: `(-x).abs()` applies it first",
+                    );
+                }
                 self.method(
                     module,
                     (expression.site, expression.span),
@@ -3953,7 +3976,11 @@ impl<'a> Checker<'a> {
                                     "`{}` has no field or method `{name}`",
                                     show(&receiver, self.symbols)
                                 );
-                                failure(pending.module, pending.span, message)
+                                let refused = failure(pending.module, pending.span, message);
+                                match pending.site.and_then(|site| self.prefix_helps.get(&site)) {
+                                    Some(help) => refused.help(*help),
+                                    None => refused,
+                                }
                             }
                         };
                         return Err(refused);

@@ -483,9 +483,10 @@ type taken apart by its own name, as `U8(…)`.
 `name is pattern`, where a pattern stands, binds the whole value to `name`
 and takes it apart with `pattern`. `==name` matches a value equal, by its
 type's `equals`, to a name from outside the pattern, and binds nothing:
-a constant, or in a test a name bound before it. Within one pattern,
-across a clause's parameters too, two parts are asked equal by writing a
-name twice, `[a, a, *_]`, and `[a, ==a]` is refused.
+a constant, or in a test a name bound before it. It touches the name, so
+`a ==b` is refused, as `a -b` is. Within one pattern, across a clause's
+parameters too, two parts are asked equal by writing a name twice, `[a,
+a, *_]`, and `[a, ==a]` is refused.
 
 ```
 merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
@@ -555,8 +556,9 @@ be an assumption checked in development, which is not built.
 `for pattern in list ( … )` runs its body, a round, once for each element
 in order, and `while condition ( … )` while the condition holds, what a
 test in it binds seen by the round. A name bound before a loop and again in
-its body carries from round to round and out of the loop, at one type; one
-first bound in the body is the round's. `if c continue` or `c else
+its body, its `for` element or its `while` test carries from round to
+round and out of the loop, at one type; one first bound in the body is the
+round's. `if c continue` or `c else
 continue` ends a round, `break` the loop, and `return` the clause from
 inside any loop; any line may be a round's last. A loop is a block's line,
 not the last of a block that answers.
@@ -615,10 +617,11 @@ A test's or an arm's pattern binds a name in scope again as `=` does,
 where it matched: `r is Ok(limit) else return 0` binds `limit` for the
 lines below, and `while ready is [node, *ready] do (` steps a worklist. A
 name in a pattern always binds; `==limit` compares. A lambda's parameters
-are its own, shadowing names around it within the lambda. A lambda binds
-again only its own names, since what calls it may call it any number of
-times; and `=` binds no name of the body in a condition, or on the right
-of `&` or `|`, where it may not be worked out.
+are its own, shadowing names around it within the lambda, and so are a
+test's names and a `for`'s element there. `=` in a lambda binds only the
+lambda's names, since what calls it may call it any number of times; and
+`=` binds no name of the body in a condition, or on the right of `&` or
+`|`, where it may not be worked out.
 
 A clause's head, or a test's pattern, may bind a name twice, and then
 matches only where both are equal by their type's `equals`: `doubled([a, a]) -> True` is

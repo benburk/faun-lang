@@ -1,0 +1,7 @@
+import std.host {Host}
+
+missing : Result(Nat, [Gone]) -> Bool
+missing(r) -> !r is Ok(_)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

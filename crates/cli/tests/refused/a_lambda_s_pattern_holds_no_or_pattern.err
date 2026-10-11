@@ -1,5 +1,7 @@
-error: an `|` pattern may stand only among a clause's parameters
+error: a binding's pattern cannot choose: an `|` stands among a clause's parameters or in a test
  --> a_lambda_s_pattern_holds_no_or_pattern.fn:4:39
   |
 4 | total(values) -> values.fold(0, |sum, (1 | 2)| sum)
   |                                       ^^^^^^^
+  |
+  = help: test the value: `value is (A(x) | B(x)) else return …`

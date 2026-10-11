@@ -11,9 +11,9 @@ LL(1), with no edge cases a reader trips on?
   does on each probe.
 - **Space never chooses between two readings.** It decides only whether a
   spelling is valid: what binds touches what it binds, and infix stands
-  apart. A call's `(`, `.`, `..`, `.*`, `?`, a prefix `-` or `!`, and a
-  rest's `*` touch; `f (x)`, `x .y`, `x -3`, `! x`, `[a, * rest]` and `a *b`
-  are refused, each saying how to write it.
+  apart. A call's `(`, `.`, `..`, `.*`, `?`, a prefix `-` or `!`, a rest's
+  `*` and a pattern's `==` touch; `f (x)`, `x .y`, `x -3`, `! x`, `[a, *
+  rest]`, `a *b` and `a ==b` are refused, each saying how to write it.
 - **Every construct puts a word between its head and its body:** `->` a
   clause's and an arm's, `then` and `else` a branch's, `do` a loop's, and
   the leave itself a leaving line's.

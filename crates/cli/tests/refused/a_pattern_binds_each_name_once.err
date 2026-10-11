@@ -1,5 +1,0 @@
-error: local `a` is bound more than once
- --> a_pattern_binds_each_name_once.fn:5:7
-  |
-5 |   (a, a) = (n, n)
-  |       ^

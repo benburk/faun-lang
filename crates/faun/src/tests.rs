@@ -150,22 +150,24 @@ fn elements_are_parted_by_commas_however_they_are_spaced() {
         ExprKind::List(ref elements, None) if elements.len() == 3
             && elements.iter().all(|element| matches!(element.kind, ExprKind::Binary(..)))
     ));
-    // A prefix touches what it negates, so `a -b` would be two values.
-    for source in ["f(a, b) -> [a -b]\n", "f(a) -> - a\n", "f(a) -> ! a\n"] {
+    // A prefix touches what it takes, so `a -b` would be two values.
+    for (source, said) in [
+        ("f(a, b) -> [a -b]\n", "touches what it negates"),
+        ("f(a) -> - a\n", "touches what it negates"),
+        ("f(a) -> ! a\n", "touches what it negates"),
+        ("f(a, b) -> [a *b]\n", "touches the rest it takes"),
+        ("f([a, * rest]) -> a\n", "touches the rest it takes"),
+        (
+            "f(a, b) -> a ==b\n",
+            "touches the name a pattern compares with",
+        ),
+        (
+            "f(xs, b) -> xs is [== b]\n",
+            "touches the name a pattern compares with",
+        ),
+    ] {
         let error = parse(source).unwrap_err();
-        assert!(
-            error.message.contains("touches what it negates"),
-            "{source}: {}",
-            error.message
-        );
-    }
-    for source in ["f(a, b) -> [a *b]\n", "f([a, * rest]) -> a\n"] {
-        let error = parse(source).unwrap_err();
-        assert!(
-            error.message.contains("touches the rest it takes"),
-            "{source}: {}",
-            error.message
-        );
+        assert!(error.message.contains(said), "{source}: {}", error.message);
     }
     let error = parse("f(a b) -> a\n").unwrap_err();
     assert!(error.message.contains("`,`"), "{}", error.message);
@@ -475,12 +477,30 @@ fn an_if_line_and_a_loop_are_not_a_block_s_last() {
     assert!(parse("f(x) -> (\n  for y in x do (\n    if y break\n  )\n  0\n)").is_ok());
 }
 
-/// A line beginning `==` goes on with the one above, so an arm cannot begin
-/// with one, and the message says how to compare the whole value.
+/// A lambda stands only as an argument, with a parameter or more, and a
+/// list holds one rest; each refusal says what to write instead.
+#[test]
+fn a_lambda_is_an_argument_and_a_list_holds_one_rest() {
+    let error = parse("f(n) -> (|x| x + 1)(n)\n").unwrap_err();
+    assert!(
+        error.message.contains("only as a call's argument"),
+        "{error}"
+    );
+    let error = parse("f(n) -> [n].map(|| 3)\n").unwrap_err();
+    assert!(error.message.contains("one parameter or more"), "{error}");
+    let error = parse("f(a, b) -> a | | b\n").unwrap_err();
+    assert!(error.message.contains("expected"), "{error}");
+    let error = parse("f(xs) -> [*xs, *xs]\n").unwrap_err();
+    assert!(error.message.contains("one rest"), "{error}");
+    assert!(parse("f(xs) -> [[*xs], *xs]\n").is_ok());
+}
+
+/// `==name` compares a part, so an arm cannot begin with one, and the
+/// message says how to compare the whole value.
 #[test]
 fn an_arm_does_not_begin_with_equals() {
     let error = parse("f(n) -> n is (\n  0 -> 1\n  ==limit -> 2\n  _ -> 3\n)").unwrap_err();
-    assert!(error.message.contains("begins no arm"), "{error}");
+    assert!(error.message.contains("no line begins"), "{error}");
     assert!(parse("f(n) -> n is (\n  0 -> 1\n    == 2\n  _ -> 3\n)").is_ok());
 }
 

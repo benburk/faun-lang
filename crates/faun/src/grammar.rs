@@ -217,6 +217,13 @@ impl Parser<'_> {
     fn fail(&self) -> SyntaxError {
         let token = self.tokens[self.at];
         let text = token.text(self.source);
+        if token.kind == Kind::Apart && text == "==" && self.begins_line(token) {
+            return SyntaxError::new(
+                token.span(),
+                "`==name` compares a part of a pattern, so no line begins with one",
+            )
+            .help("compare the whole value with a guard: `n if n == limit -> …`");
+        }
         let message = match token.kind {
             Kind::Error if token.start == token.end => "unterminated string literal".to_owned(),
             Kind::Error => format!("invalid token `{text}`"),
@@ -224,31 +231,68 @@ impl Parser<'_> {
                 format!("`{text}` goes against what it joins: no space around it")
             }
             Kind::Detached => format!("`{text}` goes against what it follows: no space before it"),
-            Kind::Apart if text == "!" => "`!` touches what it negates: `!ready`".to_owned(),
-            Kind::Apart if text == "*" => {
-                "`*` touches the rest it takes, `[x, *rest]`, and stands apart between two values, `a * b`"
-                    .to_owned()
-            }
-            Kind::Apart => {
-                "`-` touches what it negates, `-3`, and stands apart between two values, `x - 3`"
-                    .to_owned()
-            }
-            kind => {
-                let mut expected = self.expected.clone();
-                expected.sort_unstable();
-                let wanted = match expected.as_slice() {
-                    [] => "something else".to_owned(),
-                    [one] => (*one).to_owned(),
-                    many => format!("one of {}", many.join(", ")),
-                };
-                match kind {
-                    Kind::Eof => format!("expected {wanted} before the end of the file"),
-                    Kind::Newline => format!("expected {wanted} before the end of the line"),
-                    _ => format!("expected {wanted}, found `{text}`"),
-                }
-            }
+            Kind::Apart => apart(text).to_owned(),
+            kind => self.unexpected(kind, text),
         };
         SyntaxError::new(token.span(), message)
+    }
+
+    /// What was looked for where `kind`, spelled `text`, stands instead, or
+    /// what to write where it is a lambda or a rest out of place.
+    fn unexpected(&self, kind: Kind, text: &str) -> String {
+        let mut expected = self.expected.clone();
+        expected.sort_unstable();
+        let wanted = match expected.as_slice() {
+            [] => "something else".to_owned(),
+            [one] => (*one).to_owned(),
+            many => format!("one of {}", many.join(", ")),
+        };
+        let before = |back: usize| self.at.checked_sub(back).map(|at| self.tokens[at].kind);
+        match kind {
+            Kind::Bar if expected.contains(&"an expression") => match (before(2), before(1)) {
+                (Some(Kind::CallParen | Kind::Comma), Some(Kind::Bar)) => {
+                    "a lambda takes one parameter or more: `|_| 3`".to_owned()
+                }
+                (_, Some(Kind::Bar)) => format!("expected {wanted}, found `{text}`"),
+                _ => "a lambda stands only as a call's argument, as functions are passed and not kept: `xs.map(|x| x + 1)`".to_owned(),
+            },
+            Kind::Star if self.second_rest() => {
+                "a list holds one rest; to join lists, `front.extend(back)`".to_owned()
+            }
+            Kind::Eof => format!("expected {wanted} before the end of the file"),
+            Kind::Newline => format!("expected {wanted} before the end of the line"),
+            _ => format!("expected {wanted}, found `{text}`"),
+        }
+    }
+
+    /// Whether the current token is a second rest in the list it stands in.
+    fn second_rest(&self) -> bool {
+        let mut depth = 0_u32;
+        for token in self.tokens[..self.at].iter().rev() {
+            match token.kind {
+                Kind::RBracket | Kind::RParen | Kind::RBrace => depth += 1,
+                Kind::LBracket if depth == 0 => return false,
+                Kind::LBracket | Kind::LParen | Kind::CallParen | Kind::LBrace | Kind::DotParen => {
+                    match depth.checked_sub(1) {
+                        Some(outer) => depth = outer,
+                        None => return false,
+                    }
+                }
+                Kind::Star if depth == 0 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Whether only space stands between the line's start and `token`.
+    fn begins_line(&self, token: Token) -> bool {
+        let start = usize::try_from(token.start).expect("spans fit in usize");
+        self.source[..start]
+            .chars()
+            .rev()
+            .take_while(|&c| c != '\n')
+            .all(|c| c == ' ' || c == '\t')
     }
 
     /// Lines up to the end of the file, or of a method block, each read or
@@ -1230,23 +1274,6 @@ impl Parser<'_> {
             let pattern = self.expr()?;
             arms.push(self.arm(pattern)?);
         }
-        // A line beginning `==` went on with the arm above it.
-        if self.peek() == Kind::Arrow
-            && arms.last().is_some_and(|arm| {
-                arm.body
-                    .span
-                    .text(self.source)
-                    .lines()
-                    .skip(1)
-                    .any(|line| line.trim_start().starts_with("=="))
-            })
-        {
-            return Err(SyntaxError::new(
-                self.tokens[self.at].span(),
-                "a line beginning `==` goes on with the line above, so it begins no arm",
-            )
-            .help("compare the whole value with a guard: `n if n == limit -> …`"));
-        }
         self.note("a new line");
         let close = self.expect(Kind::RParen, "`)`")?;
         Ok(Expr {
@@ -1542,5 +1569,19 @@ const fn type_span(ty: &Type) -> Span {
         | Type::Record { span, .. }
         | Type::Tuple { span, .. }
         | Type::Hole { span } => *span,
+    }
+}
+
+/// How a prefix spelled `text`, standing apart, is written.
+fn apart(text: &str) -> &'static str {
+    match text {
+        "!" => "`!` touches what it negates: `!ready`",
+        "==" => {
+            "`==` touches the name a pattern compares with, `[x, ==limit]`, and stands apart between two values, `a == b`"
+        }
+        "*" => {
+            "`*` touches the rest it takes, `[x, *rest]`, and stands apart between two values, `a * b`"
+        }
+        _ => "`-` touches what it negates, `-3`, and stands apart between two values, `x - 3`",
     }
 }

@@ -1,0 +1,7 @@
+import std.host {Host}
+
+below : Int -> Int
+below(x) -> -x.abs()
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

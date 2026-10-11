@@ -1,5 +1,7 @@
-error: local `a` is bound more than once
+error: `a` is written twice in an alternative of an `|`
  --> an_binds_each_name_once_in_each_alternative.fn:4:12
   |
 4 | either([a, a] | [a]) -> True
-  |            ^
+  |            ^ written again here
+  |
+  = help: a name written twice asks its parts equal, which an alternative cannot ask of the whole clause: compare in a guard

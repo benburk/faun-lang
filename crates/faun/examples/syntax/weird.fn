@@ -141,3 +141,57 @@ somewhere(r) -> (
 )
 
 expect somewhere(Ok(3)) == 1 & somewhere(Ok(0)) == 0 & somewhere(Err(Gone)) == 0
+
+# `|` three ways in one argument: a lambda's bars, a pattern's
+# alternatives, and the `Bool` or, a lambda's body taking all after its
+# bars. On a `Nat`, `|` is a bitwise or.
+three_bars : List(Result(Nat, Nat)) -> List(Bool)
+three_bars(rs) -> rs.map(|r| r is (Ok(1) | Err(_)) | r is Ok(5))
+
+either_way : (Bool, Bool) -> List(Bool)
+either_way(b, c) -> [False, True].map(|x| x | b | c)
+
+odd_up : List(Nat) -> List(Nat)
+odd_up(xs) -> xs.map(|x| x | 1)
+
+expect three_bars([Ok(1), Ok(5), Ok(2), Err(0)]) == [True, True, False, True]
+expect either_way(False, False) == [False, True] & odd_up([2, 3]) == [3, 3]
+
+# After a value a minus subtracts, touching or spaced alike; anywhere else
+# it negates what it touches. A prefix with a postfix takes the postfix
+# first.
+minus_three : Int -> Int
+minus_three(x) -> x--3 - -x
+
+negated : Result(Int, [E]) -> Result(Int, [E])
+negated(r) -> Ok(-r?)
+
+expect minus_three(1) == 5 & negated(Ok(2)) == Ok(-2)
+
+# Ranges with a negative end and an open one.
+around : Int -> Nat
+around(x) -> x is (
+  -3..-1 -> 1
+  0.._ -> 2
+  _ -> 3
+)
+
+expect around(-2) == 1 & around(7) == 2 & around(-9) == 3
+
+# `*` taking a record apart, of a record built with `*`.
+moved : {a: Nat, b: Nat} -> Nat
+moved(r) -> (
+  {a: shifted, *} = {a: r.a + 10, *r}
+  shifted
+)
+
+expect moved({a: 1, b: 2}) == 11
+
+# A ternary as the condition of a leaving line, in parentheses.
+agreed : (Bool, Bool) -> Nat
+agreed(a, b) -> (
+  (if a then b else !b) else return 0
+  1
+)
+
+expect agreed(True, True) == 1 & agreed(False, True) == 0

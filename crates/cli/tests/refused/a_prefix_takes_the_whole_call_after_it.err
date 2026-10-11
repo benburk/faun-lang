@@ -1,0 +1,7 @@
+error: `Nat` has no field or method `neg`
+ --> a_prefix_takes_the_whole_call_after_it.fn:4:13
+  |
+4 | below(x) -> -x.abs()
+  |             ^^^^^^^^
+  |
+  = help: a prefix takes the whole call, field or `?` after it, which binds tighter: `(-x).abs()` applies it first

@@ -11,10 +11,10 @@
                  as a guard, and begins a block's next line
      CALL_PAREN  `(` straight after an operand: a call's, or a type's
    and `.`, `..`, `.*` and `?` are written against what they join. A prefix
-   `-` or `!`, or a rest's `*`, touches what it takes, and an infix `-` or
-   `*` has its value before it, spaced or touching on both sides alike: `x
-   -3`, `! x`, `[a, * rest]` and `a *b` are refused, so space never chooses
-   between two readings. A line beginning `- ` goes
+   `-` or `!`, a rest's `*`, or a pattern's `==`, touches what it takes, and
+   an infix `-`, `*` or `==` has its value before it, spaced or touching on
+   both sides alike: `x -3`, `! x`, `[a, * rest]`, `a *b` and `a ==b` are
+   refused, so space never chooses between two readings. A line beginning `- ` goes
    on with the line before, as `-` is then infix; one beginning `-3` does
    not.
 

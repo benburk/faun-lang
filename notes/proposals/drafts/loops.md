@@ -114,7 +114,7 @@ what Python's mutation costs.
 ### Names a loop changes
 
 `=` is the conditions draft's: `name = value` binds the name from that
-line on, and a lambda binds again only its own names. A loop adds:
+line on, and `=` in a lambda binds only the lambda's names. A loop adds:
 
 - **A name bound before the loop and again in its body carries.** Its next
   round sees the value the last one left, and the lines after the loop see
@@ -134,7 +134,9 @@ loop-line = "while" expr "do" "(" round ")"
 ```
 
 - **`for P in list ( … )`** runs its body once for each element, in order,
-  `P` a pattern that cannot fail, binding new names each round. It walks a
+  `P` a pattern that cannot fail. It binds a name in scope again, as a
+  test does, and that name carries out of the loop as Python's does, the
+  last element taken; one first bound there is the round's. It walks a
   `List`; a range is `List.range`.
 - **`while c ( … )`** runs while `c` holds. `c` may be an `is`, whose names
   the body sees.
