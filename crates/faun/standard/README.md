@@ -557,8 +557,8 @@ be an assumption checked in development, which is not built.
 in order, and `while condition ( … )` while the condition holds, what a
 test in it binds seen by the round. A name bound before a loop and again in
 its body, its `for` element or its `while` test carries from round to
-round and out of the loop, at one type; one first bound in the body is the
-round's. `if c continue` or `c else
+round and out of the loop, at one type where it is read in the next round
+or after the loop; one first bound in the body is the round's. `if c continue` or `c else
 continue` ends a round, `break` the loop, and `return` the clause from
 inside any loop; any line may be a round's last. A loop is a block's line,
 not the last of a block that answers.
@@ -595,7 +595,8 @@ Python's does: past the branch, arm or block it was bound in, and in a
 loop's next round. `count = count + 1` is a step, and `(a, b) = (b, a)`
 swaps. On a straight line the name may take another type, `x =
 Nat.from_str(x)?` after `x = text.trim()`; where paths meet, after a branch
-that bound it again, it has one type whichever way was taken. A name first
+that bound it again, it has one type whichever way was taken, if anything
+reads it there. A name first
 bound inside a block leaves with it. Nothing changes in place: a method
 answers a new value, so a step is written whole, `order =
 order.append(node)`, and a list nothing else holds is still written where

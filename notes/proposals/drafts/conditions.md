@@ -220,19 +220,21 @@ partway through a body is.
   before matters only where paths meet.
 - **On a straight line, any type.** `x = "12"` then `x = Nat.from_str(x)?`
   binds a `Str` and then a `Nat`.
-- **Where paths meet, one type.** A name bound again in a branch, an arm or
-  below an `else` line has one type after it whichever way was taken, and
-  one a loop binds again has one type across its rounds. A mismatch is
-  refused there, naming both types. This holds whether or not the name is
-  read after the branch, which keeps the rule one to state.
+- **Where paths meet, one type, if it is read.** A name bound again in a
+  branch, an arm or below an `else` line, and read after the ways meet,
+  has one type there whichever way was taken; one a loop binds again, and
+  reads in its next round or after it, has one type across its rounds. A
+  mismatch is refused, naming both types. A name nothing reads there may
+  be one type one way and another the other, as in Python:
+  `if step is Ok(step) then step else 0`.
 - **A name first bound in a block leaves with it.** Only names bound before
   a branch or a loop carry past it; one first bound inside is the block's,
   so a name is never unbound where it is read, as Python's may be.
 - **A test binds as `=` does.** A name already in scope that a test's or
   an arm's pattern holds is bound again where the pattern matched: for the
   lines below an `else` line, in `then` and an arm, and in a `while` loop's
-  round, carrying to the next. Where the ways meet, it has one type, as
-  after `=` in a branch. So `while ready is [node, *ready] do (` steps its
+  round, carrying to the next. Read where the ways meet, it has one type,
+  as after `=` in a branch. So `while ready is [node, *ready] do (` steps its
   worklist itself. A destructuring binding binds each name it holds:
   `(a, b) = (b, a)` swaps. Comparing with a name is `==name`.
 - **A lambda's parameters are its own,** shadowing a name of the body
@@ -336,6 +338,13 @@ partway through a body is.
   does, so an effect's answer is tested without a name of its own. The
   file example `trickle` reads in a `while` loop where it had recursed
   through a second function.
+- **One type only where read,** 2026-10-12: a name bound again on ways
+  that meet, or carried by a loop, is held to one type only where it is
+  read after they meet or in the next round. Resolution drops the local it
+  would be there when nothing reads it, and a loop's carrying of it, so
+  `step is Ok(step)` in a ternary and a `for` naming its element as a name
+  of another type are no conflict. First built holding the name to one
+  type whether read or not, which a test binding again made common.
 
 ## Costs
 

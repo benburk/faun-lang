@@ -118,8 +118,10 @@ line on, and `=` in a lambda binds only the lambda's names. A loop adds:
 
 - **A name bound before the loop and again in its body carries.** Its next
   round sees the value the last one left, and the lines after the loop see
-  the value the loop ended with. Across rounds it has one type, as where a
-  branch's paths meet.
+  the value the loop ended with. Read in the next round or after the loop,
+  it has one type across rounds, as where a branch's paths meet; nothing
+  reading it, it may change type, as `for x in xs` naming its element as a
+  `Str` before it.
 - **A name first bound in a loop's body is the round's.** It is new each
   round and unseen after the loop.
 - **A test binds as `=` does,** so a worklist takes its head and binds its

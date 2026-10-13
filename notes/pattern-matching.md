@@ -45,9 +45,9 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   Built, 2026-10-06.
 - **`=` binds a name from here on,** Python's model: past branches and
   across a loop's rounds, at any type on a straight line and one type where
-  paths meet. Nothing changes in place, so a step is `order =
-  order.append(node)`. Patterns only bind new names: one binding a name in
-  scope is refused. This replaced no-rebinding (built 2026-10-05) and the
+  paths meet, if it is read there. Nothing changes in place, so a step is `order =
+  order.append(node)`. A pattern binds a name in scope again where it
+  matched, as `=` does (2026-10-11). This replaced no-rebinding (built 2026-10-05) and the
   loops draft's `$` variables on 2026-10-07, after a separate assignment
   operator was weighed against it.
 - **Leaving where a test holds** is an `if` line, `if n1 is Bot return

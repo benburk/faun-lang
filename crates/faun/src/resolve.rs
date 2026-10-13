@@ -14,6 +14,8 @@ use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
 use super::{Source, SourceId, Sources, Symbol, Symbols};
 
+mod unread;
+
 #[derive(Clone, Debug)]
 pub struct ResolvedProgram<P = h::Program> {
     pub(crate) sites: h::Sites,
@@ -1520,7 +1522,8 @@ fn resolve_clause(
         .map(|guard| resolver.condition(guard))
         .transpose()?;
     let guard = matched_alike(compared, written, resolver.sites);
-    let body = resolver.body(&clause.body)?;
+    let mut body = resolver.body(&clause.body)?;
+    let merged = unread::drop_unread(&mut body, resolver.merged);
     Ok(h::Clause {
         site: resolver.sites.fresh(),
         span: clause.span,
@@ -1529,7 +1532,7 @@ fn resolve_clause(
         guard,
         body,
         locals: resolver.next_local,
-        merged: resolver.merged,
+        merged,
     })
 }
 

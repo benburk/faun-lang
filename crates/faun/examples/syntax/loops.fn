@@ -54,6 +54,19 @@ last_taken(xs) -> (
 
 expect last_taken([1, 7, 2]) == 7 & last_taken([1, 2]) == 2 & last_taken([]) == 0
 
+# A name the round binds again at another type is held to one only where
+# something reads it after: `x` is a `Str`, then each `Nat` taken.
+tallied : (Str, List(Nat)) -> Nat
+tallied(x, xs) -> (
+  total = x.to_utf8().len()
+  for x in xs do (
+    total = total + x
+  )
+  total
+)
+
+expect tallied("ab", [3, 4]) == 9
+
 first_over : (List(Nat), Nat) -> Nat
 first_over(xs, limit) -> (
   for x in xs do (

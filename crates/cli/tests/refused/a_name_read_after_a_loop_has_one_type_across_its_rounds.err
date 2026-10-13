@@ -1,0 +1,7 @@
+error: mismatched types
+ --> a_name_read_after_a_loop_has_one_type_across_its_rounds.fn:7:14
+  |
+7 |     if x > 5 break
+  |              ^^^^^ expected `Str`, found `Nat`
+  |
+  = note: a name read in a loop's next round or after it has one type across its rounds

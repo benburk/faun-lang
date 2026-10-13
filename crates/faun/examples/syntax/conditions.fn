@@ -57,9 +57,10 @@ last : List(Nat) -> Nat
 last(xs) -> if xs is [*_, x] & x is 1..9 then x else 0
 
 # A name in a pattern always binds: one in scope is bound again where the
-# test holds, as `=` would bind it, and `==name` compares instead.
+# test holds, as `=` would bind it, and `==name` compares instead. Where the
+# ways meet it may be one type or another, so long as nothing reads it there.
 inner : Result(Nat, [Gone]) -> Nat
-inner(step) -> if step is Ok(found) then found else 0
+inner(step) -> if step is Ok(step) then step else 0
 
 limited : (Result(Nat, [Gone]), Nat) -> Nat
 limited(r, limit) -> (

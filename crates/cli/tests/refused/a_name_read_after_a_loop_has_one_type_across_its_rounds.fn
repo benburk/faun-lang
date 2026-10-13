@@ -1,0 +1,13 @@
+import std.host {Host}
+
+last : List(Nat) -> Str
+last(xs) -> (
+  x = "none"
+  for x in xs do (
+    if x > 5 break
+  )
+  x
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

@@ -7,7 +7,7 @@ f(c, n) -> (
     x = "many"
     1
   ) else 2
-  y
+  x + y
 )
 
 main! : Host -> []

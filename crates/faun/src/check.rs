@@ -2182,7 +2182,7 @@ impl<'a> Checker<'a> {
                             return failure(
                                 module,
                                 span,
-                                format!("`{name}` is bound again in a branch, and where the branches meet it has one type"),
+                                format!("`{name}` is read where the branches meet, so it has one type there"),
                             )
                             .label(format!("a `{first}` one way through, and a `{other}` another"))
                             .help("give the value a name of its own in the branch");
@@ -2379,7 +2379,7 @@ impl<'a> Checker<'a> {
                     let handed = self.expr(module, value, locals)?;
                     self.unify_at(module, value.span, &handed, ty)
                         .map_err(|error| {
-                            error.note("a name a loop carries has one type across its rounds")
+                            error.note("a name read in a loop's next round or after it has one type across its rounds")
                         })?;
                 }
                 Ok(self.infer.fresh())
