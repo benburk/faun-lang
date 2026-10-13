@@ -485,7 +485,19 @@
         "required": true,
         "types": [
           {
-            "type": "_expression",
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "effect_identifier",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
             "named": true
           }
         ]
@@ -1662,7 +1674,19 @@
         "required": true,
         "types": [
           {
-            "type": "_expression",
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "effect_identifier",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
             "named": true
           }
         ]

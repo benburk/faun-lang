@@ -87,7 +87,7 @@ module.exports = grammar({
 
   // `Name(a)` begins an alias or a declaration, and which only the `=` or
   // `:` after it says.
-  conflicts: $ => [[$.type_alias, $._primary]],
+  conflicts: $ => [[$.type_parameters, $._primary]],
 
   rules: {
     source_file: $ => lines($),
@@ -133,8 +133,21 @@ module.exports = grammar({
 
     _any_name: $ => choice($.identifier, $.effect_identifier, $.type_identifier),
 
-    // Lines headed by an expression, told apart by what follows it. A
-    // pattern is written as the expression that builds what it matches.
+    // Lines headed by a name and its arguments, told apart by what follows
+    // them. A pattern is written as the expression that builds what it
+    // matches.
+
+    _head: $ => choice(
+      $.identifier,
+      $.effect_identifier,
+      $.type_identifier,
+      alias($.head_call, $.call_expression),
+    ),
+
+    head_call: $ => seq(
+      field('function', choice($.identifier, $.effect_identifier, $.type_identifier)),
+      field('arguments', $.arguments),
+    ),
 
     expect: $ => seq('expect', $._expression),
 
@@ -153,7 +166,7 @@ module.exports = grammar({
     ),
 
     signature: $ => seq(
-      field('name', $._expression),
+      field('name', $._head),
       ':',
       field('type', $._type),
       optional($.constraints),
@@ -167,7 +180,7 @@ module.exports = grammar({
     ),
 
     clause: $ => seq(
-      field('head', $._expression),
+      field('head', $._head),
       optional($.guard),
       '->',
       field('body', $._expression),

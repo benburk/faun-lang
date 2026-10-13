@@ -392,6 +392,66 @@
         }
       ]
     },
+    "_head": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "effect_identifier"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "type_identifier"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "head_call"
+          },
+          "named": true,
+          "value": "call_expression"
+        }
+      ]
+    },
+    "head_call": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "function",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "effect_identifier"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "type_identifier"
+              }
+            ]
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "arguments",
+          "content": {
+            "type": "SYMBOL",
+            "name": "arguments"
+          }
+        }
+      ]
+    },
     "expect": {
       "type": "SEQ",
       "members": [
@@ -523,7 +583,7 @@
           "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "_expression"
+            "name": "_head"
           }
         },
         {
@@ -606,7 +666,7 @@
           "name": "head",
           "content": {
             "type": "SYMBOL",
-            "name": "_expression"
+            "name": "_head"
           }
         },
         {
@@ -2871,7 +2931,7 @@
   ],
   "conflicts": [
     [
-      "type_alias",
+      "type_parameters",
       "_primary"
     ]
   ],

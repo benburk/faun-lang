@@ -1,11 +1,11 @@
 //! From a file's lines to its items, a line apiece.
 //!
-//! The grammar reads a line as an expression, and what the token after it
-//! says the line is: `: type` declares, and `-> value` is a clause. A pattern
-//! is written as the expression that would build what it matches, so the
-//! head of a clause, a lambda's parameters and a block's bindings are read
-//! as expressions and made patterns here, once the line has said they are
-//! ones. A body of several lines is a block, and a `where` list's
+//! The grammar reads a line as a name and its arguments, and what the token
+//! after them says the line is: `: type` declares, `= value` names a value,
+//! and `-> value` is a clause. A pattern is written as the expression that
+//! would build what it matches, so a clause's arguments, a lambda's
+//! parameters and a block's bindings are read as expressions and made
+//! patterns here, once the line has said they are ones. A body of several lines is a block, and a `where` list's
 //! constraints are parted by commas, so each line is one item whole.
 //!
 //! An expression may hold what only a pattern can, `_`, a range, or a rest
@@ -327,17 +327,11 @@ impl<'s> Grouping<'s> {
         }
     }
 
-    /// A signature, a data declaration, or a `where` list's constraint,
-    /// as its head is a term's name, a type's, or a type variable's member.
+    /// A signature or a data declaration, as its head is a term's name or
+    /// a type's.
     fn typed(&mut self, head: Expr, typed: Typed) -> Result<(), Error> {
         let span = head.span;
         match head.kind {
-            ExprKind::Member(..) => Err(error(
-                span,
-                "a `where` list's constraints are parted by commas, \
-                 `where a.zero : a, a.add : (a, a) -> a`, and a list of one to a line ends each \
-                 but the last with its comma",
-            )),
             ExprKind::Name(name) if !is_type_name(name, self.source) => {
                 if let Some((_, block)) = typed.methods {
                     return Err(error(block, "only a type has a method block"));

@@ -40,7 +40,7 @@ one type.
   a value, at the top level or in a type's method block:
 
   ```
-  line = … | untyped-operand expr-tail ( ":" typed | clause | "=" expr ) ;
+  line = … | ( NAME | EFFECT ) [ call ] ( ":" typed | clause | "=" expr ) ;
   ```
 
   After the head, `=` cannot go on with an expression, so the grammar stays

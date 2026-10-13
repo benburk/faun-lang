@@ -67,7 +67,9 @@ fn a_definition_of_no_parameters_is_a_value() {
             "origin() -> (0, 0)\n",
             "a definition of no parameters is a value: `origin = ...`",
         ),
-        ("(x, y) = (0, 0)\n", "a value is named by one name"),
+        ("(x, y) = (0, 0)\n", "begins with the name it defines"),
+        ("(origin) = (0, 0)\n", "begins with the name it defines"),
+        ("f(x).y -> 1\n", "expected one of"),
         ("Origin = (0, 0)\n", "expected"),
     ] {
         let error = parse(source).unwrap_err();

@@ -359,48 +359,81 @@ impl Parser<'_> {
                 Ok(Line::Expect(keyword.span(), value))
             }
             Kind::TypeIdent => self.type_line(),
+            Kind::Ident | Kind::EffectIdent => self.definition(),
+            _ => Err(self.no_head()),
+        }
+    }
+
+    /// A line defining a name: its signature, a clause, or a value.
+    fn definition(&mut self) -> Parsed<Line> {
+        let head = self.head()?;
+        match self.peek() {
+            Kind::Colon => {
+                self.bump();
+                Ok(Line::Typed(head, self.typed()?))
+            }
+            Kind::KwIf | Kind::Arrow => self.clause(head),
+            Kind::Eq => {
+                self.bump();
+                let value = self.expr()?;
+                self.no_binding_after()?;
+                Ok(Line::Value(head, value))
+            }
+            Kind::Newline | Kind::Eof | Kind::RParen => Err(SyntaxError::new(
+                head.span,
+                "this line belongs to no definition: a body of several lines is \
+                 `-> (` … `)`",
+            )),
+            // `a.add : …` on a line of its own: a constraint after
+            // one its line did not end with a comma.
+            Kind::Dot if matches!(head.kind, ExprKind::Name(_)) => Err(SyntaxError::new(
+                head.span.through(self.tokens[self.at + 1].span()),
+                "a `where` list's constraints are parted by commas, \
+                 `where a.zero : a, a.add : (a, a) -> a`, and a list of one to a line \
+                 ends each but the last with its comma",
+            )),
             _ => {
-                let head = self.expr()?;
-                match self.peek() {
-                    Kind::Colon => {
-                        self.bump();
-                        Ok(Line::Typed(head, self.typed()?))
-                    }
-                    Kind::KwIf | Kind::Arrow => self.clause(head),
-                    Kind::Eq => {
-                        self.bump();
-                        let value = self.expr()?;
-                        self.no_binding_after()?;
-                        Ok(Line::Value(head, value))
-                    }
-                    Kind::Newline | Kind::Eof | Kind::RParen => Err(SyntaxError::new(
-                        head.span,
-                        "this line belongs to no definition: a body of several lines is \
-                         `-> (` … `)`",
-                    )),
-                    _ => {
-                        self.note("`->`");
-                        self.note("`:`");
-                        self.note("`=`");
-                        Err(self.fail())
-                    }
-                }
+                self.note("`->`");
+                self.note("`:`");
+                self.note("`=`");
+                Err(self.fail())
             }
         }
+    }
+
+    /// A definition's name, or a type's, and the arguments after it: a
+    /// clause's patterns, or a type's parameters.
+    fn head(&mut self) -> Parsed<Expr> {
+        let token = self.bump();
+        let head = atom(token, ExprKind::Name(name(token)));
+        if self.peek() != Kind::CallParen {
+            return Ok(head);
+        }
+        let (arguments, end) = self.arguments()?;
+        Ok(Expr {
+            span: head.span.through(end),
+            kind: ExprKind::Call(Box::new(head), arguments),
+        })
+    }
+
+    /// Why no line begins with the current token: each begins with a
+    /// keyword, a type's name, or the name of what it defines.
+    fn no_head(&self) -> SyntaxError {
+        let token = self.tokens[self.at];
+        if !begins_expr(token.kind) {
+            return self.fail();
+        }
+        SyntaxError::new(
+            token.span(),
+            "a line begins with the name it defines: `name : type`, `name(patterns) -> body` \
+             or `name = value`",
+        )
     }
 
     /// A line beginning with a type's name, perhaps with its parameters:
     /// an alias, a constraint alias, or a data declaration.
     fn type_line(&mut self) -> Parsed<Line> {
-        let token = self.bump();
-        let mut head = atom(token, ExprKind::Name(name(token)));
-        if self.peek() == Kind::CallParen {
-            let (arguments, end) = self.arguments()?;
-            head = Expr {
-                span: head.span.through(end),
-                kind: ExprKind::Call(Box::new(head), arguments),
-            };
-        }
+        let head = self.head()?;
         match self.peek() {
             Kind::Eq => {
                 self.bump();

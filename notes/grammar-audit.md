@@ -89,8 +89,10 @@ a spaced infix operator.
    alternatives; the conditions draft considered and declined them, since
    every `Bool` expression would change.
 4. **Paired rules.** `operand` and `untyped-operand`, `primary` and
-   `untyped-primary`, differ only in a type's name, which begins a type's
-   line at the top level; they keep that line LL(1).
+   `untyped-primary`, differed only in a type's name, which begins a type's
+   line at the top level. Resolved 2026-10-13: a line begins with the name
+   it defines and its arguments, as every program wrote it, so the copies
+   went and `(f) = 3`, read before as defining `f`, is refused.
 5. **`clause` and `arm-tail`** were one rule written twice. Resolved
    2026-10-10: an arm is an expression and a clause.
 
