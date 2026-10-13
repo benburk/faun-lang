@@ -117,33 +117,22 @@ untyped-primary   = ( NUMBER | CHAR ) [ ".." range-end ]
                   | "{" [ fields ] "}" ;
 exprs             = expr [ "," [ exprs ] ] ;
 
-(* After `(` and one line, the next token says which: `,` a tuple, `=`,
-   `else` or a line's end a block, whose lines are bindings, leaving lines
-   and loops and then its answer, `->` or `if` arms, and `)` one value
-   grouped. *)
-parenthesized     = if-head ( "then" expr "else" expr after-ternary | leave NEWLINE statements )
-                  | loop-line NEWLINE statements
-                  | plain after-first ;
-after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
-                    | clause { NEWLINE arm } ] ;
-(* A line beginning with a ternary takes no `=` and no `else` of its own:
-   `(if a then b else c) else return x` puts it in parentheses. *)
-after-ternary     = [ "," [ exprs ] | NEWLINE statements ] ;
+(* A parenthesis holds lines; after its first, the next token says which:
+   `,` a tuple, `->` or `if` arms, a line's end a block's next line, and `)`
+   one value grouped, where the line is one. That a tuple's member and an
+   arm's pattern are values is told after parsing. *)
+parenthesized     = block-line [ "," [ exprs ] | clause { NEWLINE arm } | NEWLINE lines ] ;
 (* Arms a line apiece, which an `is` takes: `x is (P -> a` … `)`. Arms no
    `is` takes are refused after parsing. *)
 arm               = expr clause ;
-(* A block answering: lines whose last is its answer, a binding, a leaving
-   line or a loop being followed by more. A line beginning `if` is the
-   ternary, or, where a leave follows its condition, a line leaving where
-   the condition holds. That `continue` and `break` stand in a loop's body
-   is told after parsing. *)
-statements        = if-head ( "then" expr "else" expr [ NEWLINE statements ] | leave NEWLINE statements )
-                  | loop-line NEWLINE statements
-                  | plain statement-tail ;
-statement-tail    = [ line-tail NEWLINE statements | NEWLINE statements ] ;
-(* A loop's body: lines, any of which may be the last, the round going on
-   to the next where nothing leaves it. *)
-round             = block-line { NEWLINE block-line } ;
+(* A block's lines, and a loop's body's: bindings, leaving lines, loops
+   and values. A line beginning `if` is the ternary, or, where a leave
+   follows its condition, a line leaving where the condition holds; a
+   ternary beginning a line takes no `=` and no `else`, which
+   `(if a then b else c) else return x` puts in parentheses. That a
+   block's last line is its answer, and that `continue` and `break` stand
+   in a loop's body, is told after parsing. *)
+lines             = block-line { NEWLINE block-line } ;
 block-line        = if-head ( "then" expr "else" expr | leave )
                   | loop-line
                   | plain [ line-tail ] ;
@@ -155,8 +144,8 @@ line-tail         = "=" expr | "else" leave ;
 leave             = "return" expr | "continue" | "break" ;
 (* A loop runs its body each round, after `do`, as an `if`'s branch runs
    after `then`. *)
-loop-line         = "while" expr "do" "(" round ")"
-                  | "for" operand "in" expr "do" "(" round ")" ;
+loop-line         = "while" expr "do" "(" lines ")"
+                  | "for" operand "in" expr "do" "(" lines ")" ;
 (* A list's rest may have elements after it, which its end matches:
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]

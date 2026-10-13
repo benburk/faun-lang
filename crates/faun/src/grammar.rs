@@ -102,14 +102,6 @@ const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
     })
 }
 
-/// A block's line as far as its first value; see [`Parser::begun`].
-enum Begun {
-    Value(Expr),
-    /// A ternary, which a line's `=` or `else` does not follow.
-    Ternary(Expr),
-    Line(Statement),
-}
-
 /// How tightly `is` binds: looser than a comparison, tighter than `&`.
 const IS: u8 = 4;
 
@@ -458,27 +450,19 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// `statement`: a value, or `pattern = value`.
+    /// A block's or a loop's body's line: a value, a binding, a leaving
+    /// line or a loop. Where it begins `if`, the token after the condition
+    /// says whether it is the ternary or a line leaving where its condition
+    /// holds.
     fn statement(&mut self) -> Parsed<Statement> {
         self.no_expect_in_a_block()?;
-        match self.begun()? {
-            Begun::Value(value) => self.statement_after(value),
-            Begun::Ternary(value) => {
-                self.after_ternary()?;
-                Ok(Statement::Value(value))
-            }
-            Begun::Line(line) => Ok(line),
-        }
-    }
-
-    /// A block's line as far as its first value: where it begins `if`, the
-    /// token after the condition says whether it is the ternary or a line
-    /// leaving where its condition holds.
-    fn begun(&mut self) -> Parsed<Begun> {
         match self.peek() {
             Kind::KwIf => {}
-            Kind::KwWhile | Kind::KwFor => return self.loop_line().map(Begun::Line),
-            _ => return Ok(Begun::Value(self.expr()?)),
+            Kind::KwWhile | Kind::KwFor => return self.loop_line(),
+            _ => {
+                let value = self.expr()?;
+                return self.statement_after(value);
+            }
         }
         let keyword = self.bump();
         let condition = self.expr()?;
@@ -487,14 +471,16 @@ impl Parser<'_> {
             Kind::KwReturn | Kind::KwContinue | Kind::KwBreak
         ) {
             self.note("`return`");
-            return Ok(Begun::Ternary(self.if_after(keyword, condition)?));
+            let ternary = self.if_after(keyword, condition)?;
+            self.after_ternary()?;
+            return Ok(Statement::Value(ternary));
         }
         let out = self.leaving()?;
-        Ok(Begun::Line(Statement::If(
+        Ok(Statement::If(
             keyword.span().through(out.span),
             condition,
             out,
-        )))
+        ))
     }
 
     /// What a leaving line leaves by: `return value`, its value any
@@ -1225,38 +1211,17 @@ impl Parser<'_> {
     /// tuple, `=` or a line's end a block, and `)` one value grouped.
     fn parenthesized(&mut self) -> Parsed<Expr> {
         let open = self.bump();
-        self.no_expect_in_a_block()?;
-        let first = match self.begun()? {
-            Begun::Value(first) => first,
-            Begun::Ternary(first) => return self.after_first_ternary(open, first),
-            Begun::Line(line) => return self.lines_from(open, line),
-        };
+        let first = self.statement()?;
         match self.peek() {
-            Kind::Comma => self.tuple(open, first),
-            Kind::Eq | Kind::KwElse | Kind::Newline => self.block(open, first),
-            Kind::Arrow | Kind::KwIf => self.arms(open, first),
+            Kind::Comma => self.tuple(open, value_of(first, "a tuple's member")?),
+            Kind::Arrow | Kind::KwIf => self.arms(open, value_of(first, "an arm's pattern")?),
+            Kind::Newline => self.lines_from(open, first),
             _ => {
+                let Statement::Value(first) = first else {
+                    return self.lines_from(open, first);
+                };
                 self.note("`,`");
-                self.note("`=`");
                 self.note("`->`");
-                let close = self.expect(Kind::RParen, "`)`")?;
-                Ok(Expr {
-                    span: open.span().through(close.span()),
-                    ..first
-                })
-            }
-        }
-    }
-
-    /// After `(` and a ternary: a tuple, a block's first line, or one value
-    /// grouped; never a binding, an `else` line, or arms.
-    fn after_first_ternary(&mut self, open: Token, first: Expr) -> Parsed<Expr> {
-        self.after_ternary()?;
-        match self.peek() {
-            Kind::Comma => self.tuple(open, first),
-            Kind::Newline => self.block(open, first),
-            _ => {
-                self.note("`,`");
                 self.note("a new line");
                 let close = self.expect(Kind::RParen, "`)`")?;
                 Ok(Expr {
@@ -1320,13 +1285,6 @@ impl Parser<'_> {
             span,
             kind: ExprKind::Tuple(members),
         })
-    }
-
-    /// `block`: statements a line apiece, the last its answer, after the
-    /// first expression.
-    fn block(&mut self, open: Token, first: Expr) -> Parsed<Expr> {
-        let first = self.statement_after(first)?;
-        self.lines_from(open, first)
     }
 
     /// The rest of a block, after its first line.
@@ -1486,6 +1444,22 @@ enum Operand {
         trailing: bool,
     },
     One(Type),
+}
+
+/// The value `line` is, where `what` must be one: a binding, a leaving line
+/// and a loop stand only as a block's lines.
+fn value_of(line: Statement, what: &str) -> Parsed<Expr> {
+    let (span, kind) = match line {
+        Statement::Value(value) => return Ok(value),
+        Statement::Binding(pattern, value) => (pattern.span.through(value.span), "a binding"),
+        Statement::Else(span, ..) | Statement::If(span, ..) => (span, "a leaving line"),
+        Statement::Loop(span, ..) => (span, "a loop"),
+    };
+    Err(
+        SyntaxError::new(span, format!("{what} is a value, and this is {kind}"))
+            .label("a block's line")
+            .help("a binding, a leaving line and a loop each stand on a block's line of their own"),
+    )
 }
 
 fn one_tuple(span: Span) -> SyntaxError {

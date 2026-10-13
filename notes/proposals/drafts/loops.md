@@ -131,8 +131,8 @@ line on, and `=` in a lambda binds only the lambda's names. A loop adds:
 ### Loops
 
 ```
-loop-line = "while" expr "do" "(" round ")"
-          | "for" operand "in" expr "do" "(" round ")" ;
+loop-line = "while" expr "do" "(" lines ")"
+          | "for" operand "in" expr "do" "(" lines ")" ;
 ```
 
 - **`for P in list ( … )`** runs its body once for each element, in order,

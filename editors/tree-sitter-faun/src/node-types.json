@@ -322,18 +322,7 @@
   {
     "type": "block",
     "named": true,
-    "fields": {
-      "answer": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "_expression",
-            "named": true
-          }
-        ]
-      }
-    },
+    "fields": {},
     "children": {
       "multiple": true,
       "required": true,

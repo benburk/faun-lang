@@ -289,12 +289,12 @@ module.exports = grammar({
 
     round: $ => seq(
       '(',
-      $._round_line,
-      repeat(seq($._block_newline, $._round_line)),
+      $._block_line,
+      repeat(seq($._block_newline, $._block_line)),
       ')',
     ),
 
-    _round_line: $ => choice(
+    _block_line: $ => choice(
       $.binding,
       $.else_line,
       $.if_line,
@@ -427,12 +427,12 @@ module.exports = grammar({
 
     tuple: $ => seq('(', commaSep1($._expression), ')'),
 
-    // Bindings, then the answer, a line apiece; a line before the last that
-    // binds nothing is an effect asked for what it does.
+    // Lines, as a loop's body's are; that the last is its answer is told
+    // after parsing.
     block: $ => seq(
       '(',
-      repeat1(seq(choice($.binding, $.else_line, $.if_line, $.loop_line, $._expression), $._block_newline)),
-      field('answer', $._expression),
+      $._block_line,
+      repeat1(seq($._block_newline, $._block_line)),
       ')',
     ),
 

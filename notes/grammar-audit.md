@@ -62,6 +62,12 @@ a spaced infix operator.
   as expressions, refused where a line says they are not a pattern.
 - **Arms only after `is`.**
 - **`continue` and `break` only in a loop's body.**
+- **A block's last line is its answer.** A block's lines and a loop's
+  body's are one rule; a binding, a leaving line or a loop last is refused
+  in a block, where the round would go on.
+- **A tuple's member and an arm's pattern are values.** A parenthesis's
+  first line is any block line; a binding, a leaving line or a loop before
+  a `,` or `->` is refused.
 - **The parser's own refusals** beyond the grammar: an `is` tested again or
   compared, an `if` as an operand, `expect` in a body, a one-member tuple,
   a block never closed.

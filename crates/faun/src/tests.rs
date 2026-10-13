@@ -477,6 +477,35 @@ fn an_if_line_and_a_loop_are_not_a_block_s_last() {
     assert!(parse("f(x) -> (\n  for y in x do (\n    if y break\n  )\n  0\n)").is_ok());
 }
 
+/// A parenthesis holds lines; a tuple's member and an arm's pattern are
+/// values, so a binding, a leaving line or a loop before a `,` or `->` is
+/// refused, saying where it stands.
+#[test]
+fn a_tuple_s_member_and_an_arm_s_pattern_are_values() {
+    for source in [
+        "f(x) -> (y = x, 2)",
+        "f(x) -> (x > 0 else return 0, 2)",
+        "f(x) -> (if x return 0, 2)",
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(
+            error.message.contains("a tuple's member is a value"),
+            "{error}"
+        );
+    }
+    let error = parse("f(x) -> x is (\n  y = 1 -> y\n)").unwrap_err();
+    assert!(
+        error.message.contains("an arm's pattern is a value"),
+        "{error}"
+    );
+    let error = parse("f(x) -> (y = x)").unwrap_err();
+    assert!(
+        error.message.contains("a block ends with its answer"),
+        "{error}"
+    );
+    assert!(parse("f(x) -> (if x then 1 else 2, 3)").is_ok());
+}
+
 /// A lambda stands only as an argument, with a parameter or more, and a
 /// list holds one rest; each refusal says what to write instead.
 #[test]
