@@ -139,7 +139,8 @@ loop-line = "while" expr "do" "(" round ")"
   last element taken; one first bound there is the round's. It walks a
   `List`; a range is `List.range`.
 - **`while c ( … )`** runs while `c` holds. `c` may be an `is`, whose names
-  the body sees.
+  the body sees, and may call an effect, worked out first each round:
+  `while source.read!(2)? is Data(bytes) do (`.
 - **No `loop`.** A loop whose test is partway through, as in reading
   until input ends, is `while True do ( … if done break … )`.
 - **`do` before the body,** as `then` before a branch and `->` before a

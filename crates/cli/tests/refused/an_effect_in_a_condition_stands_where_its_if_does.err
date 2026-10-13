@@ -1,0 +1,7 @@
+error: effect `read_to_end!` must stand on its own
+ --> an_effect_in_a_condition_stands_where_its_if_does.fn:4:30
+  |
+4 | main!(host) -> host.exit!(if host.stdin.read_to_end!() is Ok(_) then 0 else 1)
+  |                              ^^^^^^^^^^^^^^^^^^^^^^^^^ inside an expression
+  |
+  = help: bind what it answers to a name on a line of its own, and use the name here

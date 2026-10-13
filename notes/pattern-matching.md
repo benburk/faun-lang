@@ -762,7 +762,8 @@ better.
   no aliasing, no mutation a caller can see.
 - **Effects are marked.** A function that performs effects is marked as
   one by its name, and each effectful call stands alone, at the start of a
-  line or as a whole body, never inside an expression.
+  line, as what a line tests, or as a whole body, never inside an
+  expression.
 - **Failure is a value.** There are no exceptions. A computation that can
   fail answers a result, success or failure, whose failures are a union of
   tags the type system tracks; an operator passes a failure on to the

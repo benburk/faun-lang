@@ -4660,8 +4660,9 @@ fn validate_effect_expr(
                 source_name(symbols, *name)
             ),
         )),
-        // What `?` propagates, or `return` answers, stands where it does.
-        h::ExprKind::Try(value) | h::ExprKind::Return(value) => {
+        // What `?` propagates, or `return` answers, stands where it does;
+        // what `is` tests is worked out first, once, so it stands there too.
+        h::ExprKind::Try(value) | h::ExprKind::Return(value) | h::ExprKind::Is(value, _) => {
             validate_effect_expr(module, value, owner_effectful, stands_alone, symbols)
         }
         // A block's lines stand on their own, and its answer where the
@@ -4678,11 +4679,13 @@ fn validate_effect_expr(
             for (initial, _, _) in &looped.carried {
                 validate_effect_expr(module, initial, owner_effectful, false, symbols)?;
             }
+            // A loop's head is worked out first, once a round or once in
+            // all, before anything else the loop does.
             let head = match &looped.head {
                 h::LoopHead::While(condition) => condition,
                 h::LoopHead::For(_, list) => list,
             };
-            validate_effect_expr(module, head, owner_effectful, false, symbols)?;
+            validate_effect_expr(module, head, owner_effectful, true, symbols)?;
             for binding in &looped.body.bindings {
                 validate_effect_expr(module, &binding.value, owner_effectful, true, symbols)?;
             }
@@ -4783,7 +4786,7 @@ fn validate_effect_expr(
             validate_effect_expr(module, member, owner_effectful, false, symbols)
         }),
         h::ExprKind::Lambda(_, body) => validate_effect_expr(module, body, false, false, symbols),
-        h::ExprKind::Unary(_, value) | h::ExprKind::Is(value, _) => {
+        h::ExprKind::Unary(_, value) => {
             validate_effect_expr(module, value, owner_effectful, false, symbols)
         }
         h::ExprKind::Binary(_, left, right) => {
@@ -4792,7 +4795,7 @@ fn validate_effect_expr(
         }
         // An arm stands where the `is` does, as a branch does.
         h::ExprKind::Match(value, arms) => {
-            validate_effect_expr(module, value, owner_effectful, false, symbols)?;
+            validate_effect_expr(module, value, owner_effectful, stands_alone, symbols)?;
             arms.iter().try_for_each(|arm| {
                 if let Some(guard) = &arm.guard {
                     validate_effect_expr(module, guard, owner_effectful, false, symbols)?;
@@ -4800,9 +4803,10 @@ fn validate_effect_expr(
                 validate_effect_expr(module, &arm.body, owner_effectful, stands_alone, symbols)
             })
         }
-        // A branch stands where the `if` does: one of them is taken, there.
+        // A condition is worked out first, once, and a branch is taken
+        // after it: each stands where the `if` does.
         h::ExprKind::If(condition, yes, no) => {
-            validate_effect_expr(module, condition, owner_effectful, false, symbols)?;
+            validate_effect_expr(module, condition, owner_effectful, stands_alone, symbols)?;
             validate_effect_expr(module, yes, owner_effectful, stands_alone, symbols)?;
             validate_effect_expr(module, no, owner_effectful, stands_alone, symbols)
         }

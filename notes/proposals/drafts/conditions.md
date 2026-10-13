@@ -185,6 +185,12 @@ partway through a body is.
   where it fails: `if seen continue`, `if n is Bot return Bot`. What the
   condition binds is seen by the leave alone, `if r is Err(e) return
   Err(e)`, since below the line the condition failed.
+- **An effect may be what is tested.** A condition, and the value an
+  `is` tests, is worked out first and once, so it stands where its `if` or
+  `is` does, as a binding's value does: `host.read!(path) is Ok(v) else
+  return 0`, `if out.write!(line) is Err(e) return Err(e)`. In an operand,
+  an argument, a guard or the right of `&` and `|`, which may not run, it
+  is still refused.
 - **Two lines, two jobs.** An `else` line takes a value apart or checks
   what should hold, its names going on below: `r is Ok(v) else return 0`.
   An `if` line bails out on a case, nothing going on from it: `if done
@@ -325,6 +331,11 @@ partway through a body is.
   `for`'s element too, carried out of the loop as Python's is, a test's
   names in a lambda shadowing, and `==` touching the name it compares
   with.
+- **An effect tested,** 2026-10-12: a condition, the value an `is` tests or
+  arms take, and a loop's head stand where the `if`, the `is` or the loop
+  does, so an effect's answer is tested without a name of its own. The
+  file example `trickle` reads in a `while` loop where it had recursed
+  through a second function.
 
 ## Costs
 

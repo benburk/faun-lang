@@ -1,0 +1,4 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> host.exit!(if host.stdin.read_to_end!() is Ok(_) then 0 else 1)

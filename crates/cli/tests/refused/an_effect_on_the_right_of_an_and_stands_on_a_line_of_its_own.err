@@ -1,0 +1,7 @@
+error: effect `read_to_end!` must stand on its own
+ --> an_effect_on_the_right_of_an_and_stands_on_a_line_of_its_own.fn:5:29
+  |
+5 |   if host.args.is_empty() & host.stdin.read_to_end!() is Ok(_) return host.exit!(0)
+  |                             ^^^^^^^^^^^^^^^^^^^^^^^^^ inside an expression
+  |
+  = help: bind what it answers to a name on a line of its own, and use the name here
