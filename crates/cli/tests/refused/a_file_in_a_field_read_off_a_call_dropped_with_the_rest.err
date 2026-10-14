@@ -1,0 +1,9 @@
+error: the `File` from `swapped` is neither used up nor answered on every way `program!` goes on
+  --> a_file_in_a_field_read_off_a_call_dropped_with_the_rest.fn:13:12
+   |
+13 |   closed = swapped(pair).a.close!()
+   |            ^^^^^^^^^^^^^ this `File` is made here
+14 |   0
+   |   - still held where `program!` answers
+   |
+   = help: use it up, as `close!` does, or answer it

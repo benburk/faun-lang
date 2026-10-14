@@ -1,0 +1,9 @@
+error: `program!` uses up a `File` its first parameter holds and keeps another
+  --> a_file_in_a_record_closed_and_another_kept.fn:10:12
+   |
+10 |   closed = pair.a.close!()
+   |            ^^^^^^ used up here
+11 |   0
+   |   - still held where `program!` answers
+   |
+   = help: use up every one it holds, or none, where the caller does

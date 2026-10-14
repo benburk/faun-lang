@@ -9,6 +9,9 @@
 //!
 //! What holds a resource must use it up exactly once on every way the
 //! function goes on: hand it to something that uses it up, or answer it.
+//! A name holding a record holds each field that holds a resource on its
+//! own, so reading one field takes or lends that field alone, and a field
+//! holding none is read freely.
 //! Dropping one, using one after it is used up, or leaving by `?` while one
 //! is held is refused. There is no destructor and no cleanup on `?`: a
 //! hidden close would be an effect nobody wrote.
@@ -314,9 +317,13 @@ impl<'a> Facts<'a> {
         contracts
     }
 
-    /// Where a parameter is taken on one way and kept on another: the
-    /// first place it is taken, and the first way it is kept.
+    /// Where a parameter is taken on one way and kept on another, or
+    /// partly taken on one way: the first place it is taken, and the first
+    /// way it is kept.
     fn disagreement(&self, function: usize, parameter: usize, paths: &[Path]) -> Refusal {
+        // A way that takes some of it and keeps the rest is the one to name.
+        let partly = paths.iter().find(|path| path.partly.contains(&parameter));
+        let paths = partly.map_or(paths, std::slice::from_ref);
         let taken = paths.iter().find_map(|path| {
             path.taken
                 .iter()
@@ -338,12 +345,10 @@ impl<'a> Facts<'a> {
         } else {
             "held here".to_owned()
         };
+        let (message, help) = disagreeing(name, &resource, parameter, partly.is_some());
         Refusal {
             at: taken.or_else(|| kept.map(|(at, _)| at)),
-            message: format!(
-                "`{name}` uses up the {resource} in its {} parameter on some ways it goes on and not others",
-                ordinal(parameter)
-            ),
+            message,
             label,
             also: kept.filter(|_| taken.is_some()).map(|(at, leaving)| {
                 let still = match leaving {
@@ -352,10 +357,7 @@ impl<'a> Facts<'a> {
                 };
                 (at, still)
             }),
-            help: Some(
-                "use it up on every way the function goes on, or on none, where the caller does"
-                    .to_owned(),
-            ),
+            help: Some(help.to_owned()),
         }
     }
 
@@ -435,6 +437,32 @@ impl<'a> Facts<'a> {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// The fields of a record, or of a type wrapping one, which a value of
+    /// `ty` has fields of.
+    fn record_fields(&self, ty: &Type) -> Option<Vec<(Symbol, Type)>> {
+        match ty {
+            Type::Record(fields) => Some(fields.clone()),
+            Type::Named(name, _) if !self.resources.contains(name) => {
+                let wrapper = self.program.data.get(name)?.wrapper.as_ref()?;
+                match self.fields(wrapper.constructor, ty)?.as_slice() {
+                    [Type::Record(fields)] => Some(fields.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a field of a value of `ty` other than `field` holds a
+    /// resource.
+    fn others_carry(&self, ty: &Type, field: Symbol) -> bool {
+        self.record_fields(ty).is_some_and(|fields| {
+            fields
+                .iter()
+                .any(|(each, ty)| *each != field && self.carries(ty))
+        })
     }
 
     /// Every constructor of `ty`, where it is taken apart by constructors.
@@ -542,7 +570,7 @@ impl<'a> Facts<'a> {
 type Place = (ModuleId, crate::ast::Span);
 
 /// Where a held resource came from.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Origin {
     /// Some of what the function's parameter at this place was handed.
     Parameter(usize),
@@ -552,14 +580,14 @@ enum Origin {
 }
 
 /// What made a resource, for saying which one is meant.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Made {
     /// The resource's type, the first one the value holds.
     resource: Option<Symbol>,
     by: Maker,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Maker {
     /// Built by a constructor.
     Built,
@@ -594,6 +622,7 @@ enum State {
     Unknown,
     /// Holding none: a test showed it is a value that holds no resource, or
     /// it is not there on this way, as what a test bound where it failed.
+    /// A record whose fields are held each on its own holds none itself.
     Empty,
 }
 
@@ -672,7 +701,7 @@ struct Frame {
     walking: Option<usize>,
     continues: Vec<(Place, Vec<State>)>,
     /// Each `break`, with what each name the loop carries is handed.
-    breaks: Vec<(Vec<State>, Vec<State>)>,
+    breaks: Vec<(Vec<State>, Vec<Vec<State>>)>,
 }
 
 /// One way a function goes on, to its answer or out by `?`: which
@@ -681,6 +710,9 @@ struct Path {
     end: (Place, Leaving),
     taken: Vec<(usize, Option<Place>)>,
     kept: Vec<usize>,
+    /// Parameters a record of which is held in part: a field used up and
+    /// another still held.
+    partly: Vec<usize>,
 }
 
 impl Path {
@@ -727,6 +759,9 @@ struct Walk<'f, 'a> {
     loops: Vec<Frame>,
     /// Where a test took apart what it tested, which it holds no longer.
     taken_apart: HashSet<Place>,
+    /// A named record's fields holding a resource, each held on its own,
+    /// so that reading one leaves the others.
+    fields: HashMap<usize, Vec<(Symbol, usize)>>,
 }
 
 impl<'f, 'a> Walk<'f, 'a> {
@@ -751,6 +786,7 @@ impl<'f, 'a> Walk<'f, 'a> {
             left: false,
             loops: Vec::new(),
             taken_apart: HashSet::new(),
+            fields: HashMap::new(),
         }
     }
 
@@ -776,11 +812,7 @@ impl<'f, 'a> Walk<'f, 'a> {
     }
 
     fn body(&mut self, body: &d::Body) {
-        for binding in &body.bindings {
-            let origins = self.value(&binding.value);
-            self.bind(&binding.pattern, &binding.value.ty, &origins);
-        }
-        let answer = self.value(&body.result);
+        let answer = self.block(body);
         self.end(&answer, (place(&body.result), Leaving::Answering));
     }
 
@@ -794,11 +826,8 @@ impl<'f, 'a> Walk<'f, 'a> {
         }
         match pattern {
             Pattern::Bind(local) => {
-                self.held.push(Held {
-                    origins: origins.to_vec(),
-                    state: State::Held,
-                });
-                self.locals.insert(*local, self.held.len() - 1);
+                let held = self.named(origins, ty);
+                self.locals.insert(*local, held);
             }
             // The whole and its parts would each hold what it holds.
             Pattern::As(_, pattern) => {
@@ -851,6 +880,48 @@ impl<'f, 'a> Walk<'f, 'a> {
         }
     }
 
+    /// What a name holds of a value of `ty` holding `origins`: a record's
+    /// fields holding a resource each held on its own, and anything else
+    /// whole.
+    fn named(&mut self, origins: &[Origin], ty: &Type) -> usize {
+        self.held.push(Held {
+            origins: origins.to_vec(),
+            state: State::Held,
+        });
+        let held = self.held.len() - 1;
+        let Some(fields) = self.facts.record_fields(ty) else {
+            return held;
+        };
+        let fields: Vec<(Symbol, Type)> = fields
+            .into_iter()
+            .filter(|(_, field)| self.facts.carries(field))
+            .collect();
+        if fields.is_empty() {
+            return held;
+        }
+        self.held[held].state = State::Empty;
+        let parts = fields
+            .into_iter()
+            .map(|(name, field)| (name, self.named(origins, &field)))
+            .collect();
+        self.fields.insert(held, parts);
+        held
+    }
+
+    /// Where what is held at `held` is: its fields' places, where it is a
+    /// record held field by field, and otherwise itself.
+    fn leaves(&self, held: usize) -> Vec<usize> {
+        self.fields.get(&held).map_or_else(
+            || vec![held],
+            |fields| {
+                fields
+                    .iter()
+                    .flat_map(|(_, field)| self.leaves(*field))
+                    .collect()
+            },
+        )
+    }
+
     /// Held by nothing: kept where it is a parameter's, and dropped where
     /// it was made here.
     fn hold(&mut self, origins: &[Origin]) {
@@ -889,11 +960,24 @@ impl<'f, 'a> Walk<'f, 'a> {
             ExprKind::Update(base, fields) => self.values(
                 std::iter::once(base.as_ref()).chain(fields.iter().map(|(_, field)| field)),
             ),
+            // A field holding no resource is read freely off a name.
             ExprKind::Project(receiver, _) if !self.facts.carries(&expr.ty) => {
-                self.lend(receiver);
+                if !is_local(receiver) {
+                    self.lend(receiver);
+                }
                 Vec::new()
             }
-            ExprKind::Project(receiver, _) | ExprKind::Widen(receiver) => self.value(receiver),
+            ExprKind::Project(..) if is_local(expr) => self.take(expr),
+            // The value read from is held by nothing named, and what its
+            // other fields hold is dropped with it.
+            ExprKind::Project(receiver, field) => {
+                let origins = self.value(receiver);
+                if self.facts.others_carry(&receiver.ty, *field) {
+                    self.hold(&origins);
+                }
+                origins
+            }
+            ExprKind::Widen(receiver) => self.value(receiver),
             ExprKind::DirectCall(callee, arguments) => self.call(expr, callee, arguments),
             // A way the function ends: what is held there is as at any
             // answer, and nothing goes on from it.
@@ -935,10 +1019,57 @@ impl<'f, 'a> Walk<'f, 'a> {
 
     fn block(&mut self, block: &d::Body) -> Vec<Origin> {
         for binding in &block.bindings {
+            if let Pattern::Bind(local) = &binding.pattern
+                && let Some(held) = self.built(&binding.value)
+            {
+                self.locals.insert(*local, held);
+                continue;
+            }
             let origins = self.value(&binding.value);
             self.bind(&binding.pattern, &binding.value.ty, &origins);
         }
         self.value(&block.result)
+    }
+
+    /// A record written out, as a name holds it: each field holding a
+    /// resource held on its own, holding what its own value does. `None`
+    /// where `expr` is not a record with such a field.
+    fn built(&mut self, expr: &d::Expr) -> Option<usize> {
+        let ExprKind::Record(fields) = &expr.kind else {
+            return None;
+        };
+        if !fields
+            .iter()
+            .any(|(_, field)| self.facts.carries(&field.ty))
+        {
+            return None;
+        }
+        let mut parts = Vec::new();
+        let mut origins: Vec<Origin> = Vec::new();
+        for (name, field) in fields {
+            if !self.facts.carries(&field.ty) {
+                let made = self.value(field);
+                self.hold(&made);
+                continue;
+            }
+            let held = self.built(field).unwrap_or_else(|| {
+                let made = self.value(field);
+                self.named(&made, &field.ty)
+            });
+            for origin in &self.held[held].origins {
+                if !origins.contains(origin) {
+                    origins.push(*origin);
+                }
+            }
+            parts.push((*name, held));
+        }
+        self.held.push(Held {
+            origins,
+            state: State::Empty,
+        });
+        let held = self.held.len() - 1;
+        self.fields.insert(held, parts);
+        Some(held)
     }
 
     /// A loop, whose round may run any number of times. What it carries is
@@ -1016,14 +1147,14 @@ impl<'f, 'a> Walk<'f, 'a> {
         looped: &d::Loop,
         within: &[Option<usize>],
         ended: Vec<State>,
-        breaks: Vec<(Vec<State>, Vec<State>)>,
+        breaks: Vec<(Vec<State>, Vec<Vec<State>>)>,
     ) {
         let after: Vec<Option<usize>> = within
             .iter()
             .zip(&looped.carried)
-            .map(|(within, (_, _, after))| {
+            .map(|(within, (initial, _, after))| {
                 let origins = self.held[(*within)?].origins.clone();
-                let held = self.held_by_none(origins)?;
+                let held = self.named(&origins, &initial.ty);
                 self.locals.insert(*after, held);
                 Some(held)
             })
@@ -1031,16 +1162,24 @@ impl<'f, 'a> Walk<'f, 'a> {
         let mut states = self.extended(ended);
         for (within, after) in within.iter().zip(&after) {
             if let (Some(within), Some(after)) = (within, after) {
-                states[*after] = states[*within];
-                states[*within] = State::Empty;
+                for (within, after) in self.leaves(*within).into_iter().zip(self.leaves(*after)) {
+                    states[after] = states[within];
+                    states[within] = State::Empty;
+                }
             }
         }
         self.set(&states);
         for (states, handed) in breaks {
             let mut states = self.extended(states);
-            for (after, state) in after.iter().zip(handed) {
+            for (after, handed) in after.iter().zip(handed) {
                 if let Some(after) = after {
-                    states[*after] = state;
+                    for (at, leaf) in self.leaves(*after).into_iter().enumerate() {
+                        states[leaf] = handed
+                            .get(at)
+                            .or_else(|| handed.first())
+                            .copied()
+                            .unwrap_or(State::Empty);
+                    }
                 }
             }
             self.agreed(expr, states);
@@ -1059,7 +1198,7 @@ impl<'f, 'a> Walk<'f, 'a> {
             by: Maker::Carried,
         };
         origins.push(Origin::Made(place(initial), made));
-        let held = self.held_by_none(origins)?;
+        let held = self.named(&origins, &initial.ty);
         self.locals.insert(local, held);
         Some(held)
     }
@@ -1097,18 +1236,19 @@ impl<'f, 'a> Walk<'f, 'a> {
     fn broke(&mut self, expr: &d::Expr, values: &[d::Expr]) {
         let mut handed = Vec::new();
         for value in values {
-            let state = if is_local(value) {
-                let state = self
-                    .local(value)
-                    .map_or(State::Empty, |held| self.held[held].state);
+            let states = if is_local(value) {
+                let states = self.local(value).map_or_else(Vec::new, |held| {
+                    let leaves = self.leaves(held);
+                    leaves.iter().map(|leaf| self.held[*leaf].state).collect()
+                });
                 self.value(value);
-                state
+                states
             } else if self.value(value).is_empty() {
-                State::Empty
+                vec![State::Empty]
             } else {
-                State::Held
+                vec![State::Held]
             };
-            handed.push(state);
+            handed.push(states);
         }
         let walking = self.loops.last().and_then(|frame| frame.walking);
         if let Some(walking) = walking
@@ -1282,9 +1422,13 @@ impl<'f, 'a> Walk<'f, 'a> {
         for (local, from_left) in &left.apart.bound {
             if let Some((_, from_right)) = right.apart.bound.iter().find(|(each, _)| each == local)
             {
-                let origins = self.held[*from_left].origins.clone();
-                self.held[*from_right].origins.extend(origins);
-                holds[*from_left] = State::Empty;
+                let lefts = self.leaves(*from_left);
+                let rights = self.leaves(*from_right);
+                for (from_left, from_right) in lefts.into_iter().zip(rights) {
+                    let origins = self.held[from_left].origins.clone();
+                    self.held[from_right].origins.extend(origins);
+                    holds[from_left] = State::Empty;
+                }
             }
         }
         Outcome {
@@ -1310,8 +1454,13 @@ impl<'f, 'a> Walk<'f, 'a> {
         };
         let unguarded = rows.iter().filter(|(_, guard)| guard.is_none());
         let unmatched = unguarded.map(|(pattern, _)| pattern);
-        if fails[whole] == State::Held && !self.facts.unmatched_carries(unmatched, &value.ty) {
-            fails[whole] = State::Empty;
+        let leaves = self.leaves(whole);
+        if leaves.iter().all(|leaf| fails[*leaf] == State::Held)
+            && !self.facts.unmatched_carries(unmatched, &value.ty)
+        {
+            for leaf in leaves {
+                fails[leaf] = State::Empty;
+            }
         }
         let patterns: Vec<&Pattern> = rows.iter().map(|(pattern, _)| pattern).collect();
         let apart = self.matched(whole, value, &patterns);
@@ -1345,15 +1494,23 @@ impl<'f, 'a> Walk<'f, 'a> {
         let ty = &value.ty;
         let start = self.held.len();
         let mut took = Vec::new();
-        if self.held[whole].state == State::Held {
+        let leaves = self.leaves(whole);
+        if leaves
+            .iter()
+            .all(|leaf| self.held[*leaf].state == State::Held)
+        {
             if let Some(pattern) = patterns.iter().find(|p| self.names_resource(p, ty)) {
-                took.push((whole, State::Held));
-                self.held[whole].state = State::Gone(place(value));
+                for leaf in leaves {
+                    took.push((leaf, State::Held));
+                    self.held[leaf].state = State::Gone(place(value));
+                }
                 self.taken_apart.insert(place(value));
                 let origins = self.held[whole].origins.clone();
                 self.bind(pattern, ty, &origins);
             } else if !patterns.iter().any(|p| self.facts.matched_carries(p, ty)) {
-                self.held[whole].state = State::Empty;
+                for leaf in leaves {
+                    self.held[leaf].state = State::Empty;
+                }
             }
         }
         let bound = self
@@ -1479,8 +1636,10 @@ impl<'f, 'a> Walk<'f, 'a> {
             if at > 0 {
                 taken.push((self.restored(&before), left));
             }
-            // Each row asks the arm's guard after its own literals'; the
-            // first is worked out as a condition, the others looked at.
+            // Each row asks the arm's guard after its own literals', and the
+            // rows bind the same names, so what the first's guard takes
+            // apart every row's does: it is worked out as a condition, and
+            // the others looked at.
             for guard in arm
                 .rows
                 .iter()
@@ -1505,15 +1664,13 @@ impl<'f, 'a> Walk<'f, 'a> {
         answered
     }
 
-    /// What was held before a branch, and how a branch walked since left
-    /// it, put back to what it was.
+    /// How a branch walked since left everything, and what was held before
+    /// it put back to what it was: what the branch held since is not there
+    /// for the next one.
     fn restored(&mut self, before: &[State]) -> Vec<State> {
-        let taken = self.held[..before.len()]
-            .iter()
-            .map(|held| held.state)
-            .collect();
-        for (held, state) in self.held.iter_mut().zip(before) {
-            held.state = *state;
+        let taken = self.states();
+        for (at, held) in self.held.iter_mut().enumerate() {
+            held.state = before.get(at).copied().unwrap_or(State::Empty);
         }
         taken
     }
@@ -1654,7 +1811,9 @@ impl<'f, 'a> Walk<'f, 'a> {
                 }
                 Contract::Unknown => {
                     if let Some(held) = self.local(argument) {
-                        self.held[held].state = State::Unknown;
+                        for leaf in self.leaves(held) {
+                            self.held[leaf].state = State::Unknown;
+                        }
                     }
                 }
             }
@@ -1708,7 +1867,14 @@ impl<'f, 'a> Walk<'f, 'a> {
         let Some(held) = self.local(expr) else {
             return;
         };
-        if let State::Gone(gone) = self.held[held].state {
+        let gone = self
+            .leaves(held)
+            .into_iter()
+            .find_map(|leaf| match self.held[leaf].state {
+                State::Gone(gone) => Some(gone),
+                _ => None,
+            });
+        if let Some(gone) = gone {
             let refusal = self.used_twice(expr, gone);
             self.refused.push(refusal);
         }
@@ -1719,18 +1885,29 @@ impl<'f, 'a> Walk<'f, 'a> {
         let Some(held) = self.local(expr) else {
             return Vec::new();
         };
-        match self.held[held].state {
-            State::Held => {
-                self.held[held].state = State::Gone(place(expr));
-                self.held[held].origins.clone()
+        let mut origins = Vec::new();
+        let mut used_twice = None;
+        for leaf in self.leaves(held) {
+            match self.held[leaf].state {
+                State::Held => {
+                    self.held[leaf].state = State::Gone(place(expr));
+                    for origin in &self.held[leaf].origins {
+                        if !origins.contains(origin) {
+                            origins.push(*origin);
+                        }
+                    }
+                }
+                State::Gone(gone) => {
+                    used_twice.get_or_insert(gone);
+                }
+                State::Unknown | State::Empty => {}
             }
-            State::Gone(gone) => {
-                let refusal = self.used_twice(expr, gone);
-                self.refused.push(refusal);
-                Vec::new()
-            }
-            State::Unknown | State::Empty => Vec::new(),
         }
+        if let Some(gone) = used_twice {
+            let refusal = self.used_twice(expr, gone);
+            self.refused.push(refusal);
+        }
+        origins
     }
 
     /// A resource used again at `expr`, which was used up at `gone`.
@@ -1738,8 +1915,13 @@ impl<'f, 'a> Walk<'f, 'a> {
         let resource = self
             .facts
             .called(self.facts.resource_in(&expr.ty), "resource");
+        let partly = self
+            .local(expr)
+            .is_some_and(|held| self.fields.contains_key(&held));
         let message = if self.taken_apart.contains(&gone) {
             format!("this {resource} is read whole after a test took it apart")
+        } else if partly {
+            format!("this value is read whole after a {resource} in it was used up")
         } else {
             format!("this {resource} is used after it was used up")
         };
@@ -1762,10 +1944,21 @@ impl<'f, 'a> Walk<'f, 'a> {
         }
     }
 
-    /// Which held thing a local expression names, where it holds any.
+    /// Which held thing a name, or a field read off one, is, where it holds
+    /// any.
     fn local(&self, expr: &d::Expr) -> Option<usize> {
         match &expr.kind {
             ExprKind::Local(local) => self.locals.get(local).copied(),
+            ExprKind::Project(receiver, field) if self.facts.carries(&expr.ty) => {
+                let whole = self.local(receiver)?;
+                let Some(fields) = self.fields.get(&whole) else {
+                    return Some(whole);
+                };
+                fields
+                    .iter()
+                    .find(|(each, _)| each == field)
+                    .map(|(_, held)| *held)
+            }
             _ => None,
         }
     }
@@ -1778,6 +1971,7 @@ impl<'f, 'a> Walk<'f, 'a> {
             end: (at, leaving),
             taken: Vec::new(),
             kept: Vec::new(),
+            partly: self.partly_held(),
         };
         for origin in answered {
             if let Origin::Parameter(parameter) = origin {
@@ -1801,6 +1995,28 @@ impl<'f, 'a> Walk<'f, 'a> {
             self.refused.push(self.dropped(made, (at, leaving)));
         }
         self.paths.push(path);
+    }
+
+    /// The parameters a record of which is held in part: a field holding a
+    /// resource used up, and another still held.
+    fn partly_held(&self) -> Vec<usize> {
+        let mut partly = Vec::new();
+        for record in self.fields.keys() {
+            let states: Vec<State> = self
+                .leaves(*record)
+                .into_iter()
+                .map(|leaf| self.held[leaf].state)
+                .collect();
+            let gone = states.iter().any(|state| matches!(state, State::Gone(_)));
+            if gone && states.contains(&State::Held) {
+                for origin in &self.held[*record].origins {
+                    if let Origin::Parameter(parameter) = origin {
+                        partly.push(*parameter);
+                    }
+                }
+            }
+        }
+        partly
     }
 
     /// A resource made at `made` that nothing uses up before `end`.
@@ -1852,6 +2068,33 @@ fn ordinal(index: usize) -> String {
         .map_or_else(|| format!("{}th", index + 1), |word| (*word).to_owned())
 }
 
+/// What a function taking its parameter's resource on some ways and not
+/// others is told, or one taking some of what it holds and keeping the
+/// rest, and how to mend it.
+fn disagreeing(
+    name: &str,
+    resource: &str,
+    parameter: usize,
+    partly: bool,
+) -> (String, &'static str) {
+    let ordinal = ordinal(parameter);
+    if partly {
+        (
+            format!(
+                "`{name}` uses up a {resource} its {ordinal} parameter holds and keeps another"
+            ),
+            "use up every one it holds, or none, where the caller does",
+        )
+    } else {
+        (
+            format!(
+                "`{name}` uses up the {resource} in its {ordinal} parameter on some ways it goes on and not others"
+            ),
+            "use it up on every way the function goes on, or on none, where the caller does",
+        )
+    }
+}
+
 /// What is at the place `made` was made.
 fn made_label(made: Made, resource: &str) -> String {
     match made.by {
@@ -1860,8 +2103,13 @@ fn made_label(made: Made, resource: &str) -> String {
     }
 }
 
-const fn is_local(expr: &d::Expr) -> bool {
-    matches!(expr.kind, ExprKind::Local(_))
+/// Whether `expr` is a name, or a field read off one.
+fn is_local(expr: &d::Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Local(_) => true,
+        ExprKind::Project(receiver, _) => is_local(receiver),
+        _ => false,
+    }
 }
 
 const fn place(expr: &d::Expr) -> Place {

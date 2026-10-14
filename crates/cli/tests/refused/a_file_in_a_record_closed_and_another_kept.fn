@@ -1,0 +1,12 @@
+import std.host {Host, File, Files, Mode.*}
+
+main! : Host -> []
+main!(host) -> host.exit!(0)
+
+# Reading `pair.a` takes only that file: `pair.b` is still held where
+# `program!` answers, so its caller would get back a pair with one closed.
+program! : {a: File, b: File} -> Nat
+program!(pair) -> (
+  closed = pair.a.close!()
+  0
+)

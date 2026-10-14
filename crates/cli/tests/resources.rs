@@ -128,6 +128,39 @@ fn a_test_showing_a_value_holds_no_file_leaves_nothing_to_close() {
     assert_eq!(left.keys().collect::<Vec<_>>(), ["a.txt", "b.txt"]);
 }
 
+/// A record's fields holding files are each held on their own: one is
+/// lent, then each closed through its field, and a field holding none read
+/// after.
+#[test]
+fn files_in_a_record_are_used_up_field_by_field() {
+    let package = Package::new(
+        "record-fields",
+        "import std.host {Host, File, IoError, Mode.*}
+
+         main! : Host -> []
+         main!(host) -> (
+           a = host.files.open!(\"a.txt\", Overwrite)
+           b = host.files.open!(\"b.txt\", Overwrite)
+           pair = {a, b, count: 3}
+           wrote = done!(pair.a)
+           closed = done!(pair.b)
+           host.exit!(U8.of_nat(wrote + closed + pair.count))
+         )
+
+         done! : Result(File, IoError) -> Nat
+         done!(Ok(file)) -> (
+           wrote = file.write_all!([104, 105])
+           closed = file.close!()
+           1
+         )
+         done!(Err(_)) -> 0",
+    );
+    let (status, _, left) = support::run_among(&package.entry(), Directory::new());
+    assert_eq!(status, 5);
+    assert_eq!(left["a.txt"], b"hi");
+    assert_eq!(left["b.txt"], b"hi");
+}
+
 /// A name holding a nought byte is refused before the target is asked,
 /// which would read it as ending there: nothing named by its front is made.
 #[test]

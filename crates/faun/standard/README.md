@@ -402,6 +402,13 @@ declares as using up what it is handed, here closing a descriptor; a type
 holding a resource, such as `List(File)` or `Result(File, OpenError)`, holds one
 too.
 
+A record's fields holding a file are each held on their own: `pair.a.close!()`
+uses up only `pair.a`, and `pair.b` is still to be used up, through its field or
+by reading `pair` whole, which is refused once a file in it is used up. A field
+holding no file, `pair.count`, is read whatever its record's files are. A
+field read off a value no name holds, such as what a call answers, drops that
+value's other files, which is refused.
+
 A test or an arm whose pattern names the file takes the value apart, as `=`
 does: where `opened is Ok(file)` holds, `file` holds the file and `opened` is
 gone. Where it fails, `opened` is as it was. On either side, a value holds a
