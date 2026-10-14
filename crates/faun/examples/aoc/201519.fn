@@ -45,7 +45,7 @@ replace_each(rule, before, after is [byte, *rest], found) -> (
 
 replace_here : (Rule, List(U8), List(U8), List(List(U8))) -> List(List(U8))
 replace_here(Rule(from, to), before, after, found) if after.take(from.len()) == from ->
-  [before.reverse().extend(to).extend(after.drop(from.len())), *found]
+  [before.reverse().concat(to).concat(after.drop(from.len())), *found]
 replace_here(_, _, _, found) -> found
 
 products : (List(Rule), List(U8)) -> Set(List(U8))

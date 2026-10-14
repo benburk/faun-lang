@@ -10,7 +10,7 @@ package {
 import md5 {md5_hash}
 
 candidate_digest : (List(U8), Nat) -> List(U8)
-candidate_digest(key, candidate) -> md5_hash(key.extend(candidate.to_str().to_utf8()))
+candidate_digest(key, candidate) -> md5_hash(key.concat(candidate.to_str().to_utf8()))
 
 # Five leading zero hex digits are two zero bytes and a third byte below 16;
 # six are three complete zero bytes.

@@ -30,7 +30,7 @@ walk(graph, [current, *stack], walked) if walked.seen.contains(current) ->
   walk(graph, stack, walked)
 walk(graph, [current, *stack], {seen, path}) -> (
   next = graph.get_or(current, [])
-  walk(graph, next.extend(stack), {seen: seen.insert(current), path: path.append(current)})
+  walk(graph, next.concat(stack), {seen: seen.insert(current), path: path.append(current)})
 )
 walk(_, [], walked) -> walked
 

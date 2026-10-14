@@ -13,7 +13,7 @@ Str : List(U8).(
   len(Str(bytes)) -> bytes.len()
 
   concat : (Str, Str) -> Str
-  concat(Str(left), Str(right)) -> Str(left.extend(right))
+  concat(Str(left), Str(right)) -> Str(left.concat(right))
 
   to_str : Str -> Str
   to_str(text) -> text

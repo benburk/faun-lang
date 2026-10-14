@@ -88,7 +88,7 @@ spoken([], rules) -> Ok(regard(rules))
 
 # The table is round, so the seating pairs with itself shifted by one.
 neighbours : List(a) -> List((a, a))
-neighbours(seating) -> seating.zip(seating.drop(1).extend(seating.take(1)))
+neighbours(seating) -> seating.zip(seating.drop(1).concat(seating.take(1)))
 
 # Rotations are the same table, so the head stays put and the tail moves.
 seatings : List(Str) -> List(List(Str))

@@ -30,8 +30,8 @@ padded(message) -> (
   length = message.len()
   zeroes = (119 - length % 64) % 64
   message.append(0x80)
-    .extend(List.repeat(0, zeroes))
-    .extend(length_bytes(U64.of_nat(length * 8)))
+    .concat(List.repeat(0, zeroes))
+    .concat(length_bytes(U64.of_nat(length * 8)))
 )
 
 length_bytes : U64 -> List(U8)

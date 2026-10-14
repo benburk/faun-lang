@@ -56,7 +56,7 @@ read_on! : (r, List(U8), Result(Chunk, ReadError)) -> Result(List(U8), ReadError
   r.read! : (r, Nat) -> Result(Chunk, ReadError)
 read_on!(_, _, Err(error)) -> Err(error)
 read_on!(_, read, Ok(End)) -> Ok(read)
-read_on!(input, read, Ok(Data(chunk))) -> read_chunks!(input, read.extend(chunk))
+read_on!(input, read, Ok(Data(chunk))) -> read_chunks!(input, read.concat(chunk))
 
 # Every byte to the end of what `input` reads, as text.
 read_text! : r -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8]) where

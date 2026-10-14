@@ -1,9 +1,9 @@
 import std.host {Host}
 
-# Lists join by `extend`; `Str` alone has `concat`. The inner call is the
-# one refused, not the outer one taken as `Str`'s.
-joined : List(Nat) -> List(Nat)
-joined(xs) -> xs.concat([1]).concat([2])
+# `Str` alone has `pad_start`. The inner call is the one refused, not the
+# outer one taken as `Str`'s and told its argument is no width.
+padded : List(Nat) -> Str
+padded(xs) -> xs.pad_start(3).pad_start("x")
 
 main! : Host -> []
 main!(host) -> host.exit!(0)

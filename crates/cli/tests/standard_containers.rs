@@ -21,7 +21,7 @@ fn each_value_feeds_a_hasher_its_parts() {
 
            write_bytes : (Trace, List(U8)) -> Trace
            write_bytes(Trace(seen), bytes) ->
-             Trace(seen.append(bytes.len()).extend(bytes.map(|byte| byte.to_nat())))
+             Trace(seen.append(bytes.len()).concat(bytes.map(|byte| byte.to_nat())))
          )
 
          traced : Trace -> List(Nat)

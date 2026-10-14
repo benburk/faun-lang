@@ -52,7 +52,7 @@ Match(a) : [
     if used_a.any(|index| used_b.contains(index)) ->
     Failed("two option declarations claimed the same argument")
   sequence(Matched(a, used_a), Matched(b, used_b), combine) ->
-    Matched(combine(a, b), used_a.extend(used_b))
+    Matched(combine(a, b), used_a.concat(used_b))
 
   # Require at least this many positional values. Intended for `args.rest()`:
   # the requirement lives on the Rest declaration item — stated where help

@@ -25,10 +25,10 @@ List(a) : [Nil, Cons(a, List(a))].(
   is_empty([_, *_]) -> False
 
   append : (List(a), a) -> List(a)
-  append(values, value) -> extend(values, [value])
+  append(values, value) -> concat(values, [value])
 
-  extend : (List(a), List(a)) -> List(a)
-  extend(left, right) -> reverse_into(reverse_into(left, []), right)
+  concat : (List(a), List(a)) -> List(a)
+  concat(left, right) -> reverse_into(reverse_into(left, []), right)
 
   prepend : (List(a), a) -> List(a)
   prepend(values, value) -> [value, *values]

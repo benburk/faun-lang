@@ -97,7 +97,7 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   to_list : SortedMap(k, v) -> List((k, v))
   to_list(Tip) -> []
   to_list(Bin(left, key, value, right, _)) ->
-    to_list(left).extend(to_list(right).prepend((key, value)))
+    to_list(left).concat(to_list(right).prepend((key, value)))
 
   # Whether `map` and `other` bind the same keys to equal values: their
   # ascending entries agree, however either was built.

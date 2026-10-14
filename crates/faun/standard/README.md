@@ -79,7 +79,7 @@ byte, which no character boundary can fall inside. There is no slicing by
 position. A numeral pattern of a word and a string pattern are each a test
 of equality, asked before the clause's guard.
 
-`List` follows Ori's standard list: `len`, `is_empty`, `append`, `extend`,
+`List` follows Ori's standard list: `len`, `is_empty`, `append`, `concat`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
 `any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
 `get`, `get_or`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,

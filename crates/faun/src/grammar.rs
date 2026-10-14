@@ -249,7 +249,7 @@ impl Parser<'_> {
                 _ => "a lambda stands only as a call's argument, as functions are passed and not kept: `xs.map(|x| x + 1)`".to_owned(),
             },
             Kind::Star if self.second_rest() => {
-                "a list holds one rest; to join lists, `front.extend(back)`".to_owned()
+                "a list holds one rest; to join lists, `front.concat(back)`".to_owned()
             }
             Kind::Eof => format!("expected {wanted} before the end of the file"),
             Kind::Newline => format!("expected {wanted} before the end of the line"),

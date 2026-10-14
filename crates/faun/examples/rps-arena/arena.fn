@@ -79,7 +79,7 @@ pairs : List(a) -> List((a, a))
 pairs([]) -> []
 pairs([first, *rest]) -> (
   with_first = rest.map(|other| (first, other))
-  with_first.extend(pairs(rest))
+  with_first.concat(pairs(rest))
 )
 
 # One bot's line in the standings.

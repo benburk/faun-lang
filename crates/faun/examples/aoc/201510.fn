@@ -7,7 +7,7 @@
 # element and turns the round quadratic. Tail recursion runs as a loop.
 emit : (Nat, U8, List(U8)) -> List(U8)
 emit(seen, digit, out) ->
-  out.extend(seen.to_str().to_utf8()).append(digit)
+  out.concat(seen.to_str().to_utf8()).append(digit)
 
 say : (List(U8), U8, Nat, List(U8)) -> List(U8)
 say([next, *rest], digit, seen, out) if next == digit -> say(rest, digit, seen + 1, out)

@@ -19,7 +19,7 @@ reverse_twice_is_identity(xs) -> xs.reverse().reverse().equals(xs)
 
 # for all lists xs and ys: length distributes over concatenation.
 len_of_extend_is_sum : (List(Nat), List(Nat)) -> Bool
-len_of_extend_is_sum(xs, ys) -> xs.extend(ys).len().equals(xs.len().add(ys.len()))
+len_of_extend_is_sum(xs, ys) -> xs.concat(ys).len().equals(xs.len().add(ys.len()))
 
 # The falsehood: "for all n, n ≤ 100". False for every n from 101 up.
 at_most_one_hundred : Nat -> Bool

@@ -499,19 +499,19 @@ step(digit, rest, s, _, _, _, _, True, True) -> if rest * 2 < s then [digit] els
 # point's position `k` is offset by 1000.
 layout : ((List(Nat), Nat)) -> List(U8)
 layout((digits, k)) if k >= digits.len() + 1000 & k <= 1016 ->
-  digit_bytes(digits).extend(zeros(k - 1000 - digits.len())).extend(".0".to_utf8())
+  digit_bytes(digits).concat(zeros(k - 1000 - digits.len())).concat(".0".to_utf8())
 layout((digits, k)) if k > 1000 & k <= 1016 ->
-  digit_bytes(digits.take(k - 1000)).append('.').extend(digit_bytes(digits.drop(k - 1000)))
+  digit_bytes(digits.take(k - 1000)).append('.').concat(digit_bytes(digits.drop(k - 1000)))
 layout((digits, k)) if k >= 997 & k <= 1000 ->
-  "0.".to_utf8().extend(zeros(1000 - k)).extend(digit_bytes(digits))
+  "0.".to_utf8().concat(zeros(1000 - k)).concat(digit_bytes(digits))
 layout((digits, k)) -> scientific(digits, k)
 
 scientific : (List(Nat), Nat) -> List(U8)
 scientific([first, *rest], k) ->
   [digit_byte(first), '.']
-    .extend(if rest.is_empty() then "0".to_utf8() else digit_bytes(rest))
+    .concat(if rest.is_empty() then "0".to_utf8() else digit_bytes(rest))
     .append('e')
-    .extend(exponent_text(k))
+    .concat(exponent_text(k))
 scientific([], _) -> []
 
 exponent_text : Nat -> List(U8)
@@ -537,7 +537,7 @@ zeros(n) -> List.repeat(digit_byte(0), n)
 fixed : (Format, Unpacked, Nat) -> List(U8)
 fixed(fmt, Finite(negative, mantissa, field), places) -> (
   n = scaled(fmt, mantissa, field, places, 0)
-  signed(negative, digits_of(n / 10.pow(places), 1).extend(decimals(n, places)))
+  signed(negative, digits_of(n / 10.pow(places), 1).concat(decimals(n, places)))
 )
 fixed(fmt, other, _) -> text(fmt, other)
 
@@ -617,11 +617,11 @@ below(_, _, j) -> j
 
 # `digits` with the point after the integer part, which `k` locates.
 plain : (List(U8), Nat) -> List(U8)
-plain(digits, k) if k > 1000 -> digits.take(k - 1000).extend(point(digits.drop(k - 1000)))
-plain(digits, k) -> "0.".to_utf8().extend(zeros(1000 - k)).extend(digits)
+plain(digits, k) if k > 1000 -> digits.take(k - 1000).concat(point(digits.drop(k - 1000)))
+plain(digits, k) -> "0.".to_utf8().concat(zeros(1000 - k)).concat(digits)
 
 exponent_form : (List(U8), Nat) -> List(U8)
-exponent_form([first, *rest], k) -> [first, *point(rest)].append('e').extend(exponent_text(k))
+exponent_form([first, *rest], k) -> [first, *point(rest)].append('e').concat(exponent_text(k))
 exponent_form([], _) -> []
 
 point : List(U8) -> List(U8)
@@ -632,7 +632,7 @@ point(bytes) -> ['.', *bytes]
 digits_of : (Nat, Nat) -> List(U8)
 digits_of(n, width) -> (
   digits = Nat.to_str(n).to_utf8()
-  zeros(width - digits.len()).extend(digits)
+  zeros(width - digits.len()).concat(digits)
 )
 
 # Parsing: an optional sign, digits with at most one point among them, and

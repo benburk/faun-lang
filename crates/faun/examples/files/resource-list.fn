@@ -56,8 +56,8 @@ second!(Err(_), a) -> (
   1
 )
 second!(Ok(b), a) -> (
-  files = [a].extend([b]).reverse()
-  remaining = close_head!(files.extend([]))
+  files = [a].concat([b]).reverse()
+  remaining = close_head!(files.concat([]))
   length = remaining.len()
   inspected = inspect_all!(remaining)
   closed = close_all!(remaining)

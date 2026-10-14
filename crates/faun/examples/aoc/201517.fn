@@ -35,7 +35,7 @@ container_counts(_, 0, used) -> [used]
 container_counts([], _, _) -> []
 container_counts([size, *rest], remaining, used) if size <= remaining ->
   container_counts(rest, remaining - size, used + 1)
-    .extend(container_counts(rest, remaining, used))
+    .concat(container_counts(rest, remaining, used))
 container_counts([_, *rest], remaining, used) -> container_counts(rest, remaining, used)
 
 solve : (Str, Nat) -> Result(List(Nat), _)

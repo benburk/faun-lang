@@ -851,7 +851,7 @@ const LIST_DROP_TAKE: &str = listed!("xs.drop(1).take(2).get_or(1, 9)");
 const LIST_TAKE_PAST: &str = listed!("xs.take(9).len()");
 const LIST_LAST: &str = listed!("xs.last().ok_or(9)");
 // A list put before itself, which its buffer is shared with.
-const LIST_EXTEND: &str = listed!("xs.extend(xs).get_or(6, 9) * 10 + xs.extend(xs).get_or(9, 9)");
+const LIST_CONCAT: &str = listed!("xs.concat(xs).get_or(6, 9) * 10 + xs.concat(xs).get_or(9, 9)");
 const LIST_REVERSE: &str = listed!("xs.reverse().get_or(0, 9) * 10 + xs.reverse().get_or(4, 9)");
 // Elements that are lists themselves, each holding a claim to its buffer.
 // What a list of lists holds is not bounded, so the answer is made to fit.
@@ -870,7 +870,7 @@ const LISTED: &[(&str, &str, i32)] = &[
     ("a list dropped from and taken from", LIST_DROP_TAKE, 2),
     ("a list taken past its end", LIST_TAKE_PAST, 5),
     ("the last of a list", LIST_LAST, 4),
-    ("a list put before itself", LIST_EXTEND, 14),
+    ("a list put before itself", LIST_CONCAT, 14),
     ("a list reversed", LIST_REVERSE, 40),
 ];
 
@@ -932,10 +932,10 @@ fn lists_of_every_element_hold_what_they_were_given() {
          pairs(n) -> [(n, 300 + n), (2, 5)].map(|(small, wide)| small + wide) == [302, 7]
 
          strings : Nat -> Bool
-         strings(n) -> [\"a${n}\", \"bb\", \"c\"].extend([\"d\"]).reverse() == [\"d\", \"c\", \"bb\", \"a1\"]
+         strings(n) -> [\"a${n}\", \"bb\", \"c\"].concat([\"d\"]).reverse() == [\"d\", \"c\", \"bb\", \"a1\"]
 
          nested : Nat -> Bool
-         nested(n) -> [[n, 2], [3]].extend([[4, 5, 6]]).map(|xs| xs.len()) == [2, 1, 3]
+         nested(n) -> [[n, 2], [3]].concat([[4, 5, 6]]).map(|xs| xs.len()) == [2, 1, 3]
 
          records : Nat -> Bool
          records(n) -> named([{name: \"a${n}\", size: n}, {name: \"b\", size: 2}])

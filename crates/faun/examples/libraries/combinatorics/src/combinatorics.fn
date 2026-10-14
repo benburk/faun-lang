@@ -61,7 +61,7 @@ walk([], _, _, _) -> []
 walk([(x, continue_from), *rest], remaining, repeats, inorder) ->
   generate(continue_from, remaining, repeats, inorder)
     .map(|selection| selection.prepend(x))
-    .extend(walk(rest, remaining, repeats, inorder))
+    .concat(walk(rest, remaining, repeats, inorder))
 
 permutations : (List(a), Nat) -> List(List(a))
 permutations(xs, length) -> generate(xs, length, False, False)

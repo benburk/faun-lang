@@ -451,15 +451,15 @@ html_escape(text) -> Str.from_utf8(html_escape_bytes(text.to_utf8())).ok_or("")
 html_escape_bytes : List(U8) -> List(U8)
 html_escape_bytes([]) -> []
 html_escape_bytes(['&', *rest]) ->
-  "&amp;".to_utf8().extend(html_escape_bytes(rest))
+  "&amp;".to_utf8().concat(html_escape_bytes(rest))
 html_escape_bytes(['<', *rest]) ->
-  "&lt;".to_utf8().extend(html_escape_bytes(rest))
+  "&lt;".to_utf8().concat(html_escape_bytes(rest))
 html_escape_bytes(['>', *rest]) ->
-  "&gt;".to_utf8().extend(html_escape_bytes(rest))
+  "&gt;".to_utf8().concat(html_escape_bytes(rest))
 html_escape_bytes(['\"', *rest]) ->
-  "&quot;".to_utf8().extend(html_escape_bytes(rest))
+  "&quot;".to_utf8().concat(html_escape_bytes(rest))
 html_escape_bytes(['\'', *rest]) ->
-  "&#39;".to_utf8().extend(html_escape_bytes(rest))
+  "&#39;".to_utf8().concat(html_escape_bytes(rest))
 html_escape_bytes([byte, *rest]) -> html_escape_bytes(rest).prepend(byte)
 
 expect Html.text("<script>alert('x')</script>").render() == "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"

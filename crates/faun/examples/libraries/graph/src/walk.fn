@@ -67,7 +67,7 @@ enter(graph, {seen, order}, node) -> (
 drain_stack : (List(a), s, (s, a) -> (s, List(a))) -> s
 drain_stack([item, *stack], state, visit) -> (
   (next, added) = visit(state, item)
-  drain_stack(added.extend(stack), next, visit)
+  drain_stack(added.concat(stack), next, visit)
 )
 drain_stack([], state, _) -> state
 
@@ -75,6 +75,6 @@ drain_stack([], state, _) -> state
 drain_queue : (List(a), s, (s, a) -> (s, List(a))) -> s
 drain_queue([item, *queue], state, visit) -> (
   (next, added) = visit(state, item)
-  drain_queue(queue.extend(added), next, visit)
+  drain_queue(queue.concat(added), next, visit)
 )
 drain_queue([], state, _) -> state

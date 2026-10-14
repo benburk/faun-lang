@@ -20,8 +20,8 @@ const CASES: &[(&str, &str, u32)] = &[
     ),
     ("append", "xs.append(9).get_or(5, 0)", 9),
     (
-        "extend",
-        "xs.extend([7, 8]).get_or(6, 0) + xs.extend([7, 8]).len() * 10",
+        "concat",
+        "xs.concat([7, 8]).get_or(6, 0) + xs.concat([7, 8]).len() * 10",
         78,
     ),
     (

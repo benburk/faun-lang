@@ -149,7 +149,7 @@ Decode(a) : [Decoded(a, List(Str)), Failed(DecodeError)].(
     if used_a.any(|name| used_b.contains(name)) ->
     Failed(OverlappingFields)
   sequence(Decoded(a, used_a), Decoded(b, used_b), combine) ->
-    Decoded(combine(a, b), used_a.extend(used_b))
+    Decoded(combine(a, b), used_a.concat(used_b))
 
   map : (Decode(a), a -> b) -> Decode(b)
   map(Failed(error), _) -> Failed(error)
@@ -264,7 +264,7 @@ Members(a) : [Members(a, List((Str, Json)))].(
 
   sequence : (Members(a), Members(b), (a, b) -> c) -> Members(c)
   sequence(Members(a, left), Members(b, right), combine) ->
-    Members(combine(a, b), left.extend(right))
+    Members(combine(a, b), left.concat(right))
 
   object : Members(a) -> Json
   object(Members(_, members)) -> Object(members)
@@ -489,7 +489,7 @@ claimed(Failed(error), _) -> Failed(error)
 claimed(Decoded(_, used_b), used_a)
   if used_a.any(|name| used_b.contains(name)) ->
   Failed(OverlappingFields)
-claimed(Decoded(value, used_b), used_a) -> Decoded(value, used_a.extend(used_b))
+claimed(Decoded(value, used_b), used_a) -> Decoded(value, used_a.concat(used_b))
 
 # The wanted member, found at most once. A guard picks the matching name;
 # `found_field` then judges the rest of the scan beside the decoded value,

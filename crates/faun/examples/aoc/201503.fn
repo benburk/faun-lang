@@ -31,7 +31,7 @@ part1(input) -> Set.of_list(trail(input.to_utf8())).len()
 part2 : Str -> Nat
 part2(input) -> (
   (santa, robo) = deal(input.to_utf8())
-  Set.of_list(trail(santa).extend(trail(robo))).len()
+  Set.of_list(trail(santa).concat(trail(robo))).len()
 )
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
