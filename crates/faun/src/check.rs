@@ -3916,10 +3916,15 @@ impl<'a> Checker<'a> {
                     && pending.arguments.is_empty()
                     && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_));
                 // The one method the receiver has is applied whether or not
-                // it fits, which says why where it does not.
+                // it fits, which says why where it does not; on a receiver
+                // not yet known, only once nothing else will say it, as the
+                // call that answers it may have no such method itself.
+                let unknown = matches!(self.infer.resolve(&pending.receiver), Ty::Var(_));
                 let candidates: Vec<_> = if may_be_field {
                     Vec::new()
-                } else if let [only] = owned.as_slice() {
+                } else if let [only] = owned.as_slice()
+                    && (final_pass || !unknown)
+                {
                     vec![only.clone()]
                 } else {
                     owned

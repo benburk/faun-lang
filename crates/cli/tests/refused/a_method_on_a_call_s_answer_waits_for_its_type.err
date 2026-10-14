@@ -1,0 +1,5 @@
+error: `List(Nat)` has no field or method `concat`
+ --> a_method_on_a_call_s_answer_waits_for_its_type.fn:6:15
+  |
+6 | joined(xs) -> xs.concat([1]).concat([2])
+  |               ^^^^^^^^^^^^^^

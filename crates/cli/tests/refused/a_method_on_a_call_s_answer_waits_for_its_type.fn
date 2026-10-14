@@ -1,0 +1,9 @@
+import std.host {Host}
+
+# Lists join by `extend`; `Str` alone has `concat`. The inner call is the
+# one refused, not the outer one taken as `Str`'s.
+joined : List(Nat) -> List(Nat)
+joined(xs) -> xs.concat([1]).concat([2])
+
+main! : Host -> []
+main!(host) -> host.exit!(0)
