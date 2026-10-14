@@ -3,6 +3,8 @@
 # answer, so they cannot disagree about it: exactly one of `Lt`, `Eq`, `Gt`
 # holds for any pair.
 
+import hasher {Hasher}
+
 export {Order.*}
 
 Order : [Lt, Eq, Gt].(
@@ -35,6 +37,13 @@ Order : [Lt, Eq, Gt].(
   or : (Order, Order) -> Order
   or(Eq, next) -> next
   or(decided, _) -> decided
+
+  equals : (Order, Order) -> Bool
+
+  to_str : Order -> Str
+
+  hash_into : (Order, h) -> h where Hasher(h)
 )
 
 expect Lt.ne() & !Eq.ne()
+expect 1.cmp(2) == Lt & Gt != Eq & Gt.to_str() == "Gt"

@@ -3,9 +3,9 @@ error: a function may only be passed straight into a call
    |
 10 | main!(host) -> host.exit!(U8.of_nat(True.select(twice, half)(3)))
    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^ this call hands on a function that would be held
-  ::: std/bool.fn:27:27
+  ::: std/bool.fn:26:27
    |
-27 |   select(True, yes, _) -> yes
+26 |   select(True, yes, _) -> yes
    |                           --- held here
    |
    = note: a function cannot be bound, answered, or stored

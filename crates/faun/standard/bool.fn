@@ -1,5 +1,4 @@
-# Concrete Boolean utilities. Equality is written out while bodyless method
-# derivation remains outside the bootstrap frontend.
+# Concrete Boolean utilities. Equality is `cmp`'s, derived with it.
 
 import hasher {Hasher}
 
