@@ -301,6 +301,7 @@ impl Parser<'_> {
                 }
                 _ => {}
             }
+            let start = self.at;
             match self
                 .line()
                 .and_then(|line| self.line_end(block).map(|()| line))
@@ -308,6 +309,9 @@ impl Parser<'_> {
                 Ok(line) => lines.push(line),
                 Err(error) => {
                     self.errors.push(error);
+                    // The whole line is passed over, from its start, so
+                    // the rest of a block the error is in is passed too.
+                    self.at = start;
                     self.pass_line(block);
                 }
             }
@@ -964,12 +968,20 @@ impl Parser<'_> {
     fn expr(&mut self) -> Parsed<Expr> {
         match self.peek() {
             Kind::KwIf => self.if_(),
-            Kind::KwReturn | Kind::KwContinue | Kind::KwBreak => Err(SyntaxError::new(
-                self.tokens[self.at].span(),
-                "a body leaves only by a leaving line: `if c return x`, or `c else return x`",
-            )),
+            Kind::KwReturn => Err(self.not_leaving("return x")),
+            Kind::KwContinue => Err(self.not_leaving("continue")),
+            Kind::KwBreak => Err(self.not_leaving("break")),
             _ => self.binary(0),
         }
+    }
+
+    /// Why `leave` stands where only a value may: it leaves by a line of
+    /// its own, after its condition.
+    fn not_leaving(&self, leave: &str) -> SyntaxError {
+        SyntaxError::new(
+            self.tokens[self.at].span(),
+            format!("a body leaves only by a leaving line: `if c {leave}`, or `c else {leave}`"),
+        )
     }
 
     fn binary(&mut self, looser: u8) -> Parsed<Expr> {

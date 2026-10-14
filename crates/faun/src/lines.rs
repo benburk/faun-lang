@@ -441,12 +441,7 @@ fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, Error>
         },
         (None, Ends::Answer) => match lines.pop().expect("a block has its first line") {
             Statement::Value(value) => value,
-            Statement::Binding(_, value) => {
-                return Err(error(
-                    value.span,
-                    "a block ends with its answer, a line after its last binding",
-                ));
-            }
+            Statement::Binding(bound, value) => return Err(ends_bound(&bound, &value)),
             Statement::Else(..) | Statement::If(..) | Statement::Loop(..) => {
                 unreachable!("a leaving line and a loop hold the lines after them")
             }
@@ -471,6 +466,21 @@ fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, Error>
         })
         .collect::<Result<_, Error>>()?;
     Ok(Body { bindings, result })
+}
+
+/// Why a block whose last line binds `bound` to `value` has no answer.
+fn ends_bound(bound: &Expr, value: &Expr) -> Error {
+    let span = Span {
+        start: bound.span.start,
+        end: value.span.end,
+    };
+    error(
+        span,
+        "a block ends with its answer, a line after its last binding",
+    )
+    .help(
+        "a block's bindings are its own: to change a name, bind it to what the block answers, `n = if c then n + 1 else n`",
+    )
 }
 
 /// Why `line`, holding the lines after it, is not a block's last.

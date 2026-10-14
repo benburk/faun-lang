@@ -287,6 +287,26 @@ fn every_line_that_cannot_be_read_is_told_at_once() {
     assert!(told[2].1.contains("found `)`"), "{told:?}");
 }
 
+/// An error inside a block passes over the rest of the line holding it,
+/// so the block's later lines are not read as lines of the file.
+#[test]
+fn an_error_inside_a_block_passes_over_its_line_whole() {
+    let error = parse(
+        "f(x) -> (\n  y = x is (\n    0 -> (\n      z = 1\n    )\n    _ -> 2\n  )\n  y\n)\ng(y) -> y +\n",
+    )
+    .unwrap_err();
+    let told: Vec<_> = std::iter::once(&error)
+        .chain(&error.also)
+        .map(|error| (error.line, error.message.as_str()))
+        .collect();
+    assert_eq!(told.len(), 2, "{told:?}");
+    assert!(
+        told[0].1.contains("a block ends with its answer"),
+        "{told:?}"
+    );
+    assert_eq!(told[1].0, 11);
+}
+
 /// The clauses of `source`, in order.
 fn clauses(source: &str) -> Vec<Clause> {
     parse(source)
@@ -541,6 +561,8 @@ fn an_arm_does_not_begin_with_equals() {
 fn a_body_leaves_only_by_a_leaving_line() {
     let error = parse("f(n) -> return n").unwrap_err();
     assert!(error.message.contains("only by a leaving line"), "{error}");
+    let error = parse("f(xs) -> (\n  for x in xs do (\n    break\n  )\n  0\n)").unwrap_err();
+    assert!(error.message.contains("`if c break`"), "{error}");
     let error = parse("f(n) -> (\n  n > 0 else 0\n  n\n)").unwrap_err();
     assert!(error.message.contains("`return`"), "{error}");
     let error = parse("f(xs) -> (\n  for x in xs (\n    if x break\n  )\n  0\n)").unwrap_err();
