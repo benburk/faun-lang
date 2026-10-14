@@ -11,7 +11,7 @@ factorial(m) -> m * factorial(m - 1)
 
 # Effectful functions come from the host, and end with an exclamation mark
 main!(host) -> (
-  name = host.args.get_or(0, "world")
+  name = host.args.get_or(1, "world")
   host.println!("Hello, ${name}!")
   host.exit!(0)
 )
@@ -29,7 +29,7 @@ Faun is equally defined by the features it does not have
 
 - No source-level mutation, pointers, references, borrow syntax, or lifetime annotations.
 - No tracing garbage collector, reference cycles, or manual memory management.
-- No hidden semantic control flow: function and host calls happen only where written. There are no implicit constructors, destructors, exceptions, coercion hooks, or cleanup callbacks. Resource cleanup is explicit and statically enforced by linear resource types.c
+- No hidden semantic control flow: function and host calls happen only where written. There are no implicit constructors, destructors, exceptions, coercion hooks, or cleanup callbacks. Resource cleanup is explicit and statically enforced by linear resource types.
 - No null or unchecked partial pattern matches.
 - No inheritance, nominal subtyping, or implicit type conversions.
 - No first-class closures, currying, or higher-kinded types.
@@ -41,18 +41,18 @@ Faun is equally defined by the features it does not have
 
 ## What works today
 
-Four backends
+Three backends
 
 - x86-64 Linux
-- AArch64 macOS
 - wasm32 WASI
 - MOS 6502 sim65
 
-Programs
+Programs, in [`crates/faun/examples`](crates/faun/examples)
 
-- exit(0)
-- hello world
-- simple arithmetic expressions
+- Advent of Code 2015, days 1 to 19
+- n-body and spectral norm benchmarks
+- files read, written and closed, each checked to be closed once
+- libraries: JSON, MD5, a command-line parser, a heap, graphs, templates, property tests and more
 - `expect` tests, run by `faun test`
 
 Editors
