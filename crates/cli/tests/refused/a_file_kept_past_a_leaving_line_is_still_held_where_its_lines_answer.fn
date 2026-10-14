@@ -1,0 +1,17 @@
+import std.host {Host, Files, Mode.*}
+
+# The way the file is still held on answers at the last line, not at the
+# leaving line before it.
+opened! : Files -> Nat
+opened!(files) -> (
+  answered = files.open!("a.txt", Overwrite)
+  answered is Ok(file) else return 1
+  kept = file
+  0
+)
+
+main! : Host -> []
+main!(host) -> (
+  status = opened!(host.files)
+  host.exit!(U8.of_nat(status))
+)

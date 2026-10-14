@@ -295,7 +295,7 @@ impl<'a> Facts<'a> {
         let mut contracts = vec![Contract::Unknown; parameters.len()];
         let mut paths: Vec<Path> = Vec::new();
         for clause in clauses {
-            let mut walk = Walk::new(self, known, at, place(&clause.body.result));
+            let mut walk = Walk::new(self, known, at, place(answering(&clause.body.result)));
             walk.clause(clause, parameters);
             paths.append(&mut walk.paths);
             if let Some(found) = found.as_deref_mut() {
@@ -813,7 +813,10 @@ impl<'f, 'a> Walk<'f, 'a> {
 
     fn body(&mut self, body: &d::Body) {
         let answer = self.block(body);
-        self.end(&answer, (place(&body.result), Leaving::Answering));
+        self.end(
+            &answer,
+            (place(answering(&body.result)), Leaving::Answering),
+        );
     }
 
     /// Bind what a pattern names of a value holding `origins`. A part it
@@ -2114,4 +2117,24 @@ fn is_local(expr: &d::Expr) -> bool {
 
 const fn place(expr: &d::Expr) -> Place {
     (expr.module, expr.span)
+}
+
+/// Where `expr` answers, as a reader finds it: the last line of a block,
+/// and past a leaving line, the lines after it.
+fn answering(expr: &d::Expr) -> &d::Expr {
+    match &expr.kind {
+        ExprKind::Block(body) => answering(&body.result),
+        ExprKind::If(_, yes, no) if leaves(no) => answering(yes),
+        ExprKind::If(_, yes, no) if leaves(yes) => answering(no),
+        _ => expr,
+    }
+}
+
+/// Whether `expr` never answers where it stands.
+fn leaves(expr: &d::Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Return(_) | ExprKind::Continue(_) | ExprKind::Break(_) => true,
+        ExprKind::Block(body) => leaves(&body.result),
+        _ => false,
+    }
 }

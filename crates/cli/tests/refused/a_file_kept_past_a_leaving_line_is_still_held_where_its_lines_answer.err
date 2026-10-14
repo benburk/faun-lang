@@ -1,0 +1,10 @@
+error: the `File` from `Files.open!` is neither used up nor answered on every way `opened!` goes on
+  --> a_file_kept_past_a_leaving_line_is_still_held_where_its_lines_answer.fn:7:14
+   |
+7  |   answered = files.open!("a.txt", Overwrite)
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this `File` is made here
+...
+10 |   0
+   |   - still held where `opened!` answers
+   |
+   = help: use it up, as `close!` does, or answer it
