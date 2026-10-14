@@ -74,7 +74,7 @@ is left whole. A string or character literal writes `\n`, `\r`, `\t`, `\0`,
 its one to six hexadecimal digits, as Rust does. For reading text there are `is_empty`, `split` at a separator,
 `lines` at `\n` or `\r\n`, `trim` of ASCII white space, `starts_with`,
 `ends_with`, `drop_prefix` and `drop_suffix`; for writing it,
-`Str.join(pieces, separator)`, `repeat`, `pad_start` and `pad_end`. Matching and cutting go byte by
+`pieces.join(separator)`, `repeat`, `pad_start` and `pad_end`. Matching and cutting go byte by
 byte, which no character boundary can fall inside. There is no slicing by
 position. A numeral pattern of a word and a string pattern are each a test
 of equality, asked before the clause's guard.
@@ -87,7 +87,9 @@ of equality, asked before the clause's guard.
 `partition`, `zip`, `unzip`, `cross`, `enumerate`, `windows`, `min`, `max`,
 `sort`, `sort_on` and `to_str`, and the constructors `List.range(n)` and
 `List.repeat(x, n)`. `sort` is a stable merge sort by the element's `cmp`, and
-`sort_on` by a key's. `to_str` writes a list as it is written, `[1, 2, 3]`. A list
+`sort_on` by a key's. `join` puts a separator between the pieces of
+anything with `empty` and `concat`: `["a", "b"].join(", ")` is `"a, b"`,
+and `[[1], [2]].join([0])` is `[1, 0, 2]`. `to_str` writes a list as it is written, `[1, 2, 3]`. A list
 pattern's rest may go unnamed, as `[a, b, *]`. A
 lookup that can miss answers a structural tag: `Err(OutOfBounds)`,
 `Err(Empty)` or `Err(NotFound)`. Nothing is recognized by name: `len` is

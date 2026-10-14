@@ -126,13 +126,13 @@ app(input) -> (
 )
 
 example : Str
-example = Str.join([
+example = [
   # Literal equality selects Sue 1, but the corrected inequalities reject her.
   "Sue 1: cats: 7, trees: 3, pomeranians: 3",
   # Every special reading is on the corrected side of the ticker-tape value.
   "Sue 2: cats: 8, trees: 4, pomeranians: 2",
   "Sue 3: children: 1, cars: 2, perfumes: 1"
-], "\n")
+].join("\n")
 
 expect part1(example) == Ok(1)
 expect part2(example) == Ok(2)

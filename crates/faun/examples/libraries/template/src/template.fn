@@ -353,7 +353,7 @@ template_render_nodes(nodes) -> template_render_nodes_at(nodes, 0).text
 template_render_nodes_at(nodes, next) -> (
   rendered = template_render_pieces(nodes, next)
   {
-    text: "Html.fragment([".concat(Str.join(rendered.pieces, " ")).concat("])"),
+    text: "Html.fragment([".concat(rendered.pieces.join(" ")).concat("])"),
     helpers: rendered.helpers,
     next: rendered.next
   }

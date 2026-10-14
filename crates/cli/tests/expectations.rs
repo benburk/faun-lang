@@ -388,11 +388,11 @@ fn bitwise_and_powers_of_numbers_read_at_run_time() {
          number(word) -> Nat.from_str(word).ok_or(0)
 
          answer : List(Nat) -> Str
-         answer([a, b, *_]) -> Str.join([
+         answer([a, b, *_]) -> [
            a.and(b), a.or(b), a.xor(b), a.pow(b % 3), (b % 3).pow(a % 5),
            U32.of_nat(a).rotate_left(b).to_nat(), U32.of_nat(a).shift_right(b % 40).to_nat(),
            U8.of_nat(a).and(U8.of_nat(b)).to_nat(),
-         ].map(|n| n.to_str()), \" \")
+         ].map(|n| n.to_str()).join(\" \")
          answer(_) -> \"\"",
     );
     for (input, said) in BITWISE {

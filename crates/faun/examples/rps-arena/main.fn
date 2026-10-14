@@ -81,7 +81,7 @@ report({seed, rounds}) -> (
   heading = "seed ${seed}, ${rounds} rounds per match\n"
   columns = row("bot", "wins", "draws", "losses")
   lines = table.map(line)
-  Str.join([heading, columns, *lines], "")
+  [heading, columns, *lines].join("")
 )
 
 line : Score -> Str

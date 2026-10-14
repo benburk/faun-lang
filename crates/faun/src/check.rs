@@ -626,25 +626,6 @@ impl Infer {
         answer
     }
 
-    /// `trial`, kept where it succeeds and undone where it fails, so a
-    /// refusal leaves inference as it found it.
-    fn attempt<T, E>(&mut self, trial: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
-        let variables = self.links.get_mut().len();
-        let (bound, outer) = (self.trail.len(), self.probing);
-        self.probing = true;
-        let answer = trial(self);
-        if answer.is_err() {
-            for id in self.trail.drain(bound..) {
-                self.links.get_mut()[usize::try_from(id).expect("u32 fits usize")] = None;
-            }
-            self.links.get_mut().truncate(variables);
-        } else if !outer {
-            self.trail.truncate(bound);
-        }
-        self.probing = outer;
-        answer
-    }
-
     fn bind(&mut self, id: u32, ty: Ty) {
         if self.probing {
             self.trail.push(id);
@@ -4369,17 +4350,13 @@ impl<'a> Checker<'a> {
         pending: &PendingMethod,
         implementation: &MethodImpl,
     ) -> Result<(), CheckError> {
-        let symbols = self.symbols;
-        let replacements = self
-            .infer
-            .attempt(|infer| apply_signature(infer, pending, &implementation.scheme, symbols))
-            .map_err(|message| {
-                let refused = failure(pending.module, pending.span, message);
-                match self.elsewhere(pending, implementation) {
-                    Some(help) => refused.help(help),
-                    None => refused,
-                }
-            })?;
+        let replacements = apply_signature(
+            &mut self.infer,
+            pending,
+            &implementation.scheme,
+            self.symbols,
+        )
+        .map_err(|message| failure(pending.module, pending.span, message))?;
         // An obligation names nothing where it stands; a call through a
         // bound names its implementation only once it is specialized; a call
         // of an implementation owes that implementation's own bounds.
@@ -4405,37 +4382,6 @@ impl<'a> Checker<'a> {
             );
         }
         Ok(())
-    }
-
-    /// Another type's method of the name `tried` has, which takes the
-    /// receiver and the arguments as they are, as `Str.join` takes a list:
-    /// how to call it, where there is one.
-    fn elsewhere(&mut self, pending: &PendingMethod, tried: &MethodImpl) -> Option<String> {
-        if pending.reach == Reach::Type {
-            return None;
-        }
-        let others: Vec<MethodImpl> = self
-            .methods
-            .get(&pending.name)?
-            .iter()
-            .filter(|other| other.owner != tried.owner && !other.bound)
-            .cloned()
-            .collect();
-        let fitting: Vec<_> = others
-            .iter()
-            .filter(|other| self.fits(pending, other))
-            .collect();
-        let [other] = fitting.as_slice() else {
-            return None;
-        };
-        let called = format!(
-            "{}.{}",
-            spelled(other.owner, self.symbols),
-            spelled(pending.name, self.symbols)
-        );
-        Some(format!(
-            "`{called}` fits, taking what stands before the `.` first: `{called}(value, …)`"
-        ))
     }
 
     fn method_symbol(

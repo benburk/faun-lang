@@ -35,7 +35,7 @@ Attribute : [
   class(value) -> HtmlAttribute("class", value)
 
   classes : List(Str) -> Attribute
-  classes(values) -> HtmlAttribute("class", Str.join(values, " "))
+  classes(values) -> HtmlAttribute("class", values.join(" "))
 
   href : Str -> Attribute
   href(value) -> HtmlAttribute("href", value)

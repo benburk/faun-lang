@@ -151,10 +151,10 @@ report(Best(best, diet, True)) -> Ok({part1: best, part2: diet})
 report(Best(_, _, False)) -> Err(NoDietaryRecipe)
 
 example : Str
-example = Str.join([
+example = [
   "Butterscotch: capacity -1, durability -2, flavor 6, texture 3, calories 8",
   "Cinnamon: capacity 2, durability 3, flavor -2, texture -1, calories 3"
-], "\n")
+].join("\n")
 
 example_pantry : List(Ingredient)
 example_pantry = ingredients(example).ok_or([])

@@ -23,7 +23,7 @@ app(input) -> (
 )
 
 report_draws : Nat -> Str
-report_draws(seed) -> Str.join(draw(Random.seed(seed), 6).map(U32.to_str), "\n")
+report_draws(seed) -> draw(Random.seed(seed), 6).map(U32.to_str).join("\n")
 
 # The same fixed vector random.ori pins, seen through the decimal printer.
 expect draw(Random.seed(42), 6).map(U32.to_str) == [

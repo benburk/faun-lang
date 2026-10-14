@@ -110,8 +110,8 @@ expect distance(Reindeer(14, 0, 0), 1000) == 0
 expect distance(Reindeer(0, 10, 127), 1000) == 0
 
 example : Str
-example = Str.join(["Comet can fly 14 km/s for 10 seconds, but then must rest for 127 seconds.",
-  "Dancer can fly 16 km/s for 11 seconds, but then must rest for 162 seconds."], "\n")
+example = ["Comet can fly 14 km/s for 10 seconds, but then must rest for 127 seconds.",
+  "Dancer can fly 16 km/s for 11 seconds, but then must rest for 162 seconds."].join("\n")
 
 # Dancer leads early and Comet takes it back; the answer depends on when you
 # look, which is the whole of part two's complaint about part one's scoring.

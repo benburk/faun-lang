@@ -558,10 +558,10 @@ hex_upper(v) if v < 10 -> U8.of_nat('0'.add(v))
 hex_upper(v) -> U8.of_nat('A'.add(v.sub(10)))
 
 render_values : List(Json) -> Str
-render_values(values) -> Str.join(values.map(|value| value.to_str()), ",")
+render_values(values) -> values.map(|value| value.to_str()).join(",")
 
 render_members : List((Str, Json)) -> Str
-render_members(members) -> Str.join(members.map(render_member), ",")
+render_members(members) -> members.map(render_member).join(",")
 
 render_member : ((Str, Json)) -> Str
 render_member((name, value)) -> "${render_string(name)}:${value.to_str()}"

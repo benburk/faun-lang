@@ -12,6 +12,10 @@ Str : List(U8).(
   len : Str -> Nat
   len(Str(bytes)) -> bytes.len()
 
+  # The text holding nothing.
+  empty : Str
+  empty = Str([])
+
   concat : (Str, Str) -> Str
   concat(Str(left), Str(right)) -> Str(left.concat(right))
 
@@ -60,15 +64,10 @@ Str : List(U8).(
   is_empty : Str -> Bool
   is_empty(Str(bytes)) -> bytes.is_empty()
 
-  # The pieces with `separator` between neighbours, written
-  # `Str.join(pieces, separator)`. Valid pieces and a valid separator meet
-  # only where one character ends and the next begins.
-  join : (List(Str), Str) -> Str
-  join(pieces, Str(separator)) -> Str(pieces.map(to_utf8).join(separator))
 
   # The text `count` times over.
   repeat : (Str, Nat) -> Str
-  repeat(text, count) -> join(List.repeat(text, count), "")
+  repeat(text, count) -> List.repeat(text, count).join("")
 
   # The text with spaces after or before it to fill `width` characters,
   # as `${value:<12}` and `${value:>7}` write. Text already that wide is
@@ -193,10 +192,10 @@ then_cmp(Eq, left, right) -> bytes_cmp(left, right)
 then_cmp(decided, _, _) -> decided
 
 expect "a,b,,c".split(",").len() == 4
-expect Str.join("a,b,,c".split(","), "-") == "a-b--c"
-expect Str.join("one::two::".split("::"), "|") == "one|two|"
+expect "a,b,,c".split(",").join("-") == "a-b--c"
+expect "one::two::".split("::").join("|") == "one|two|"
 expect "abc".split("") == ["abc"] & "".split(",") == [""]
-expect Str.join("x\ny\r\nz\n".lines(), "|") == "x|y|z" & "a\rb".lines() == ["a\rb"]
+expect "x\ny\r\nz\n".lines().join("|") == "x|y|z" & "a\rb".lines() == ["a\rb"]
 expect "".lines().is_empty() & "a\n\n".lines() == ["a", ""]
 expect "  pad \t\n".trim() == "pad" & "   ".trim().is_empty()
 expect "prefix-body".starts_with("prefix") & !"pre".starts_with("prefix")

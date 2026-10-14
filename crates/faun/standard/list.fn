@@ -16,6 +16,10 @@ import hasher {Hasher}
 export {List.*}
 
 List(a) : [Nil, Cons(a, List(a))].(
+  # The list holding nothing.
+  empty : List(a)
+  empty = []
+
   len : List(a) -> Nat
   len([]) -> 0
   len([_, *tail]) -> 1 + len(tail)
@@ -47,10 +51,15 @@ List(a) : [Nil, Cons(a, List(a))].(
   flatten : List(List(a)) -> List(a)
   flatten(lists) -> flatten_into(lists, [])
 
-  # The lists with `separator` between neighbours and at neither edge.
-  join : (List(List(a)), List(a)) -> List(a)
-  join([], _) -> []
-  join([first, *rest], separator) -> join_into(rest, separator, reverse_into(first, []))
+  # The pieces, `separator` between neighbours and at neither edge: strings
+  # or lists alike, as each joins two by `concat`. Built from the right, so
+  # each piece is copied once.
+  join : (List(a), a) -> a where
+    a.empty : a,
+    a.concat : (a, a) -> a
+  join([], _) -> a.empty
+  join([first, *rest], separator) ->
+    first.concat(rest.fold_right(a.empty, |piece, joined| separator.concat(piece.concat(joined))))
 
   filter : (List(a), a -> Bool) -> List(a)
   filter([], _) -> []
@@ -239,7 +248,7 @@ List(a) : [Nil, Cons(a, List(a))].(
   # The elements as a list is written, each by its own `to_str`:
   # `[1, 2, 3].to_str()` is `"[1, 2, 3]"`.
   to_str : List(a) -> Str where a.to_str : a -> Str
-  to_str(values) -> "[".concat(Str.join(values.map(|value| value.to_str()), ", ")).concat("]")
+  to_str(values) -> "[".concat(values.map(|value| value.to_str()).join(", ")).concat("]")
 
   # The least element, the first of those that tie.
   min : List(a) -> Result(a, [Empty]) where a.cmp : (a, a) -> Order
@@ -288,11 +297,6 @@ flat_map_into([head, *tail], f, built) -> flat_map_into(tail, f, reverse_into(f(
 flatten_into : (List(List(a)), List(a)) -> List(a)
 flatten_into([], built) -> reverse_into(built, [])
 flatten_into([head, *tail], built) -> flatten_into(tail, reverse_into(head, built))
-
-join_into : (List(List(a)), List(a), List(a)) -> List(a)
-join_into([], _, built) -> reverse_into(built, [])
-join_into([head, *tail], separator, built) ->
-  join_into(tail, separator, reverse_into(head, reverse_into(separator, built)))
 
 count_from : (List(a), a -> Bool, Nat) -> Nat
 count_from([], _, counted) -> counted

@@ -142,7 +142,7 @@ app(input) -> (
 )
 
 example : Str
-example = Str.join(["Alice would gain 54 happiness units by sitting next to Bob.",
+example = ["Alice would gain 54 happiness units by sitting next to Bob.",
   "Alice would lose 79 happiness units by sitting next to Carol.",
   "Alice would lose 2 happiness units by sitting next to David.",
   "Bob would gain 83 happiness units by sitting next to Alice.",
@@ -153,7 +153,7 @@ example = Str.join(["Alice would gain 54 happiness units by sitting next to Bob.
   "Carol would gain 55 happiness units by sitting next to David.",
   "David would gain 46 happiness units by sitting next to Alice.",
   "David would lose 7 happiness units by sitting next to Bob.",
-  "David would gain 41 happiness units by sitting next to Carol."], "\n")
+  "David would gain 41 happiness units by sitting next to Carol."].join("\n")
 
 # The puzzle's arrangement, David beside Alice beside Bob beside Carol.
 expect part1(example) == Ok(330)
@@ -161,8 +161,8 @@ expect part1(example) == Ok(330)
 expect part2(example) == Ok(286)
 
 pair : Str
-pair = Str.join(["A would gain 3 happiness units by sitting next to B.",
-  "B would gain 4 happiness units by sitting next to A."], "\n")
+pair = ["A would gain 3 happiness units by sitting next to B.",
+  "B would gain 4 happiness units by sitting next to A."].join("\n")
 
 # Two guests at a round table are neighbours twice over, once on each side,
 # so their one pair is counted twice; seating yourself uncounts it once.
@@ -174,8 +174,8 @@ expect part2(pair) == Ok(7)
 expect part1("A would gain 3 happiness units by sitting next to B.").is_err()
 
 # A guest spoken about who never speaks is still seated, and still silent.
-expect part1(Str.join(["A would gain 3 happiness units by sitting next to B.",
-  "B would gain 4 happiness units by sitting next to C."], "\n")).is_err()
+expect part1(["A would gain 3 happiness units by sitting next to B.",
+  "B would gain 4 happiness units by sitting next to C."].join("\n")).is_err()
 
 expect part1("").is_err()
 expect parse_rule("Alice would shrug 54 happiness units by sitting next to Bob.").is_err()

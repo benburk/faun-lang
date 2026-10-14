@@ -1,9 +1,0 @@
-import std.host {Host}
-
-# A list's `join` joins lists; `Str.join` joins strings, called through
-# its type.
-listed : List(Nat) -> Str
-listed(xs) -> xs.map(Nat.to_str).join(", ")
-
-main! : Host -> []
-main!(host) -> host.exit!(0)

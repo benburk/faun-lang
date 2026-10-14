@@ -170,13 +170,13 @@ fn taking_a_lists_first_elements_is_a_view_of_it() {
          answer(xs) -> (
            cut = xs.blocks(3)
            (front, back) = xs.split_at(2)
-           Str.join([
+           [
              xs.take(4).fold(0, |s, x| s * 10 + x),
              xs.take(99).len(),
              front.len() * 10 + back.len(),
              cut.complete.map(|b| b.fold(0, |s, x| s * 10 + x)).fold(0, |s, x| s + x),
              cut.remainder.fold(0, |s, x| s * 10 + x),
-           ].map(|n| n.to_str()), \",\")
+           ].map(|n| n.to_str()).join(\",\")
          )",
     );
     for (input, said) in [

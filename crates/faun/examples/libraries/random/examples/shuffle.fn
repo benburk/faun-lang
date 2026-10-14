@@ -18,7 +18,7 @@ app(input) -> (
   count = Nat.from_str(input.args.get(0)?)?
   seed = Nat.from_str(input.args.get(1)?)?
   (mixed, after) = Random.seed(seed).shuffle(List.range(count))
-  Ok(Str.join(mixed.map(Nat.to_str), " "))
+  Ok(mixed.map(Nat.to_str).join(" "))
 )
 
 expect (

@@ -30,7 +30,7 @@ route(from, to) -> (
   cost = paths.cost(to)?
   stops = paths.path(to)?
   names = stops.map(name)
-  Ok("${Str.join(names, " -> ")} (${cost})")
+  Ok("${names.join(" -> ")} (${cost})")
 )
 
 expect route(0, 4) == Ok("Ashby -> Crewe -> Dover -> Exeter (20)")
