@@ -1,0 +1,8 @@
+error: this `File` is used up in one branch of an `if` and not the other
+  --> a_file_an_and_took_apart_kept_where_the_and_fails.fn:12:15
+   |
+12 |   closed = if opened is Ok(file) & ready then file.close!() else Ok({})
+   |            ------------------------------------------------------------ the other branch still holds it
+   |               ^^^^^^ taken apart here
+   |
+   = help: use it up in both branches, or in neither

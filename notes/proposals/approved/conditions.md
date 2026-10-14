@@ -473,3 +473,16 @@ Discussion of the [branching](../superseded/branching.md) draft's further steps
 ultimate and penultimate conditional syntaxes. On 2026-10-07 the `expect`
 keyword left the line form, and assignment replaced no-rebinding and the
 loops draft's `$` variables.
+
+## Errata
+
+**2026-10-14.** A test and arms of a value holding a resource, refused
+until now, are built. A pattern naming a part that holds a file takes the
+value apart where it holds, as `=` does, and the value is gone there; where
+it fails, the value is as it was. A test also shows what a value cannot
+hold: where `opened is Ok(file)` fails, `opened` is an `Err` and holds no
+file, so a branch need not close it. Along `&`, where a later part fails
+after a test held, what the test took apart is whole again, which is sound
+because a condition's right side can use nothing up. A test standing as a
+value only looks. The resource check reads a condition as two ways on, one
+where it holds and one where it fails, and `&` and `|` combine them.

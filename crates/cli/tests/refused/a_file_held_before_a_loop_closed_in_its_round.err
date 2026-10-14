@@ -1,0 +1,8 @@
+error: a loop's round uses up a `File` held before the loop
+  --> a_file_held_before_a_loop_closed_in_its_round.fn:13:14
+   |
+13 |     closed = file.close!()
+   |              ^^^^ used up here
+   |              ------------- the next round would find it used up
+   |
+   = help: use it up after the loop, or `break` once it is used up

@@ -1,0 +1,14 @@
+import std.host {Host, Files, Mode.*}
+
+main! : Host -> []
+main!(host) -> (
+  ran = program!(host.files, True)
+  host.exit!(0)
+)
+
+program! : (Files, Bool) -> Nat
+program!(files, ready) -> (
+  opened = files.open!("a.tmp", Overwrite)
+  closed = if opened is Ok(file) & ready then file.close!() else Ok({})
+  0
+)

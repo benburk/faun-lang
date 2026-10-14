@@ -402,6 +402,31 @@ declares as using up what it is handed, here closing a descriptor; a type
 holding a resource, such as `List(File)` or `Result(File, OpenError)`, holds one
 too.
 
+A test or an arm whose pattern names the file takes the value apart, as `=`
+does: where `opened is Ok(file)` holds, `file` holds the file and `opened` is
+gone. Where it fails, `opened` is as it was, and holds no file where the test
+shows it cannot, as an `Err` cannot. A pattern naming nothing that holds the
+file, `opened is Ok(_)`, only looks. Where an `&` fails after a test in it
+held, what the test took apart is whole again, so the `else` has `opened` to
+close.
+
+A loop's round ends as it began. A file held before the loop is not closed
+by a round that goes on, and one a round opens is closed in it or handed to
+the next round in a name the loop carries, which holds it after the loop. A
+`for` walking a list of files takes the list, each round using up its
+element; a `break` would leave the rest, so it is refused.
+
+```
+opened = []
+for name in names do (
+  files.open!(name, Overwrite) is Ok(file) else continue
+  opened = [file, *opened]
+)
+for file in opened do (
+  closed = file.close!()
+)
+```
+
 `host.print!(text)` and `host.println!(text)` write a text to standard output,
 the second with a line's end, and answer `Result({}, WriteError)`. An effect whose
 answer nothing needs is written on a line of its own, which binds it to `_`;
@@ -475,8 +500,9 @@ again, `x is A is B`, or compared, `x is 3 == y`, is refused. A test binds
 names of its own: `r is Ok(limit)`, with `limit` a name already, would bind
 a new one where a comparison was meant, so it is refused, offering
 `Ok(==limit)`. `?` on the right of `&` or `|` is refused, since that side may
-not be worked out. Not yet: a test of a value holding a resource, and a
-type taken apart by its own name, as `U8(…)`.
+not be worked out. A test of a value holding a file takes it apart as the
+host's resources say. Not yet: a type taken apart by its own name, as
+`U8(…)`.
 
 ## Wholes and comparisons in patterns
 
@@ -522,8 +548,7 @@ An arm takes every pattern a clause's parameter does, alternatives
 unparenthesized, `Celsius(c) | Kelvin(c) -> c`, and its value may be a
 block. As an `if`'s branches, arms may leave by `?` or an `else` line.
 Clauses suit a body that is the dispatch;
-arms suit a value worked out partway through one. Not yet: arms of a value
-holding a resource.
+arms suit a value worked out partway through one.
 
 ## Leaving lines
 
@@ -576,7 +601,7 @@ summed(xs) -> (
 
 A loop is a function of what it carries calling itself for the next
 round, so a round costs a jump. A lambda inside a loop is no part of its
-round. Not yet: a loop carrying or walking a value holding a resource.
+round.
 
 ## Or-patterns
 

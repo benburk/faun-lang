@@ -153,7 +153,7 @@ fn lower_resolved(
     second_class::check(&program, &checked.resolved.package).map_err(located)?;
     let program = callbacks::lower(program).map_err(located)?;
     let routines = target.routines();
-    linearity::check(&program, &routines, &checked.resolved)?;
+    linearity::check(&program, &routines, &checked.resolved, &checked.prelude)?;
     let program = pattern_compile::compile(program, &checked.prelude, &checked.resolved.symbols)
         .map_err(located)?;
     barb_lower::lower_package_to_barb(&checked, program, &routines)

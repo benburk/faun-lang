@@ -519,7 +519,12 @@ fn held(
     if rest.is_empty() && ends == Ends::Answer {
         return Err(error(span, not_last(&line)));
     }
-    let rest = Box::new(block(rest, source, ends)?);
+    let empty = rest.is_empty();
+    let mut rest = Box::new(block(rest, source, ends)?);
+    if empty {
+        // A round going on after its last line, which is this one.
+        rest.result.span = span;
+    }
     let span = span.through(rest.result.span);
     let kind = match line {
         Statement::Else(_, condition, otherwise) => ExprKind::Else {

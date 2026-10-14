@@ -1,0 +1,47 @@
+# Files opened in one loop and closed in another, as Python would write it.
+# A name the loop carries holds the files opened so far, from round to
+# round and out of the loop; a `for` walking them uses each up. A test
+# takes apart what opening answered, and arms say what reading met. Every
+# file opened is closed once, which is checked, not trusted.
+
+import std.host {Host, File, Files, Mode.*}
+
+main! : Host -> []
+main!(host) -> (
+  names = ["a.txt", "../outside.txt", "b.txt"]
+  written = batch!(host.files, names)
+  for name in names do (
+    text = read_back!(host.files, name)
+    said = host.stdout.write_all!(text)
+  )
+  host.exit!(U8.of_nat(written))
+)
+
+# Each name that opens, written its own name and closed: how many were.
+batch! : (Files, List(Str)) -> Nat
+batch!(files, names) -> (
+  opened = []
+  for name in names do (
+    files.open!(name, Overwrite) is Ok(file) else continue
+    opened = [(name, file), *opened]
+  )
+  written = 0
+  for (name, file) in opened do (
+    wrote = file.write_all!("${name}\n".to_utf8())
+    closed = file.close!()
+    wrote is Ok(_) & closed is Ok(_) else continue
+    written = written + 1
+  )
+  written
+)
+
+# What `name` holds, or nothing where it cannot be opened or read.
+read_back! : (Files, Str) -> List(U8)
+read_back!(files, name) -> files.open!(name, Read) is (
+  Ok(file) -> (
+    read = file.read_to_end!()
+    closed = file.close!()
+    if read is Ok(bytes) then bytes else []
+  )
+  Err(_) -> []
+)

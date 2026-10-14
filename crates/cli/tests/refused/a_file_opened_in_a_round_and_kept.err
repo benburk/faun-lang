@@ -1,0 +1,7 @@
+error: the `File` from `Files.open!` is neither used up nor carried to the next round
+  --> a_file_opened_in_a_round_and_kept.fn:12:14
+   |
+12 |     opened = files.open!(name, Overwrite)
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this `File` is made here
+   |
+   = help: use it up within the round, or hand it on in a name the loop carries

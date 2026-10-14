@@ -306,3 +306,15 @@ roc-lang/roc) writes `var $x`, `for` and `while`, and confines a `var` to
 its declaring function; this draft first took the sigil and that rule.
 On 2026-10-07 the sigil and write-back gave way to plain assignment, which
 the conditions draft makes the rule for every name.
+
+## Errata
+
+**2026-10-14.** A loop carrying or walking a value holding a resource,
+refused until now, is built. A round must end as it began, at each
+`continue` and where it runs off its end: what was held before the loop as
+it was, and what the round opened used up or handed on in a name the loop
+carries. That name holds what it carries after the loop, which must be
+used up there. A `for` walking a list of files takes the list, each round
+using up its element, and a `break` from it, which would leave the rest,
+is refused. The ways out of a loop, its head failing and each `break`,
+must agree on what they used up.

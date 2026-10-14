@@ -21,6 +21,13 @@
 //! calling each other are worked out together, from knowing nothing of
 //! each, until nothing more is learned.
 //!
+//! A test is two ways on, where it holds and where it fails. Where a
+//! pattern names a part holding a resource, the value is taken apart there,
+//! as a binding takes it; where it fails, the value is as it was, holding
+//! none where the test shows it cannot. A loop's round must end as it began,
+//! what it made used up or handed to the next round in a name the loop
+//! carries, and every way out of the loop must agree.
+//!
 //! This reads the first-order program, where every function value has
 //! become the definition it was handed to and every type is known, so a
 //! resource is never hidden behind a type variable or a callback.
@@ -30,6 +37,7 @@ use std::collections::{HashMap, HashSet};
 
 use faun_core::platform::Routines;
 
+use crate::blessed::PreludeIds;
 use crate::diagnostic::Diagnostic;
 use crate::first_order::{self as d, ExprKind};
 use crate::hir::LocalId;
@@ -46,8 +54,9 @@ pub(crate) fn check(
     program: &d::Program,
     routines: &Routines,
     resolved: &ResolvedProgram<crate::typed::Program>,
+    prelude: &PreludeIds,
 ) -> Result<(), Diagnostic> {
-    let facts = Facts::of(program, routines, resolved);
+    let facts = Facts::of(program, routines, resolved, prelude);
     if facts.resources.is_empty() {
         return Ok(());
     }
@@ -166,6 +175,9 @@ struct Facts<'a> {
     /// Which parameter of each routine a target answers for is used up.
     uses_up: Vec<Option<usize>>,
     carries: RefCell<HashMap<Type, bool>>,
+    /// `Bool`'s `&` and `|`, along which a test's names are seen.
+    and: Symbol,
+    or: Symbol,
 }
 
 impl<'a> Facts<'a> {
@@ -173,6 +185,7 @@ impl<'a> Facts<'a> {
         program: &'a d::Program,
         routines: &Routines,
         resolved: &'a ResolvedProgram<crate::typed::Program>,
+        prelude: &PreludeIds,
     ) -> Self {
         let uses_up = program
             .functions
@@ -207,6 +220,8 @@ impl<'a> Facts<'a> {
             constructors,
             uses_up,
             carries: RefCell::default(),
+            and: prelude.bool_and,
+            or: prelude.bool_or,
         }
     }
 
@@ -270,18 +285,7 @@ impl<'a> Facts<'a> {
         let mut contracts = vec![Contract::Unknown; parameters.len()];
         let mut paths: Vec<Path> = Vec::new();
         for clause in clauses {
-            let mut walk = Walk {
-                facts: self,
-                known,
-                function: at,
-                held: Vec::new(),
-                locals: HashMap::new(),
-                paths: Vec::new(),
-                refused: Vec::new(),
-                guarded: false,
-                answering: Some(place(&clause.body.result)),
-                returned: false,
-            };
+            let mut walk = Walk::new(self, known, at, place(&clause.body.result));
             walk.clause(clause, parameters);
             paths.append(&mut walk.paths);
             if let Some(found) = found.as_deref_mut() {
@@ -422,6 +426,24 @@ impl<'a> Facts<'a> {
         }
     }
 
+    /// Every constructor of `ty`, where it is taken apart by constructors.
+    fn constructors_of(&self, ty: &Type) -> Option<Vec<Symbol>> {
+        match ty {
+            Type::Variants(tags) => Some(tags.iter().map(|(tag, _)| *tag).collect()),
+            Type::Named(name, _) if !self.resources.contains(name) => {
+                let data = self.program.data.get(name)?;
+                Some(
+                    data.constructors
+                        .iter()
+                        .map(|each| each.name)
+                        .chain(data.wrapper.as_ref().map(|wrapper| wrapper.constructor))
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
+    }
+
     /// The fields of `constructor`, of type `ty`, at that type's arguments.
     fn fields(&self, constructor: Symbol, ty: &Type) -> Option<Vec<Type>> {
         match ty {
@@ -523,8 +545,17 @@ enum Origin {
 struct Made {
     /// The resource's type, the first one the value holds.
     resource: Option<Symbol>,
-    /// The function whose answer holds it, or nothing where it was built.
-    by: Option<Symbol>,
+    by: Maker,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Maker {
+    /// Built by a constructor.
+    Built,
+    /// Answered by this function.
+    Call(Symbol),
+    /// Made in a loop's round and carried to the next, or out of it.
+    Carried,
 }
 
 /// How one way a function goes on ends.
@@ -550,6 +581,87 @@ enum State {
     Gone(Place),
     /// Handed to a function nothing is known of yet.
     Unknown,
+    /// Holding none: a test showed it is a value that holds no resource, or
+    /// it is not there on this way, as what a test bound where it failed.
+    Empty,
+}
+
+impl State {
+    /// As a round leaving it would find it next: a value shown to hold
+    /// nothing is the value it was.
+    const fn settled(self) -> Self {
+        match self {
+            Self::Empty => Self::Held,
+            other => other,
+        }
+    }
+}
+
+/// Where a condition holds and where it fails: the state of everything
+/// held once it is worked out, each way.
+struct Outcome {
+    holds: Vec<State>,
+    fails: Vec<State>,
+    /// What its tests took apart where they held.
+    apart: Apart,
+}
+
+impl Outcome {
+    /// A condition holding no test, alike either way.
+    fn alike(states: Vec<State>) -> Self {
+        Self {
+            holds: states.clone(),
+            fails: states,
+            apart: Apart::default(),
+        }
+    }
+}
+
+/// What tests took apart, where they held.
+#[derive(Default)]
+struct Apart {
+    /// Each value taken apart, as it was before.
+    took: Vec<(usize, State)>,
+    /// What holds its parts.
+    parts: Vec<usize>,
+    /// The names bound to them, and what each is.
+    bound: Vec<(LocalId, usize)>,
+}
+
+impl Apart {
+    /// Both tests' parts.
+    fn and(mut self, other: Self) -> Self {
+        self.took.extend(other.took);
+        self.parts.extend(other.parts);
+        self.bound.extend(other.bound);
+        self
+    }
+
+    /// `states`, as though the tests had not held: what they took apart
+    /// whole again, and their parts held by none.
+    fn undone(&self, mut states: Vec<State>) -> Vec<State> {
+        for (whole, state) in &self.took {
+            states[*whole] = *state;
+        }
+        for part in &self.parts {
+            states[*part] = State::Empty;
+        }
+        states
+    }
+}
+
+/// The loop being walked: how its round begins, and every way the round
+/// ends, by `continue`, or the loop, by `break`.
+struct Frame {
+    /// What was held when the round begins.
+    start: Vec<State>,
+    /// How many things were held before the loop; the rest are its own.
+    outer: usize,
+    /// What holds the part of a list a `for` has not walked yet.
+    walking: Option<usize>,
+    continues: Vec<(Place, Vec<State>)>,
+    /// Each `break`, with what each name the loop carries is handed.
+    breaks: Vec<(Vec<State>, Vec<State>)>,
 }
 
 /// One way a function goes on, to its answer or out by `?`: which
@@ -597,25 +709,59 @@ struct Walk<'f, 'a> {
     guarded: bool,
     /// Where the clause walked answers, for what its head is refused.
     answering: Option<Place>,
-    /// Whether the branch walked last ended in a `return`, so that nothing
-    /// after it is held as it left things.
-    returned: bool,
+    /// Whether the branch walked last left by `return`, `continue` or
+    /// `break`, so that nothing after it is held as it left things.
+    left: bool,
+    /// The loops being walked, the innermost last.
+    loops: Vec<Frame>,
+    /// Where a test took apart what it tested, which it holds no longer.
+    taken_apart: HashSet<Place>,
 }
 
-impl Walk<'_, '_> {
+impl<'f, 'a> Walk<'f, 'a> {
+    /// Ready to walk a clause of `function` answering at `answering`,
+    /// holding nothing yet.
+    fn new(
+        facts: &'f Facts<'a>,
+        known: &'f [Vec<Contract>],
+        function: usize,
+        answering: Place,
+    ) -> Self {
+        Self {
+            facts,
+            known,
+            function,
+            held: Vec::new(),
+            locals: HashMap::new(),
+            paths: Vec::new(),
+            refused: Vec::new(),
+            guarded: false,
+            answering: Some(answering),
+            left: false,
+            loops: Vec::new(),
+            taken_apart: HashSet::new(),
+        }
+    }
+
     /// A clause: what its patterns bind of the parameters, what its guard
-    /// looks at, and its body.
+    /// looks at or its tests take apart, and its body.
     fn clause(&mut self, clause: &d::Clause, parameters: &[Type]) {
         for (parameter, (pattern, ty)) in clause.patterns.iter().zip(parameters).enumerate() {
             self.bind(pattern, ty, &[Origin::Parameter(parameter)]);
         }
         if let Some(guard) = &clause.guard {
-            self.guarded = true;
-            let answer = self.value(guard);
-            self.hold(&answer);
-            self.guarded = false;
+            self.guarded(guard);
         }
         self.body(&clause.body);
+    }
+
+    /// A guard, which may look and take apart and nothing more, worked out:
+    /// what follows it goes on where it holds.
+    fn guarded(&mut self, guard: &d::Expr) {
+        self.guarded = true;
+        let outcome = self.condition(guard);
+        self.guarded = false;
+        self.set(&outcome.holds);
     }
 
     fn body(&mut self, body: &d::Body) {
@@ -726,7 +872,7 @@ impl Walk<'_, '_> {
                 if self.is_resource(&expr.ty) {
                     let made = Made {
                         resource: self.facts.resource_in(&expr.ty),
-                        by: None,
+                        by: Maker::Built,
                     };
                     origins.push(Origin::Made(place(expr), made));
                 }
@@ -747,7 +893,7 @@ impl Walk<'_, '_> {
             ExprKind::Return(answered) => {
                 let origins = self.value(answered);
                 self.end(&origins, (place(expr), Leaving::Answering));
-                self.returned = true;
+                self.left = true;
                 Vec::new()
             }
             ExprKind::Try(tried) => {
@@ -756,43 +902,28 @@ impl Walk<'_, '_> {
                 origins
             }
             ExprKind::If(condition, yes, no) => self.branches(expr, condition, yes, no),
-            ExprKind::Is(value, _) => {
-                self.tested(value);
-                Vec::new()
-            }
-            ExprKind::Match(value, arms) => {
-                self.tested(value);
-                self.arms(expr, arms)
-            }
-            // A block's bindings hold what they bind, as a body's do, and
-            // its answer is what it is worth.
-            ExprKind::Block(block) => self.block(block),
-            ExprKind::Loop(looped) => self.looped(looped),
-            ExprKind::Continue(values) | ExprKind::Break(values) => {
-                for value in values {
-                    self.lend(value);
+            // A test whose names nothing sees only looks.
+            ExprKind::Is(value, rows) => {
+                self.subject(value);
+                for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                    self.lend(guard);
                 }
                 Vec::new()
             }
+            ExprKind::Match(value, arms) => self.arms(expr, value, arms),
+            // A block's bindings hold what they bind, as a body's do, and
+            // its answer is what it is worth.
+            ExprKind::Block(block) => self.block(block),
+            ExprKind::Loop(looped) => self.looped(expr, looped),
+            ExprKind::Continue(values) => {
+                self.continued(expr, values);
+                Vec::new()
+            }
+            ExprKind::Break(values) => {
+                self.broke(expr, values);
+                Vec::new()
+            }
         }
-    }
-
-    /// What a loop carries or walks, looked at: one holding a resource is
-    /// not yet worked out, so it is refused.
-    fn carried_in(&mut self, value: &d::Expr) {
-        if self.facts.carries(&value.ty) {
-            let resource = self
-                .facts
-                .called(self.facts.resource_in(&value.ty), "resource");
-            self.refused.push(Refusal {
-                at: Some(place(value)),
-                message: format!("a loop over a value holding a {resource} is not yet worked out"),
-                label: "carried or walked here".to_owned(),
-                also: None,
-                help: Some("take it a step at a time in a definition of its own".to_owned()),
-            });
-        }
-        self.lend(value);
     }
 
     fn block(&mut self, block: &d::Body) -> Vec<Origin> {
@@ -803,71 +934,552 @@ impl Walk<'_, '_> {
         self.value(&block.result)
     }
 
-    /// A loop, which may run its round any number of times. Carrying or
-    /// walking a value holding a resource is not yet worked out, so it is
-    /// refused; and a round may neither use up what was held before the
-    /// loop nor leave held what it made.
-    fn looped(&mut self, looped: &d::Loop) -> Vec<Origin> {
-        let head = match &looped.head {
-            d::LoopHead::While(condition) => condition,
-            d::LoopHead::For(_, list) => list,
-        };
-        for value in looped
+    /// A loop, whose round may run any number of times. What it carries is
+    /// taken going in and held within a round, and what it walks is taken
+    /// and held until walked. Each round must end as it began: what was held
+    /// before the loop as it was, and what the round made used up or handed
+    /// to the next. The lines after it go on from every way out, which must
+    /// agree.
+    fn looped(&mut self, expr: &d::Expr, looped: &d::Loop) -> Vec<Origin> {
+        let outer = self.held.len();
+        let within: Vec<Option<usize>> = looped
             .carried
             .iter()
-            .map(|(initial, _, _)| initial)
-            .chain([head])
-        {
-            self.carried_in(value);
-        }
-        let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
-        let outer = std::mem::take(&mut self.returned);
+            .map(|(initial, local, _)| self.carry(initial, *local))
+            .collect();
+        let walking = match &looped.head {
+            d::LoopHead::For(_, list) => {
+                let origins = self.value(list);
+                self.held_by_none(origins)
+            }
+            d::LoopHead::While(_) => None,
+        };
+        self.loops.push(Frame {
+            start: self.states(),
+            outer,
+            walking,
+            continues: Vec::new(),
+            breaks: Vec::new(),
+        });
+        let ended = self.round_begun(&looped.head, walking);
+        let outer_left = std::mem::take(&mut self.left);
         self.block(&looped.body);
-        self.returned = outer;
-        let changed = before
-            .iter()
-            .zip(&self.held)
-            .any(|(was, held)| *was != held.state);
-        let made_held = self.held[before.len()..]
-            .iter()
-            .any(|held| held.state == State::Held);
-        if changed || made_held {
-            self.refused.push(Refusal {
-                at: Some(place(&looped.body.result)),
-                message: "a loop's round uses up a resource held before it, or keeps one it made"
-                    .to_owned(),
-                label: "where the round ends".to_owned(),
-                also: None,
-                help: Some("use each resource up within one round, or take the work a step at a time in a definition of its own".to_owned()),
-            });
+        self.left = outer_left;
+        let frame = self.loops.pop().expect("the loop walked is the innermost");
+        for (at, states) in &frame.continues {
+            self.round_ended(&frame, *at, states);
         }
-        self.restored(&before);
+        self.after_loop(expr, looped, &within, ended, frame.breaks);
         self.block(&looped.rest)
     }
 
-    /// A test, which looks at its value. One holding a resource would leave
-    /// it held in some way the branches must agree on, which is not worked
-    /// out yet, so it is refused.
-    fn tested(&mut self, value: &d::Expr) {
-        if self.facts.carries(&value.ty) {
-            let resource = self
-                .facts
-                .called(self.facts.resource_in(&value.ty), "resource");
-            self.refused.push(Refusal {
-                at: Some(place(value)),
-                message: format!("a test of a value holding a {resource} is not yet worked out"),
-                label: "tested here".to_owned(),
-                also: None,
-                help: Some("take it apart with a definition's clauses".to_owned()),
-            });
+    /// A round begun by its head: a `while`'s condition holding, or a
+    /// `for`'s next element bound. Answers how the loop ends, where the
+    /// condition fails or nothing is left to walk.
+    fn round_begun(&mut self, head: &d::LoopHead, walking: Option<usize>) -> Vec<State> {
+        match head {
+            d::LoopHead::While(condition) => {
+                let outcome = self.condition(condition);
+                self.set(&outcome.holds);
+                outcome.fails
+            }
+            d::LoopHead::For(pattern, list) => {
+                let mut ended = self.states();
+                let mut origins = Vec::new();
+                if let Some(walking) = walking {
+                    ended[walking] = State::Empty;
+                    origins.clone_from(&self.held[walking].origins);
+                }
+                if let Type::Named(_, arguments) = &list.ty
+                    && let Some(element) = arguments.first()
+                {
+                    self.bind(pattern, element, &origins);
+                }
+                ended
+            }
         }
-        self.lend(value);
     }
 
-    /// An `if`: each branch walked from what was held before it, and what
-    /// either answers is what the `if` is worth. What one branch uses up
-    /// the other must too, since after the `if` it is gone or held, not
-    /// both.
+    /// Out of a loop, by its head as `ended` says or by each of `breaks`:
+    /// what it carried held after it, by the names it binds there, and
+    /// every way out met.
+    fn after_loop(
+        &mut self,
+        expr: &d::Expr,
+        looped: &d::Loop,
+        within: &[Option<usize>],
+        ended: Vec<State>,
+        breaks: Vec<(Vec<State>, Vec<State>)>,
+    ) {
+        let after: Vec<Option<usize>> = within
+            .iter()
+            .zip(&looped.carried)
+            .map(|(within, (_, _, after))| {
+                let origins = self.held[(*within)?].origins.clone();
+                let held = self.held_by_none(origins)?;
+                self.locals.insert(*after, held);
+                Some(held)
+            })
+            .collect();
+        let mut states = self.extended(ended);
+        for (within, after) in within.iter().zip(&after) {
+            if let (Some(within), Some(after)) = (within, after) {
+                states[*after] = states[*within];
+                states[*within] = State::Empty;
+            }
+        }
+        self.set(&states);
+        for (states, handed) in breaks {
+            let mut states = self.extended(states);
+            for (after, state) in after.iter().zip(handed) {
+                if let Some(after) = after {
+                    states[*after] = state;
+                }
+            }
+            self.agreed(expr, states);
+        }
+    }
+
+    /// What a loop carries in `local`, taken from `initial`: held within
+    /// each round, with whatever a round made and handed on.
+    fn carry(&mut self, initial: &d::Expr, local: LocalId) -> Option<usize> {
+        let mut origins = self.value(initial);
+        if !self.facts.carries(&initial.ty) {
+            return None;
+        }
+        let made = Made {
+            resource: self.facts.resource_in(&initial.ty),
+            by: Maker::Carried,
+        };
+        origins.push(Origin::Made(place(initial), made));
+        let held = self.held_by_none(origins)?;
+        self.locals.insert(local, held);
+        Some(held)
+    }
+
+    /// `origins`, held by something not named, if there are any.
+    fn held_by_none(&mut self, origins: Vec<Origin>) -> Option<usize> {
+        if origins.is_empty() {
+            return None;
+        }
+        self.held.push(Held {
+            origins,
+            state: State::Held,
+        });
+        Some(self.held.len() - 1)
+    }
+
+    /// `continue`: what the loop carries handed to the next round, which
+    /// must begin as this one did.
+    fn continued(&mut self, expr: &d::Expr, values: &[d::Expr]) {
+        for value in values {
+            let origins = self.value(value);
+            if !is_local(value) {
+                self.hold(&origins);
+            }
+        }
+        let states = self.states();
+        if let Some(frame) = self.loops.last_mut() {
+            frame.continues.push((place(expr), states));
+        }
+        self.left = true;
+    }
+
+    /// `break`: what the loop carries handed to the lines after it. Any
+    /// part of a list a `for` has not walked yet would be left held.
+    fn broke(&mut self, expr: &d::Expr, values: &[d::Expr]) {
+        let mut handed = Vec::new();
+        for value in values {
+            let state = if is_local(value) {
+                let state = self
+                    .local(value)
+                    .map_or(State::Empty, |held| self.held[held].state);
+                self.value(value);
+                state
+            } else if self.value(value).is_empty() {
+                State::Empty
+            } else {
+                State::Held
+            };
+            handed.push(state);
+        }
+        let walking = self.loops.last().and_then(|frame| frame.walking);
+        if let Some(walking) = walking
+            && self.held[walking].state == State::Held
+        {
+            let resource = self.facts.called(self.resource_of(walking), "resource");
+            self.refused.push(Refusal {
+                at: Some(place(expr)),
+                message: format!(
+                    "a `break` leaves held the {resource}s its `for` has not walked yet"
+                ),
+                label: "leaves here".to_owned(),
+                also: None,
+                help: Some("walk every element, using each up".to_owned()),
+            });
+            self.held[walking].state = State::Empty;
+        }
+        let states = self.states();
+        if let Some(frame) = self.loops.last_mut() {
+            frame.breaks.push((states, handed));
+        }
+        self.left = true;
+    }
+
+    /// A round ending at `at` as `states` say: what was held before the
+    /// loop must be as the round found it, and what the round made, and
+    /// what the loop carried in, used up or handed on.
+    fn round_ended(&mut self, frame: &Frame, at: Place, states: &[State]) {
+        for (held, state) in states.iter().enumerate() {
+            if Some(held) == frame.walking {
+                continue;
+            }
+            if held < frame.outer {
+                if frame.start[held].settled() != state.settled() {
+                    let refusal = self.round_used_up(held, *state, at);
+                    self.refused.push(refusal);
+                }
+            } else if *state == State::Held {
+                let refusal = self.round_kept(held, at);
+                self.refused.push(refusal);
+            }
+        }
+    }
+
+    /// What was held before a loop, used up by a round that goes on.
+    fn round_used_up(&self, held: usize, state: State, at: Place) -> Refusal {
+        let resource = self.facts.called(self.resource_of(held), "resource");
+        let gone = match state {
+            State::Gone(gone) => Some(gone),
+            _ => None,
+        };
+        Refusal {
+            at: gone.or(Some(at)),
+            message: format!("a loop's round uses up a {resource} held before the loop"),
+            label: "used up here".to_owned(),
+            also: gone.map(|_| (at, "the next round would find it used up".to_owned())),
+            help: Some("use it up after the loop, or `break` once it is used up".to_owned()),
+        }
+    }
+
+    /// What a round made, or the loop carried in, still held where the
+    /// round goes on.
+    fn round_kept(&self, kept: usize, at: Place) -> Refusal {
+        let made = self.held[kept]
+            .origins
+            .iter()
+            .find_map(|origin| match origin {
+                Origin::Made(place, made) => Some((*place, *made)),
+                Origin::Parameter(_) => None,
+            });
+        let help =
+            Some("use it up within the round, or hand it on in a name the loop carries".to_owned());
+        let Some((made_at, made)) = made else {
+            let resource = self.facts.called(self.resource_of(kept), "resource");
+            return Refusal {
+                at: Some(at),
+                message: format!(
+                    "a {resource} this round holds is neither used up nor carried to the next"
+                ),
+                label: "still held where the round goes on".to_owned(),
+                also: None,
+                help,
+            };
+        };
+        let resource = self.facts.called(made.resource, "resource");
+        let message = match made.by {
+            Maker::Carried => format!(
+                "the {resource} this loop carried into the round is neither used up nor handed to the next"
+            ),
+            Maker::Built | Maker::Call(_) => format!(
+                "{} is neither used up nor carried to the next round",
+                self.described(made)
+            ),
+        };
+        Refusal {
+            at: Some(made_at),
+            message,
+            label: made_label(made, &resource),
+            also: (made_at != at).then(|| (at, "still held where the round goes on".to_owned())),
+            help,
+        }
+    }
+
+    /// The resource type what is held at `held` holds, as its origins say.
+    fn resource_of(&self, held: usize) -> Option<Symbol> {
+        self.held[held]
+            .origins
+            .iter()
+            .find_map(|origin| match origin {
+                Origin::Made(_, made) => made.resource,
+                Origin::Parameter(parameter) => self.facts.program.functions[self.function]
+                    .key
+                    .signature
+                    .parameters
+                    .get(*parameter)
+                    .and_then(|ty| self.facts.resource_in(ty)),
+            })
+    }
+
+    /// A condition worked out: what is held where it holds, which a test
+    /// in it holding takes apart into the names it binds, and where it
+    /// fails. Along `&` and `|` each side is a condition, the right worked
+    /// out only where the left has not decided.
+    fn condition(&mut self, condition: &d::Expr) -> Outcome {
+        match &condition.kind {
+            ExprKind::Is(value, rows) => self.test(value, rows),
+            ExprKind::DirectCall(callee, sides)
+                if callee.name == self.facts.and
+                    && let [left, right] = &sides[..] =>
+            {
+                self.both(condition, left, right)
+            }
+            ExprKind::DirectCall(callee, sides)
+                if callee.name == self.facts.or
+                    && let [left, right] = &sides[..] =>
+            {
+                self.either(condition, left, right)
+            }
+            _ => {
+                self.lend(condition);
+                Outcome::alike(self.states())
+            }
+        }
+    }
+
+    /// `left & right`: the right worked out where the left holds.
+    fn both(&mut self, condition: &d::Expr, left: &d::Expr, right: &d::Expr) -> Outcome {
+        let left = self.condition(left);
+        self.set(&left.holds);
+        let right = self.condition(right);
+        // Where the right fails, the left's tests bound nothing anyone
+        // sees: what they took apart is whole again, since a condition's
+        // right side may use nothing up.
+        let through = left.apart.undone(right.fails);
+        let fails = self.met(condition, self.extended(left.fails), &through);
+        Outcome {
+            holds: right.holds,
+            fails,
+            apart: left.apart.and(right.apart),
+        }
+    }
+
+    /// `left | right`: the right worked out where the left fails.
+    fn either(&mut self, condition: &d::Expr, left: &d::Expr, right: &d::Expr) -> Outcome {
+        let left = self.condition(left);
+        self.set(&left.fails);
+        let right = self.condition(right);
+        let mut holds = self.met(condition, self.extended(left.holds), &right.holds);
+        // A name both sides bind is one name past them, holding what
+        // either side's test bound to it.
+        for (local, from_left) in &left.apart.bound {
+            if let Some((_, from_right)) = right.apart.bound.iter().find(|(each, _)| each == local)
+            {
+                let origins = self.held[*from_left].origins.clone();
+                self.held[*from_right].origins.extend(origins);
+                holds[*from_left] = State::Empty;
+            }
+        }
+        Outcome {
+            holds,
+            fails: right.fails,
+            apart: left.apart.and(right.apart),
+        }
+    }
+
+    /// A test, `value is pattern`, its rows each a choice of the pattern's
+    /// alternatives. Where it holds, the value is taken apart if the
+    /// pattern names a part holding a resource; where it fails, it is as
+    /// it was. Either way, a value the test shows to hold no resource holds
+    /// none.
+    fn test(&mut self, value: &d::Expr, rows: &[(Pattern, Option<d::Expr>)]) -> Outcome {
+        let whole = self.subject(value);
+        for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+            self.lend(guard);
+        }
+        let mut fails = self.states();
+        let Some(whole) = whole else {
+            return Outcome::alike(fails);
+        };
+        if fails[whole] == State::Held && !self.remainder_carries(rows, &value.ty) {
+            fails[whole] = State::Empty;
+        }
+        let patterns: Vec<&Pattern> = rows.iter().map(|(pattern, _)| pattern).collect();
+        let apart = self.matched(whole, value, &patterns);
+        Outcome {
+            holds: self.states(),
+            fails: self.extended(fails),
+            apart,
+        }
+    }
+
+    /// What a test or arms look at, held: the held thing a local names, or
+    /// what the value works out, held by nothing named.
+    fn subject(&mut self, value: &d::Expr) -> Option<usize> {
+        if !self.facts.carries(&value.ty) {
+            self.lend(value);
+            return None;
+        }
+        if is_local(value) {
+            self.look(value);
+            return self.local(value);
+        }
+        let origins = self.value(value);
+        self.held_by_none(origins)
+    }
+
+    /// The value held at `whole`, matched by one of `patterns`: taken
+    /// apart, its parts held by the names one binds, where one names a part
+    /// holding a resource, and otherwise left whole, holding none where no
+    /// pattern matches a value holding one.
+    fn matched(&mut self, whole: usize, value: &d::Expr, patterns: &[&Pattern]) -> Apart {
+        let ty = &value.ty;
+        let start = self.held.len();
+        let mut took = Vec::new();
+        if self.held[whole].state == State::Held {
+            if let Some(pattern) = patterns.iter().find(|p| self.names_resource(p, ty)) {
+                took.push((whole, State::Held));
+                self.held[whole].state = State::Gone(place(value));
+                self.taken_apart.insert(place(value));
+                let origins = self.held[whole].origins.clone();
+                self.bind(pattern, ty, &origins);
+            } else if !patterns.iter().any(|p| self.matched_carries(p, ty)) {
+                self.held[whole].state = State::Empty;
+            }
+        }
+        let bound = self
+            .locals
+            .iter()
+            .filter(|(_, held)| **held >= start)
+            .map(|(local, held)| (*local, *held))
+            .collect();
+        Apart {
+            took,
+            parts: (start..self.held.len()).collect(),
+            bound,
+        }
+    }
+
+    /// Whether `pattern` binds a name to a part of a value of `ty` that
+    /// holds a resource.
+    fn names_resource(&self, pattern: &Pattern, ty: &Type) -> bool {
+        match pattern {
+            Pattern::Bind(_) => self.facts.carries(ty),
+            Pattern::As(_, pattern) => self.facts.carries(ty) || self.names_resource(pattern, ty),
+            Pattern::Constructor(..) if self.is_resource(ty) => false,
+            Pattern::Record(patterns) => {
+                let Type::Record(fields) = ty else {
+                    return false;
+                };
+                patterns.iter().any(|(name, pattern)| {
+                    fields
+                        .iter()
+                        .find(|(each, _)| each == name)
+                        .is_some_and(|(_, field)| self.names_resource(pattern, field))
+                })
+            }
+            _ => self
+                .facts
+                .parts(pattern, ty)
+                .iter()
+                .any(|(pattern, part)| self.names_resource(pattern, part)),
+        }
+    }
+
+    /// Whether a value of `ty` that `pattern` matches may hold a resource.
+    fn matched_carries(&self, pattern: &Pattern, ty: &Type) -> bool {
+        match pattern {
+            Pattern::As(_, pattern) => self.matched_carries(pattern, ty),
+            Pattern::Constructor(constructor, patterns) if !self.is_resource(ty) => {
+                self.facts.fields(*constructor, ty).map_or_else(
+                    || self.facts.carries(ty),
+                    |fields| {
+                        patterns
+                            .iter()
+                            .zip(&fields)
+                            .any(|(pattern, field)| self.matched_carries(pattern, field))
+                    },
+                )
+            }
+            Pattern::Product(patterns) => match ty {
+                Type::Tuple(members) => patterns
+                    .iter()
+                    .zip(members)
+                    .any(|(pattern, member)| self.matched_carries(pattern, member)),
+                _ => self.facts.carries(ty),
+            },
+            _ => self.facts.carries(ty),
+        }
+    }
+
+    /// Whether a value of `ty` that no row matches may hold a resource: a
+    /// row taking apart a constructor leaves the others, and that one where
+    /// its parts are tested; a row taking apart a list's first element and
+    /// the rest leaves an empty list.
+    fn remainder_carries(&self, rows: &[(Pattern, Option<d::Expr>)], ty: &Type) -> bool {
+        if !self.facts.carries(ty) {
+            return false;
+        }
+        let whole =
+            |(pattern, guard): &(Pattern, Option<d::Expr>)| guard.is_none() && irrefutable(pattern);
+        if rows.iter().any(whole) {
+            return false;
+        }
+        let emptied = rows.iter().any(|(pattern, guard)| {
+            guard.is_none()
+                && matches!(pattern, Pattern::List(elements, Some(rest))
+                    if elements.len() == 1 && irrefutable(&elements[0]) && irrefutable(rest))
+        });
+        if emptied {
+            return false;
+        }
+        let Some(constructors) = self.facts.constructors_of(ty) else {
+            return true;
+        };
+        constructors.iter().any(|constructor| {
+            let covered = rows.iter().any(|(pattern, guard)| {
+                guard.is_none()
+                    && matches!(unnamed(pattern), Pattern::Constructor(each, patterns)
+                        if each == constructor && patterns.iter().all(irrefutable))
+            });
+            !covered
+                && self
+                    .facts
+                    .fields(*constructor, ty)
+                    .is_none_or(|fields| fields.iter().any(|field| self.facts.carries(field)))
+        })
+    }
+
+    /// The state of everything held.
+    fn states(&self) -> Vec<State> {
+        self.held.iter().map(|held| held.state).collect()
+    }
+
+    /// Everything held as `states` says, what came after them as it is.
+    fn set(&mut self, states: &[State]) {
+        for (held, state) in self.held.iter_mut().zip(states) {
+            held.state = *state;
+        }
+    }
+
+    /// `states`, with what was held since not there.
+    fn extended(&self, mut states: Vec<State>) -> Vec<State> {
+        states.resize(self.held.len(), State::Empty);
+        states
+    }
+
+    /// Two ways a condition goes on, met: what one used up the other must
+    /// have too.
+    fn met(&mut self, condition: &d::Expr, one: Vec<State>, other: &[State]) -> Vec<State> {
+        self.set(other);
+        self.agreed(condition, one);
+        self.states()
+    }
+
+    /// An `if`: its condition worked out, its `then` walked from where it
+    /// holds and its `else` from where it fails, and what either answers is
+    /// what the `if` is worth. What one branch uses up the other must too,
+    /// since after the `if` it is gone or held, not both.
     fn branches(
         &mut self,
         expr: &d::Expr,
@@ -875,61 +1487,76 @@ impl Walk<'_, '_> {
         yes: &d::Expr,
         no: &d::Expr,
     ) -> Vec<Origin> {
-        self.lend(condition);
-        let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
-        let outer = std::mem::take(&mut self.returned);
+        let outcome = self.condition(condition);
+        let outer = std::mem::take(&mut self.left);
+        self.set(&outcome.holds);
         let mut answered = self.value(yes);
-        let yes_returned = std::mem::take(&mut self.returned);
-        let taken = self.restored(&before);
+        let yes_left = std::mem::take(&mut self.left);
+        let taken = self.restored(&outcome.fails);
         answered.extend(self.value(no));
-        let no_returned = std::mem::take(&mut self.returned);
-        self.joined(expr, vec![(taken, yes_returned)], no_returned);
-        self.returned = outer || (yes_returned && no_returned);
+        let no_left = std::mem::take(&mut self.left);
+        self.joined(expr, vec![(taken, yes_left)], no_left);
+        self.left = outer || (yes_left && no_left);
         answered
     }
 
-    /// The branches walked, each what it left and whether it returned, met
-    /// with the one walked last, whose states are the current ones: those
-    /// that went on must agree, and one that returned has no say.
-    fn joined(&mut self, expr: &d::Expr, others: Vec<(Vec<State>, bool)>, last_returned: bool) {
-        let mut returned = last_returned;
-        for (taken, other_returned) in others {
-            if other_returned {
+    /// The branches walked, each what it left and whether it left the way
+    /// it was on, met with the one walked last, whose states are the
+    /// current ones: those that went on must agree, and one that left has
+    /// no say.
+    fn joined(&mut self, expr: &d::Expr, others: Vec<(Vec<State>, bool)>, last_left: bool) {
+        let mut left = last_left;
+        for (taken, other_left) in others {
+            if other_left {
                 continue;
             }
-            if returned {
-                for (held, state) in self.held.iter_mut().zip(&taken) {
-                    held.state = *state;
-                }
-                returned = false;
+            if left {
+                self.set(&taken);
+                left = false;
                 continue;
             }
             self.agreed(expr, taken);
         }
     }
 
-    /// An `is` with arms: each arm, its guards looked at, walked from what
-    /// was held before it, as an `if`'s branches are, and every arm must
-    /// use up what the others do.
-    fn arms(&mut self, expr: &d::Expr, arms: &[d::Arm]) -> Vec<Origin> {
-        let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
-        let outer = std::mem::take(&mut self.returned);
+    /// An `is` with arms: each arm walked from what was held before it, as
+    /// an `if`'s branches are, its pattern taking the value apart as a
+    /// test's does and its guard worked out; every arm must use up what
+    /// the others do.
+    fn arms(&mut self, expr: &d::Expr, value: &d::Expr, arms: &[d::Arm]) -> Vec<Origin> {
+        let whole = self.subject(value);
+        let before = self.states();
+        let outer = std::mem::take(&mut self.left);
         let mut answered = Vec::new();
         let mut taken = Vec::new();
-        let mut returned = false;
+        let mut left = false;
         for (at, arm) in arms.iter().enumerate() {
             if at > 0 {
-                taken.push((self.restored(&before), returned));
+                taken.push((self.restored(&before), left));
             }
-            for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+            // Each row asks the arm's guard after its own literals'; the
+            // first is worked out as a condition, the others looked at.
+            for guard in arm
+                .rows
+                .iter()
+                .skip(1)
+                .filter_map(|(_, guard)| guard.as_ref())
+            {
                 self.lend(guard);
             }
+            if let Some(whole) = whole {
+                let patterns: Vec<&Pattern> = arm.rows.iter().map(|(pattern, _)| pattern).collect();
+                self.matched(whole, value, &patterns);
+            }
+            if let Some((_, Some(guard))) = arm.rows.first() {
+                self.guarded(guard);
+            }
             answered.extend(self.value(&arm.body));
-            returned = std::mem::take(&mut self.returned);
+            left = std::mem::take(&mut self.left);
         }
-        let every = returned && taken.iter().all(|(_, returned)| *returned);
-        self.joined(expr, taken, returned);
-        self.returned = outer || every;
+        let every = left && taken.iter().all(|(_, left)| *left);
+        self.joined(expr, taken, left);
+        self.left = outer || every;
         answered
     }
 
@@ -951,6 +1578,7 @@ impl Walk<'_, '_> {
     fn agreed(&mut self, expr: &d::Expr, taken: Vec<State>) {
         for (at, yes) in taken.into_iter().enumerate() {
             self.held[at].state = match (yes, self.held[at].state) {
+                (State::Empty, other) | (other, State::Empty) => other,
                 (State::Held, State::Gone(gone)) | (State::Gone(gone), State::Held) => {
                     let refusal = self.one_branch(expr, at, gone);
                     self.refused.push(refusal);
@@ -964,28 +1592,28 @@ impl Walk<'_, '_> {
     }
 
     /// A resource held at `held` used up at `gone`, in one branch of the
-    /// `if` at `expr` and not the other.
+    /// `if` at `expr` and not the other, one arm and not another, or on
+    /// one way out of a loop and not another.
     fn one_branch(&self, expr: &d::Expr, held: usize, gone: Place) -> Refusal {
-        let resource = self.held[held]
-            .origins
-            .iter()
-            .find_map(|origin| match origin {
-                Origin::Made(_, made) => made.resource,
-                Origin::Parameter(parameter) => self.facts.program.functions[self.function]
-                    .key
-                    .signature
-                    .parameters
-                    .get(*parameter)
-                    .and_then(|ty| self.facts.resource_in(ty)),
-            });
-        let resource = self.facts.called(resource, "resource");
+        let resource = self.facts.called(self.resource_of(held), "resource");
+        if matches!(expr.kind, ExprKind::Loop(..)) {
+            return Refusal {
+                at: Some(gone),
+                message: format!(
+                    "this {resource} is used up on one way out of a loop and not another"
+                ),
+                label: self.gone_label(gone),
+                also: Some((place(expr), "another way out still holds it".to_owned())),
+                help: Some("use it up on every way out of the loop, or on none".to_owned()),
+            };
+        }
         if matches!(expr.kind, ExprKind::Match(..)) {
             return Refusal {
                 at: Some(gone),
                 message: format!(
                     "this {resource} is used up in one arm of an `is` and not another"
                 ),
-                label: "used up here".to_owned(),
+                label: self.gone_label(gone),
                 also: Some((place(expr), "another arm still holds it".to_owned())),
                 help: Some("use it up in every arm, or in none".to_owned()),
             };
@@ -995,7 +1623,7 @@ impl Walk<'_, '_> {
             message: format!(
                 "this {resource} is used up in one branch of an `if` and not the other"
             ),
-            label: "used up here".to_owned(),
+            label: self.gone_label(gone),
             also: Some((place(expr), "the other branch still holds it".to_owned())),
             help: Some("use it up in both branches, or in neither".to_owned()),
         }
@@ -1035,7 +1663,7 @@ impl Walk<'_, '_> {
         if self.facts.carries(&expr.ty) {
             let made = Made {
                 resource: self.facts.resource_in(&expr.ty),
-                by: Some(callee.name),
+                by: Maker::Call(callee.name),
             };
             vec![Origin::Made(place(expr), made)]
         } else {
@@ -1156,7 +1784,7 @@ impl Walk<'_, '_> {
                 self.refused.push(refusal);
                 Vec::new()
             }
-            State::Unknown => Vec::new(),
+            State::Unknown | State::Empty => Vec::new(),
         }
     }
 
@@ -1165,12 +1793,27 @@ impl Walk<'_, '_> {
         let resource = self
             .facts
             .called(self.facts.resource_in(&expr.ty), "resource");
+        let message = if self.taken_apart.contains(&gone) {
+            format!("this {resource} is read whole after a test took it apart")
+        } else {
+            format!("this {resource} is used after it was used up")
+        };
         Refusal {
             at: Some(place(expr)),
-            message: format!("this {resource} is used after it was used up"),
+            message,
             label: "used again here".to_owned(),
-            also: Some((gone, "used up here".to_owned())),
+            also: Some((gone, self.gone_label(gone))),
             help: None,
+        }
+    }
+
+    /// What happened where something held went: used up, or taken apart
+    /// by a test, its parts held by the names it bound.
+    fn gone_label(&self, gone: Place) -> String {
+        if self.taken_apart.contains(&gone) {
+            "taken apart here".to_owned()
+        } else {
+            "used up here".to_owned()
         }
     }
 
@@ -1205,7 +1848,7 @@ impl Walk<'_, '_> {
                     (State::Gone(gone), Origin::Parameter(parameter)) => {
                         path.taken.push((*parameter, Some(gone)));
                     }
-                    (State::Gone(_) | State::Unknown, _) => {}
+                    (State::Gone(_) | State::Unknown | State::Empty, _) => {}
                 }
             }
         }
@@ -1219,10 +1862,7 @@ impl Walk<'_, '_> {
     fn dropped(&self, (at, made): (Place, Made), (end, leaving): (Place, Leaving)) -> Refusal {
         let name = self.facts.name(self.function);
         let resource = self.facts.called(made.resource, "resource");
-        let what = made.by.map_or_else(
-            || format!("the {resource} built here"),
-            |by| format!("the {resource} from `{}`", self.facts.spelled(by)),
-        );
+        let what = self.described(made);
         let (still, help) = match leaving {
             Leaving::Asking => (
                 "still held where this `?` leaves".to_owned(),
@@ -1239,9 +1879,19 @@ impl Walk<'_, '_> {
             message: format!(
                 "{what} is neither used up nor answered on every way `{name}` goes on"
             ),
-            label: format!("this {resource} is made here"),
+            label: made_label(made, &resource),
             also: (end != at).then_some((end, still)),
             help: Some(help.to_owned()),
+        }
+    }
+
+    /// Which resource `made` is, in words.
+    fn described(&self, made: Made) -> String {
+        let resource = self.facts.called(made.resource, "resource");
+        match made.by {
+            Maker::Built => format!("the {resource} built here"),
+            Maker::Call(by) => format!("the {resource} from `{}`", self.facts.spelled(by)),
+            Maker::Carried => format!("the {resource} this loop carries"),
         }
     }
 }
@@ -1255,6 +1905,33 @@ fn ordinal(index: usize) -> String {
     WORDS
         .get(index)
         .map_or_else(|| format!("{}th", index + 1), |word| (*word).to_owned())
+}
+
+/// What is at the place `made` was made.
+fn made_label(made: Made, resource: &str) -> String {
+    match made.by {
+        Maker::Carried => format!("this loop carries the {resource}"),
+        Maker::Built | Maker::Call(_) => format!("this {resource} is made here"),
+    }
+}
+
+/// Whether `pattern` matches every value of its type.
+fn irrefutable(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Bind(_) | Pattern::Wild => true,
+        Pattern::As(_, pattern) => irrefutable(pattern),
+        Pattern::Product(patterns) => patterns.iter().all(irrefutable),
+        Pattern::Record(patterns) => patterns.iter().all(|(_, pattern)| irrefutable(pattern)),
+        _ => false,
+    }
+}
+
+/// `pattern` without the names it gives the whole.
+fn unnamed(pattern: &Pattern) -> &Pattern {
+    match pattern {
+        Pattern::As(_, pattern) => unnamed(pattern),
+        other => other,
+    }
 }
 
 const fn is_local(expr: &d::Expr) -> bool {

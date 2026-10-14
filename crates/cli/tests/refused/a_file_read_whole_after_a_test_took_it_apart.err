@@ -1,0 +1,8 @@
+error: this `File` is read whole after a test took it apart
+  --> a_file_read_whole_after_a_test_took_it_apart.fn:14:16
+   |
+12 |   if opened is Ok(file) then (
+   |      ------ taken apart here
+...
+14 |     again = if opened is Ok(other) then other.close!() else Ok({})
+   |                ^^^^^^ used again here

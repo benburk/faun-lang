@@ -35,6 +35,16 @@ fn files_travel_in_lists_and_are_each_closed_once() {
     assert_eq!(left.keys().collect::<Vec<_>>(), ["a.tmp", "b.tmp"]);
 }
 
+/// Files opened in a loop are carried out of it in a list, and another
+/// loop walking the list writes and closes each; a test and arms take
+/// apart what opening answered. A name that does not open is passed over.
+#[test]
+fn files_opened_in_one_loop_are_closed_in_another() {
+    let (status, written, left) = support::run_among(&example("batch.fn"), Directory::new());
+    assert_eq!((status, written.as_str()), (2, "a.txt\nb.txt\n"));
+    assert_eq!(left.keys().collect::<Vec<_>>(), ["a.txt", "b.txt"]);
+}
+
 /// Functions that only lend what they are handed may leave by `?` while
 /// they hold it: the one that opened it closes it.
 #[test]
