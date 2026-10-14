@@ -1,0 +1,9 @@
+error: `program!` uses up the `File` in its first parameter on some ways it goes on and not others
+  --> a_file_a_test_s_rows_leave_where_it_fails.fn:13:11
+   |
+13 |   pair = (opened, quiet)
+   |           ^^^^^^ used up here
+14 |   pair is ((Err(_), _) | (_, True)) else return 1
+   |                                          -------- still held where `program!` answers
+   |
+   = help: use it up on every way the function goes on, or on none, where the caller does

@@ -404,9 +404,12 @@ too.
 
 A test or an arm whose pattern names the file takes the value apart, as `=`
 does: where `opened is Ok(file)` holds, `file` holds the file and `opened` is
-gone. Where it fails, `opened` is as it was, and holds no file where the test
-shows it cannot, as an `Err` cannot. A pattern naming nothing that holds the
-file, `opened is Ok(_)`, only looks. Where an `&` fails after a test in it
+gone. Where it fails, `opened` is as it was. On either side, a value holds a
+file only where some value it can still be holds one: where `opened is
+Ok(file)` fails, `opened` is an `Err`, which holds none, and where
+`files is []` holds, the list is empty. A row with a guard rules nothing out,
+since the guard may fail, and neither does a number, a range or a string. A
+pattern naming nothing that holds the file, `opened is Ok(_)`, only looks. Where an `&` fails after a test in it
 held, what the test took apart is whole again, so the `else` has `opened` to
 close.
 

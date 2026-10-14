@@ -83,6 +83,51 @@ fn a_file_closed_in_both_branches_of_an_if_is_closed_once() {
     assert_eq!(left.keys().collect::<Vec<_>>(), ["a.txt"]);
 }
 
+/// A value holds a file only where a test leaves it able to: an empty list
+/// holds none, and neither does a pair whose rows cover every value but
+/// those holding no file.
+#[test]
+fn a_test_showing_a_value_holds_no_file_leaves_nothing_to_close() {
+    let package = Package::new(
+        "nothing-held",
+        "import std.host {Host, File, IoError, Mode.*}
+
+         main! : Host -> []
+         main!(host) -> (
+           opened = host.files.open!(\"a.txt\", Overwrite)
+           other = host.files.open!(\"b.txt\", Overwrite)
+           none = close_all!([])
+           some = close_all!([other])
+           shut = shut!(opened, host.args.len() == 0)
+           host.exit!(U8.of_nat(none + some + shut))
+         )
+
+         close_all! : List(Result(File, IoError)) -> Nat
+         close_all!(files) -> if files is [] then 0 else (
+           count = 0
+           for opened in files do (
+             opened is Ok(file) else continue
+             closed = file.close!()
+             count = count + 1
+           )
+           count
+         )
+
+         shut! : (Result(File, IoError), Bool) -> Nat
+         shut!(opened, quiet) -> (
+           pair = (opened, quiet)
+           pair is ((Err(_), _) | (_, True) | (_, False)) else return 9
+           (result, _) = pair
+           result is Ok(file) else return 7
+           closed = file.close!()
+           2
+         )",
+    );
+    let (status, _, left) = support::run_among(&package.entry(), Directory::new());
+    assert_eq!(status, 3);
+    assert_eq!(left.keys().collect::<Vec<_>>(), ["a.txt", "b.txt"]);
+}
+
 /// A name holding a nought byte is refused before the target is asked,
 /// which would read it as ending there: nothing named by its front is made.
 #[test]

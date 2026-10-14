@@ -45,6 +45,8 @@ use crate::resolve::ResolvedProgram;
 use crate::specialize::{FunctionKey, Pattern, Type, surface_type};
 use crate::{ModuleId, Symbol};
 
+mod shapes;
+
 /// Refuse a program that drops a resource, uses one twice, or leaves one
 /// behind.
 ///
@@ -178,6 +180,9 @@ struct Facts<'a> {
     /// `Bool`'s `&` and `|`, along which a test's names are seen.
     and: Symbol,
     or: Symbol,
+    /// A list's constructors, which a list pattern is written over.
+    list_nil: Symbol,
+    list_cons: Symbol,
 }
 
 impl<'a> Facts<'a> {
@@ -222,6 +227,8 @@ impl<'a> Facts<'a> {
             carries: RefCell::default(),
             and: prelude.bool_and,
             or: prelude.bool_or,
+            list_nil: prelude.list_nil,
+            list_cons: prelude.list_cons,
         }
     }
 
@@ -350,6 +357,10 @@ impl<'a> Facts<'a> {
                     .to_owned(),
             ),
         }
+    }
+
+    fn is_resource(&self, ty: &Type) -> bool {
+        matches!(ty, Type::Named(name, _) if self.resources.contains(name))
     }
 
     /// Whether a value of `ty` holds a resource anywhere in it.
@@ -803,7 +814,7 @@ impl<'f, 'a> Walk<'f, 'a> {
                 });
                 self.bind(pattern, ty, origins);
             }
-            Pattern::Constructor(_, _) if self.is_resource(ty) => self.hold(origins),
+            Pattern::Constructor(_, _) if self.facts.is_resource(ty) => self.hold(origins),
             Pattern::Wild => self.hold(origins),
             Pattern::Record(patterns) => {
                 if let Type::Record(fields) = ty {
@@ -840,10 +851,6 @@ impl<'f, 'a> Walk<'f, 'a> {
         }
     }
 
-    fn is_resource(&self, ty: &Type) -> bool {
-        matches!(ty, Type::Named(name, _) if self.facts.resources.contains(name))
-    }
-
     /// Held by nothing: kept where it is a parameter's, and dropped where
     /// it was made here.
     fn hold(&mut self, origins: &[Origin]) {
@@ -869,7 +876,7 @@ impl<'f, 'a> Walk<'f, 'a> {
             ExprKind::Natural(_) | ExprKind::Bytes(_) => Vec::new(),
             ExprKind::Construct(_, fields) | ExprKind::Tuple(fields) => {
                 let mut origins = self.values(fields.iter());
-                if self.is_resource(&expr.ty) {
+                if self.facts.is_resource(&expr.ty) {
                     let made = Made {
                         resource: self.facts.resource_in(&expr.ty),
                         by: Maker::Built,
@@ -1301,7 +1308,9 @@ impl<'f, 'a> Walk<'f, 'a> {
         let Some(whole) = whole else {
             return Outcome::alike(fails);
         };
-        if fails[whole] == State::Held && !self.remainder_carries(rows, &value.ty) {
+        let unguarded = rows.iter().filter(|(_, guard)| guard.is_none());
+        let unmatched = unguarded.map(|(pattern, _)| pattern);
+        if fails[whole] == State::Held && !self.facts.unmatched_carries(unmatched, &value.ty) {
             fails[whole] = State::Empty;
         }
         let patterns: Vec<&Pattern> = rows.iter().map(|(pattern, _)| pattern).collect();
@@ -1343,7 +1352,7 @@ impl<'f, 'a> Walk<'f, 'a> {
                 self.taken_apart.insert(place(value));
                 let origins = self.held[whole].origins.clone();
                 self.bind(pattern, ty, &origins);
-            } else if !patterns.iter().any(|p| self.matched_carries(p, ty)) {
+            } else if !patterns.iter().any(|p| self.facts.matched_carries(p, ty)) {
                 self.held[whole].state = State::Empty;
             }
         }
@@ -1366,7 +1375,7 @@ impl<'f, 'a> Walk<'f, 'a> {
         match pattern {
             Pattern::Bind(_) => self.facts.carries(ty),
             Pattern::As(_, pattern) => self.facts.carries(ty) || self.names_resource(pattern, ty),
-            Pattern::Constructor(..) if self.is_resource(ty) => false,
+            Pattern::Constructor(..) if self.facts.is_resource(ty) => false,
             Pattern::Record(patterns) => {
                 let Type::Record(fields) = ty else {
                     return false;
@@ -1384,70 +1393,6 @@ impl<'f, 'a> Walk<'f, 'a> {
                 .iter()
                 .any(|(pattern, part)| self.names_resource(pattern, part)),
         }
-    }
-
-    /// Whether a value of `ty` that `pattern` matches may hold a resource.
-    fn matched_carries(&self, pattern: &Pattern, ty: &Type) -> bool {
-        match pattern {
-            Pattern::As(_, pattern) => self.matched_carries(pattern, ty),
-            Pattern::Constructor(constructor, patterns) if !self.is_resource(ty) => {
-                self.facts.fields(*constructor, ty).map_or_else(
-                    || self.facts.carries(ty),
-                    |fields| {
-                        patterns
-                            .iter()
-                            .zip(&fields)
-                            .any(|(pattern, field)| self.matched_carries(pattern, field))
-                    },
-                )
-            }
-            Pattern::Product(patterns) => match ty {
-                Type::Tuple(members) => patterns
-                    .iter()
-                    .zip(members)
-                    .any(|(pattern, member)| self.matched_carries(pattern, member)),
-                _ => self.facts.carries(ty),
-            },
-            _ => self.facts.carries(ty),
-        }
-    }
-
-    /// Whether a value of `ty` that no row matches may hold a resource: a
-    /// row taking apart a constructor leaves the others, and that one where
-    /// its parts are tested; a row taking apart a list's first element and
-    /// the rest leaves an empty list.
-    fn remainder_carries(&self, rows: &[(Pattern, Option<d::Expr>)], ty: &Type) -> bool {
-        if !self.facts.carries(ty) {
-            return false;
-        }
-        let whole =
-            |(pattern, guard): &(Pattern, Option<d::Expr>)| guard.is_none() && irrefutable(pattern);
-        if rows.iter().any(whole) {
-            return false;
-        }
-        let emptied = rows.iter().any(|(pattern, guard)| {
-            guard.is_none()
-                && matches!(pattern, Pattern::List(elements, Some(rest))
-                    if elements.len() == 1 && irrefutable(&elements[0]) && irrefutable(rest))
-        });
-        if emptied {
-            return false;
-        }
-        let Some(constructors) = self.facts.constructors_of(ty) else {
-            return true;
-        };
-        constructors.iter().any(|constructor| {
-            let covered = rows.iter().any(|(pattern, guard)| {
-                guard.is_none()
-                    && matches!(unnamed(pattern), Pattern::Constructor(each, patterns)
-                        if each == constructor && patterns.iter().all(irrefutable))
-            });
-            !covered
-                && self
-                    .facts
-                    .fields(*constructor, ty)
-                    .is_none_or(|fields| fields.iter().any(|field| self.facts.carries(field)))
-        })
     }
 
     /// The state of everything held.
@@ -1912,25 +1857,6 @@ fn made_label(made: Made, resource: &str) -> String {
     match made.by {
         Maker::Carried => format!("this loop carries the {resource}"),
         Maker::Built | Maker::Call(_) => format!("this {resource} is made here"),
-    }
-}
-
-/// Whether `pattern` matches every value of its type.
-fn irrefutable(pattern: &Pattern) -> bool {
-    match pattern {
-        Pattern::Bind(_) | Pattern::Wild => true,
-        Pattern::As(_, pattern) => irrefutable(pattern),
-        Pattern::Product(patterns) => patterns.iter().all(irrefutable),
-        Pattern::Record(patterns) => patterns.iter().all(|(_, pattern)| irrefutable(pattern)),
-        _ => false,
-    }
-}
-
-/// `pattern` without the names it gives the whole.
-fn unnamed(pattern: &Pattern) -> &Pattern {
-    match pattern {
-        Pattern::As(_, pattern) => unnamed(pattern),
-        other => other,
     }
 }
 

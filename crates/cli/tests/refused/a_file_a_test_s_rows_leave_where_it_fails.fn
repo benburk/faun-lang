@@ -1,0 +1,19 @@
+import std.host {Host, Files, File, IoError, Mode.*}
+
+main! : Host -> []
+main!(host) -> (
+  opened = host.files.open!("a.tmp", Overwrite)
+  ran = program!(opened, host.args.len() == 0)
+  host.exit!(0)
+)
+
+# Where the test fails, the pair is `(Ok(file), False)`, which holds a file.
+program! : (Result(File, IoError), Bool) -> Nat
+program!(opened, quiet) -> (
+  pair = (opened, quiet)
+  pair is ((Err(_), _) | (_, True)) else return 1
+  (result, _) = pair
+  result is Ok(file) else return 2
+  closed = file.close!()
+  0
+)
