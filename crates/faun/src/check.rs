@@ -33,7 +33,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use super::blessed::{self, LiteralExpr, NumeralType, PreludeIds};
-use super::diagnostic::{Advice, Advised, Diagnostic};
+use super::diagnostic::{Advice, Advised, Diagnostic, counted, given};
 use super::hir as h;
 use super::resolve::ResolvedProgram;
 use super::{ModuleId, Symbol, Symbols};
@@ -1734,8 +1734,9 @@ impl<'a> Checker<'a> {
                             function.module,
                             clauses[0].span,
                             format!(
-                                "clause takes {arity} patterns but its signature takes {} parameters",
-                                signature.parameters.len()
+                                "clause takes {} but its signature takes {}",
+                                counted(arity, "pattern"),
+                                counted(signature.parameters.len(), "parameter")
                             ),
                         ));
                     }
@@ -2005,9 +2006,9 @@ impl<'a> Checker<'a> {
                 module,
                 clause.span,
                 format!(
-                    "clause takes {} patterns but its signature takes {} parameters",
-                    clause.patterns.len(),
-                    parameters.len()
+                    "clause takes {} but its signature takes {}",
+                    counted(clause.patterns.len(), "pattern"),
+                    counted(parameters.len(), "parameter")
                 ),
             ));
         }
@@ -3063,10 +3064,10 @@ impl<'a> Checker<'a> {
                 module,
                 span,
                 format!(
-                    "`{}` takes {} arguments, but {} were given",
+                    "`{}` takes {}, but {} given",
                     spelled(self),
-                    parameters.len(),
-                    arguments.len()
+                    counted(parameters.len(), "argument"),
+                    given(arguments.len())
                 ),
             ));
         }
@@ -3830,9 +3831,9 @@ impl<'a> Checker<'a> {
                         pending.module,
                         pending.span,
                         format!(
-                            "constructor `{}` takes {} fields, but is given {}",
+                            "constructor `{}` takes {}, but is given {}",
                             self.symbols.text(pending.dual.spelling),
-                            parameters.len(),
+                            counted(parameters.len(), "field"),
                             fields.len()
                         ),
                     ));
@@ -4115,8 +4116,15 @@ impl<'a> Checker<'a> {
             return Vec::new();
         }
         let receiver = self.infer.resolve(&pending.receiver);
-        if let Ty::Record(..) = &receiver {
-            return vec![Self::projection(pending.name)];
+        // A closed record without the field has none, and is refused as
+        // having no such member.
+        if let Ty::Record(fields, tail) = &receiver {
+            let has = tail.is_some() || fields.iter().any(|(name, _)| *name == pending.name);
+            return if has {
+                vec![Self::projection(pending.name)]
+            } else {
+                Vec::new()
+            };
         }
         let Some(fields) = self.fields.get(&pending.name) else {
             return Vec::new();
@@ -4544,10 +4552,10 @@ fn apply_signature(
     let receiver = usize::from(!through_type);
     if parameters.len() != pending.arguments.len() + receiver {
         return Err(format!(
-            "`{}` takes {} arguments, but {} were given",
+            "`{}` takes {}, but {} given",
             symbols.text(pending.name),
-            parameters.len() - receiver,
-            pending.arguments.len()
+            counted(parameters.len() - receiver, "argument"),
+            given(pending.arguments.len())
         ));
     }
     let given: Vec<&Ty> = if through_type {

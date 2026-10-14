@@ -1,0 +1,7 @@
+error: `pairs` does not cover every case
+ --> a_list_left_uncovered_is_shown_as_its_elements.fn:5:1
+  |
+5 | pairs([]) -> 0
+  | ^^^^^^^^^^^^^^ no clause matches `pairs([_])`
+  |
+  = help: add a clause matching `pairs([_])`

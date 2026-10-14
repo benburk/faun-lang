@@ -1,0 +1,5 @@
+error: `max` takes 1 argument, but 2 were given
+ --> a_method_given_more_arguments_than_it_takes.fn:4:14
+  |
+4 | larger(n) -> n.max(2, 3)
+  |              ^^^^^^^^^^^

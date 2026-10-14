@@ -1,0 +1,7 @@
+error: `total` is bound in a loop's round, and seen only in it
+  --> a_name_first_bound_in_a_loop_s_round_is_not_seen_after_it.fn:10:3
+   |
+10 |   total
+   |   ^^^^^ after the loop
+   |
+   = help: bind `total` before the loop, and the loop carries it out

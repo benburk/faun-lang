@@ -1,0 +1,9 @@
+import std.host {Host}
+
+# One element alone is matched by neither clause.
+pairs : List(Nat) -> Nat
+pairs([]) -> 0
+pairs([a, b, *_]) -> a + b
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

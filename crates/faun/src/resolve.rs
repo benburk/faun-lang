@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::ast as s;
-use super::diagnostic::{Advice, Advised, Diagnostic, Location, LowerError, Unplaced};
+use super::diagnostic::{Advice, Advised, Diagnostic, Location, LowerError, Unplaced, counted};
 use super::hir as h;
 use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
@@ -735,8 +735,8 @@ impl Expansion<'_> {
             .ok_or_else(|| format!("`{spelled}` is not a constraint alias"))?;
         if alias.parameters.len() != arguments.len() {
             return Err(format!(
-                "constraint alias `{spelled}` takes {} arguments, and is given {}",
-                alias.parameters.len(),
+                "constraint alias `{spelled}` takes {}, and is given {}",
+                counted(alias.parameters.len(), "argument"),
                 arguments.len()
             ));
         }
@@ -1604,9 +1604,9 @@ struct ClauseResolver<'a> {
     /// again as by `=`, though a lambda's shadow the body's around it, and
     /// in a test one written twice asks its parts equal.
     matching: bool,
-    /// Names a test bound that are out of sight here, where it is not known
-    /// to have held, and where the test was: what a use of one is told.
-    hidden: HashMap<Symbol, s::Span>,
+    /// Names out of sight here, bound by a test not known to have held, or
+    /// in a loop's round: what a use of one is told.
+    hidden: HashMap<Symbol, Hidden>,
     /// While a clause's head or a test's pattern is resolved, each
     /// `==name` in it, and in a head each name bound again, outside any
     /// `|`. Elsewhere, a pattern compares nothing.
@@ -1631,13 +1631,22 @@ struct ClauseResolver<'a> {
     loops_hidden: bool,
 }
 
+/// Why a name bound here is out of sight further on.
+#[derive(Clone, Copy)]
+enum Hidden {
+    /// A test bound it, and is not known to have held.
+    Tested,
+    /// A loop's round bound it, which the loop does not carry out.
+    Round,
+}
+
 impl ClauseResolver<'_> {
     /// Mark what was bound since `before` as out of sight from here on,
-    /// bound by the test at `span`.
-    fn hide(&mut self, before: &HashMap<Symbol, h::LocalId>, span: s::Span) {
+    /// bound as `by` says.
+    fn hide(&mut self, before: &HashMap<Symbol, h::LocalId>, by: Hidden) {
         for (name, local) in &self.locals {
             if before.get(name) != Some(local) {
-                self.hidden.insert(*name, span);
+                self.hidden.insert(*name, by);
             }
         }
     }
@@ -1680,7 +1689,7 @@ impl ClauseResolver<'_> {
                 Box::new(self.condition(right)?),
             ),
             s::ExprKind::Binary(s::BinaryOp::Or, left, right) => {
-                let (left, right) = self.either(left, right, expression.span)?;
+                let (left, right) = self.either(left, right)?;
                 h::ExprKind::Binary(s::BinaryOp::Or, Box::new(left), Box::new(right))
             }
             _ => return self.expr(expression),
@@ -1715,7 +1724,7 @@ impl ClauseResolver<'_> {
             })
         });
         let end = self.locals.clone();
-        self.hide(&before, arm.pattern.span());
+        self.hide(&before, Hidden::Tested);
         self.locals = before;
         Ok((resolved?, end))
     }
@@ -1815,7 +1824,7 @@ impl ClauseResolver<'_> {
         self.loops.push(carried.clone());
         let round = self.round(head, list, body);
         self.loops.pop();
-        self.hide(&before, span);
+        self.hide(&before, Hidden::Round);
         self.locals = before;
         let (head, body) = round?;
         let mut kept = Vec::with_capacity(carried.len());
@@ -1993,7 +2002,6 @@ impl ClauseResolver<'_> {
         &mut self,
         left: &s::Expr,
         right: &s::Expr,
-        span: s::Span,
     ) -> Result<(h::Expr, h::Expr), ResolveError> {
         let before = self.locals.clone();
         let left = self.condition(left)?;
@@ -2015,7 +2023,7 @@ impl ClauseResolver<'_> {
             if first.get(name) == Some(local) && after_right.get(name) == Some(local) {
                 self.locals.insert(*name, *local);
             } else {
-                self.hidden.insert(*name, span);
+                self.hidden.insert(*name, Hidden::Tested);
             }
         }
         Ok((left, right))
@@ -2554,11 +2562,10 @@ impl ClauseResolver<'_> {
             // What the condition binds is seen by `yes` alone.
             s::ExprKind::If(condition, yes, no) => {
                 let before = self.locals.clone();
-                let asked = condition.span;
                 let condition = self.condition(condition);
                 let yes = condition.and_then(|condition| Ok((condition, self.expr(yes)?)));
                 let yes_end = self.locals.clone();
-                self.hide(&before, asked);
+                self.hide(&before, Hidden::Tested);
                 self.locals.clone_from(&before);
                 let (condition, yes) = yes?;
                 let no = self.expr(no)?;
@@ -2585,7 +2592,6 @@ impl ClauseResolver<'_> {
                 rest,
             } => {
                 let before = self.locals.clone();
-                let asked = condition.span;
                 let condition = self.condition(condition);
                 let yes = condition.and_then(|condition| {
                     let body = self.body(rest)?;
@@ -2595,7 +2601,7 @@ impl ClauseResolver<'_> {
                     Ok((condition, block))
                 });
                 let end = self.locals.clone();
-                self.hide(&before, asked);
+                self.hide(&before, Hidden::Tested);
                 self.locals.clone_from(&before);
                 let (condition, yes) = yes?;
                 let otherwise = self.expr(otherwise)?;
@@ -2620,10 +2626,9 @@ impl ClauseResolver<'_> {
                 rest,
             } => {
                 let before = self.locals.clone();
-                let asked = condition.span;
                 let condition = self.condition(condition);
                 let leaving = condition.and_then(|condition| Ok((condition, self.expr(out)?)));
-                self.hide(&before, asked);
+                self.hide(&before, Hidden::Tested);
                 self.locals.clone_from(&before);
                 let (condition, leaving) = leaving?;
                 let rest = self.body(rest)?;
@@ -2671,7 +2676,7 @@ impl ClauseResolver<'_> {
             s::ExprKind::Is(..) => {
                 let before = self.locals.clone();
                 let tested = self.condition(expression);
-                self.hide(&before, expression.span);
+                self.hide(&before, Hidden::Tested);
                 self.locals = before;
                 return tested;
             }
@@ -2681,7 +2686,7 @@ impl ClauseResolver<'_> {
                 let both = self
                     .condition(left)
                     .and_then(|left| Ok((left, self.condition(right)?)));
-                self.hide(&before, expression.span);
+                self.hide(&before, Hidden::Tested);
                 self.locals = before;
                 let (left, right) = both?;
                 h::ExprKind::Binary(s::BinaryOp::And, Box::new(left), Box::new(right))
@@ -2771,17 +2776,32 @@ impl ClauseResolver<'_> {
         if capitalised(name.text(self.source)) {
             return Ok(h::ExprKind::Tag(spelling));
         }
-        if self.hidden.contains_key(&spelling) {
-            return Err(error(
-                self.module,
-                name.0,
-                format!(
-                    "`{}` is bound by a test, and seen only where that test is known to have held",
-                    name.text(self.source)
-                ),
-            )
-            .label("not known to hold here")
-            .help("a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below its `else` line, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
+        match self.hidden.get(&spelling) {
+            Some(Hidden::Tested) => {
+                return Err(error(
+                    self.module,
+                    name.0,
+                    format!(
+                        "`{}` is bound by a test, and seen only where that test is known to have held",
+                        name.text(self.source)
+                    ),
+                )
+                .label("not known to hold here")
+                .help("a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below its `else` line, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
+            }
+            Some(Hidden::Round) => {
+                let text = name.text(self.source);
+                return Err(error(
+                    self.module,
+                    name.0,
+                    format!("`{text}` is bound in a loop's round, and seen only in it"),
+                )
+                .label("after the loop")
+                .help(format!(
+                    "bind `{text}` before the loop, and the loop carries it out"
+                )));
+            }
+            None => {}
         }
         Err(error(
             self.module,

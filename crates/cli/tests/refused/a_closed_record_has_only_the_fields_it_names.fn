@@ -1,0 +1,7 @@
+import std.host {Host}
+
+depth : {width: Nat, height: Nat} -> Nat
+depth(box) -> box.depth
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

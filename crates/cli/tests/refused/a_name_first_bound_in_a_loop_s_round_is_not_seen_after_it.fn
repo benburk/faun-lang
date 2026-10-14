@@ -1,0 +1,14 @@
+import std.host {Host}
+
+# `total` is the round's own; bound before the loop, the round would carry
+# it out.
+last : List(Nat) -> Nat
+last(xs) -> (
+  for x in xs do (
+    total = x
+  )
+  total
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

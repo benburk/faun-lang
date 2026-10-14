@@ -1,0 +1,7 @@
+import std.host {Host}
+
+larger : Nat -> Nat
+larger(n) -> n.max(2, 3)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

@@ -55,6 +55,24 @@ pub trait Advised: Sized {
     }
 }
 
+/// `count` of `noun`, as a sentence says it: `1 argument`, `2 arguments`.
+pub(crate) fn counted(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
+/// How many `were given`, as a sentence says it: `1 was`, `2 were`.
+pub(crate) fn given(count: usize) -> String {
+    if count == 1 {
+        "1 was".to_owned()
+    } else {
+        format!("{count} were")
+    }
+}
+
 /// A refusal whose place its maker does not know: whoever does places it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Unplaced {

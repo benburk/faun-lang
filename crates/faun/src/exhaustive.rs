@@ -585,6 +585,29 @@ impl<'a> Coverage<'a> {
             .join(", ")
     }
 
+    /// A list's elements as a list pattern writes them: `[a, b]` where it
+    /// ends, and `[a, b, *_]` where anything may follow.
+    fn render_list(&self, mut pattern: &Pattern, symbols: &Symbols) -> String {
+        let mut elements = Vec::new();
+        let rest = loop {
+            match pattern {
+                Pattern::Constructor(name, fields) if *name == self.prelude.list_cons => {
+                    let [head, tail] = fields.as_slice() else {
+                        unreachable!("a list's cons takes a head and a tail")
+                    };
+                    elements.push(self.render(head, symbols));
+                    pattern = tail;
+                }
+                Pattern::Constructor(name, _) if *name == self.prelude.list_nil => break None,
+                rest => break Some(self.render(rest, symbols)),
+            }
+        };
+        if let Some(rest) = rest {
+            elements.push(format!("*{rest}"));
+        }
+        format!("[{}]", elements.join(", "))
+    }
+
     /// An example pattern as the program would write it.
     fn render(&self, pattern: &Pattern, symbols: &Symbols) -> String {
         match pattern {
@@ -593,15 +616,8 @@ impl<'a> Coverage<'a> {
                 debug_assert!(fields.is_empty());
                 "[]".to_owned()
             }
-            Pattern::Constructor(name, fields) if *name == self.prelude.list_cons => {
-                let [head, tail] = fields.as_slice() else {
-                    unreachable!("a list's cons takes a head and a tail")
-                };
-                format!(
-                    "[{}, *{}]",
-                    self.render(head, symbols),
-                    self.render(tail, symbols)
-                )
+            Pattern::Constructor(name, _) if *name == self.prelude.list_cons => {
+                self.render_list(pattern, symbols)
             }
             Pattern::Constructor(name, fields) | Pattern::Tag(name, fields)
                 if fields.is_empty() =>

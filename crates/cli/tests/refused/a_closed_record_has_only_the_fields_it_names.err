@@ -1,0 +1,5 @@
+error: `{width: Nat, height: Nat}` has no field or method `depth`
+ --> a_closed_record_has_only_the_fields_it_names.fn:4:15
+  |
+4 | depth(box) -> box.depth
+  |               ^^^^^^^^^
