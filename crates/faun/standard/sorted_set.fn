@@ -65,4 +65,12 @@ SortedSet(k) : SortedMap(k, Bool).(
   # repeated `insert` calls would.
   of_list : List(k) -> SortedSet(k) where k.cmp : (k, k) -> Order
   of_list(items) -> items.fold(empty, insert)
+
+  # Whether `set` and `other` hold the same members: their ascending lists
+  # agree, however either was built.
+  equals : (SortedSet(k), SortedSet(k)) -> Bool where k.equals : (k, k) -> Bool
+  equals(set, other) -> to_list(set) == to_list(other)
 )
+
+expect SortedSet.of_list([3, 1, 2]) == SortedSet.of_list([1, 2, 3, 1])
+expect SortedSet.of_list([1]) != SortedSet.of_list([2])

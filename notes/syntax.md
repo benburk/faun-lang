@@ -4,7 +4,7 @@
 
 - No symbol table required to parse it
 - Fast to parse
-- "layout"/indentation agnostic. indentation
+- Layout- and indentation-agnostic
 - small deterministic parser, limited lookahead, no explosive search through alternative interpretations
 - LL(1) grammar for simpler parsing, incremental parsing, error recovery, better error messages
 - few keywords

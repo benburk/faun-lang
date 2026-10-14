@@ -189,7 +189,8 @@ list by the container, so the caller says which: `Map.of_list(entries)`,
 `SortedMap` has the same three, its keys in order. Both update a key as
 Python's `defaultdict` does with `update_or(key, missing, change)`, which
 changes the value there, or `missing` where the key is absent: `counts =
-counts.update_or(word, 0, |count| count + 1)`.
+counts.update_or(word, 0, |count| count + 1)`. Two containers are equal
+where they hold the same entries, however each was built.
 
 A type's block asks for `equals`, `cmp`, `to_str` or `hash_into` by writing
 its signature with no clauses, as in Ori, and has the structural member of

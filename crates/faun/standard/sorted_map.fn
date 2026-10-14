@@ -99,6 +99,13 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   to_list(Bin(left, key, value, right, _)) ->
     to_list(left).extend(to_list(right).prepend((key, value)))
 
+  # Whether `map` and `other` bind the same keys to equal values: their
+  # ascending entries agree, however either was built.
+  equals : (SortedMap(k, v), SortedMap(k, v)) -> Bool where
+    k.equals : (k, k) -> Bool,
+    v.equals : (v, v) -> Bool
+  equals(map, other) -> to_list(map) == to_list(other)
+
   # The map binding each entry of `entries`, later entries winning exactly as
   # repeated `insert` calls would.
   of_list : List((k, v)) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
@@ -221,3 +228,5 @@ expect SortedMap.counted(["b", "a", "b"]).to_list() == [("a", 1), ("b", 2)]
 expect SortedMap.grouped([1, 2, 3, 4, 5], |n| n % 2).to_list() == [(0, [2, 4]), (1, [1, 3, 5])]
 expect SortedMap.of_list([(2, [1])]).update_or(1, [], |xs| [0, *xs]).update_or(2, [], |xs| [0, *xs]).to_list() == [(1, [0]), (2, [0, 1])]
 expect SortedMap.of_list([(1, 10)]).update(1, |n| n + 1).update(2, |n| n + 1).to_list() == [(1, 11)]
+expect SortedMap.of_list([(2, "b"), (1, "a")]) == SortedMap.of_list([(1, "a"), (2, "b")])
+expect SortedMap.of_list([(1, "a")]) != SortedMap.of_list([(1, "b")])
