@@ -1,7 +1,8 @@
 # Proposal: Loops
 
-- **Status:** Draft
+- **Status:** Approved
 - **Created:** 2026-10-04
+- **Approved:** 2026-10-14
 - **Affects:** the lexer's keywords, `grammar.ebnf`, the parser, the
   tree-sitter grammar, name resolution, the checker, lowering, the
   standard library's lists, the graph library, the HTML library's `for`
@@ -11,7 +12,7 @@
 ## Summary
 
 A body may loop with `for`, `while` and `loop`. A name bound before a loop
-and again in its body, as the [conditions](conditions.md) draft's `=`
+and again in its body, as the [conditions](conditions.md) proposal's `=`
 binds, carries into its next round and out of it. Leaving lines leave a
 round or a loop: `if c continue` and `if c break` where `c` holds, `c else
 continue` and `c else break` where it fails. Each loop compiles to a
@@ -113,7 +114,7 @@ what Python's mutation costs.
 
 ### Names a loop changes
 
-`=` is the conditions draft's: `name = value` binds the name from that
+`=` is the conditions proposal's: `name = value` binds the name from that
 line on, and `=` in a lambda binds only the lambda's names. A loop adds:
 
 - **A name bound before the loop and again in its body carries.** Its next
@@ -159,7 +160,7 @@ loop-line = "while" expr "do" "(" lines ")"
 
 ### Leaving a round or a loop
 
-`continue` and `break` are exits, written only in the conditions draft's
+`continue` and `break` are exits, written only in the conditions proposal's
 leaving lines, as `return` is, `if` leaving where its condition holds and
 `else` where it fails:
 
@@ -174,7 +175,7 @@ stands outside a loop.
 ### Nesting
 
 Loops nest as deep as blocks do. How deep is a style's to say, a
-linter's, as the conditions draft leaves which form to write; the
+linter's, as the conditions proposal leaves which form to write; the
 compiler refuses no depth. See [lints](../../lints.md). A lambda inside a loop is no part of its
 round: a `continue` or `break` in it is refused.
 
@@ -254,7 +255,7 @@ answers.
 4. **The checker** holds what a loop carries to one type across its
    rounds; lowering refuses a `for` pattern that can fail, as a binding's.
 5. **Lowering** makes each loop a recursive function of the names it
-   assigns, and the lines after it a join point, as the conditions draft's
+   assigns, and the lines after it a join point, as the conditions proposal's
    branches are.
 6. **The standard library** gains `Map.counted`, `Map.grouped` and
    `update_or`, which the toposort reads.
@@ -286,10 +287,13 @@ answers.
   so nine million rounds run in constant stack. A loop carrying or walking
   a value holding a resource is refused for now.
 
-## Open questions
+## Further steps
 
-- **What `for` walks.** A `List` only, for now; a `Map`'s entries or a
-  `Set` later, through their `to_list` or a fold.
+Settled as out of this proposal, for one of their own if wanted
+(2026-10-14):
+
+- **What `for` walks.** A `List` only; a `Map`'s entries or a `Set` walk
+  through their `to_list` or a fold.
 - **Compound assignment,** `count += 1`, once counting loops are written.
 
 ## Origin

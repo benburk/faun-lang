@@ -3,7 +3,7 @@
 What a linter should flag, and the compiler leaves alone. The compiler
 refuses what has no meaning, or one a reader would misread; a lint flags
 what means one thing plainly but is likely a slip, or is better written
-another way. No linter is built yet. This list gathers what the drafts
+another way. No linter is built yet. This list gathers what the proposals
 left to one, so none is lost.
 
 ## Likely slips
@@ -38,4 +38,4 @@ left to one, so none is lost.
 ## Style
 
 - **Loop nesting** past a depth a style chooses. The compiler refuses no
-  depth. See [loops](proposals/drafts/loops.md).
+  depth. See [loops](proposals/approved/loops.md).

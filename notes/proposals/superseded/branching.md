@@ -1,7 +1,12 @@
 # Proposal: Branching on a computed value
 
-- **Status:** Draft
+> Superseded by [conditions](../approved/conditions.md), whose arms, `value
+> is ( arms )`, branch on a computed value as `when` would have.
+
+- **Status:** Superseded
 - **Created:** 2026-10-01
+- **Superseded:** 2026-10-14
+- **Superseded by:** conditions.md
 - **Depends on:** conditions.md, for `return`
 - **Affects:** the lexer's keywords, `grammar.ebnf`, the parser, the
   tree-sitter grammar, pattern compiling, every helper definition that
@@ -191,7 +196,7 @@ as they are.
   `n -> a -1 -> b` reads as a subtraction.
 - **`if` expressions.** `if c then a else b` is a `when` on a `Bool`, and
   many of the helpers above are two-way tests on a comparison: `sorted`,
-  `either`, `climb_past`. Taken up in [conditions](conditions.md).
+  `either`, `climb_past`. Taken up in [conditions](../approved/conditions.md).
 - **Lambdas bound to names,** `walk = |stack, walked| …`, called or passed
   but never stored, lifted to a top-level definition with what they read as
   extra parameters. They would end the passing of context by hand, as
@@ -234,7 +239,7 @@ draft is taken up again (2026-10-02). The aim behind them: one way to write
 each thing, and the classic algorithms as short and plain as their Python.
 
 - **Guard conditions, `else` lines and a destructuring `if`** are now one
-  proposal, [conditions](conditions.md), built on a binding test, `value is
+  proposal, [conditions](../approved/conditions.md), built on a binding test, `value is
   pattern`.
 
 - **One way to write each kind of definition.** At the top level, a
@@ -261,7 +266,7 @@ each thing, and the classic algorithms as short and plain as their Python.
   ordering are no obstacle: a type holding a function answers none of
   them, as in Rust, Haskell and Roc. Nothing written so far wants it.
 
-- **Loops that rebind** are now their own proposal, [loops](loops.md):
+- **Loops that rebind** are now their own proposal, [loops](../approved/loops.md):
   variables written `$name`, `for`, `while` and `loop`.
 
 ## Open questions

@@ -1,7 +1,9 @@
 # Proposal: Conditions that bind
 
-- **Status:** Draft
+- **Status:** Approved
 - **Created:** 2026-10-03
+- **Approved:** 2026-10-14
+- **Supersedes:** branching.md
 - **Affects:** the lexer's keywords, `grammar.ebnf`, the parser, the
   tree-sitter grammar, name resolution, the checker, pattern compiling,
   lowering to Barb, every helper that exists only for a two-way test or a
@@ -465,7 +467,7 @@ The survey compares these as whole designs.
 
 ## Origin
 
-Discussion of the [branching](branching.md) draft's further steps
+Discussion of the [branching](../superseded/branching.md) draft's further steps
 (2026-10-03), then the [pattern matching survey](../../pattern-matching.md)
 (2026-10-04), which compared five designs and took two ideas from the
 ultimate and penultimate conditional syntaxes. On 2026-10-07 the `expect`
