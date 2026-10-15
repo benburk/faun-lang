@@ -1,0 +1,8 @@
+error: `fd_put!` has a signature and no clauses
+ --> only_the_host_leaves_a_definition_for_its_target_to_answer.fn:5:1
+  |
+5 | fd_put! : (U32, List(U8)) -> Nat
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: only the host leaves a definition for its target to answer
+  = help: write the clauses of `fd_put!`

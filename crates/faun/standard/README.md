@@ -795,7 +795,10 @@ program that reads them. One that reads only how many there are is handed the
 count alone and makes no list, and one that reads neither is handed nothing.
 
 `Host`'s bodyless methods are the effects the target answers for, called as
-`host.stdout.write_all!(bytes)`. A program orders its effects by threading `Host` through
+`host.stdout.write_all!(bytes)`. Only the host leaves a definition without
+clauses: a target answers one by its spelling alone, so one written in any
+other module, as a program's own `fd_put!`, would reach the routine at
+whatever type it claimed and with no capability in hand, and is refused. A program orders its effects by threading `Host` through
 them. Barb calls each routine with the `Host` it was handed, as the source
 says, and keeps the order and number of calls to anything bodyless. A routine
 asked with authority reads nothing of it, so machine lowering hands nothing

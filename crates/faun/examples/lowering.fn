@@ -7,11 +7,6 @@ identity(value) -> value
 multi_specialized : List(Nat)
 multi_specialized = identity([identity(1)])
 
-external : Nat -> Nat
-
-from_external : Nat
-from_external = external(1)
-
 guarded : Bool -> Nat
 guarded(True) if True -> 1
 guarded(_) -> 0

@@ -1435,7 +1435,6 @@ mod tests {
             "$$mapped_capture",
             "$$wrapped",
             "$$wrapped_each",
-            "$$from_external",
             "$$guarded_entry",
             "$$record_entry",
         ] {

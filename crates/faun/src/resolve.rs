@@ -25,6 +25,9 @@ pub struct ResolvedProgram<P = h::Program> {
     /// The entry's package, whose every definition is compiled, rather than
     /// only what reaches into it.
     pub package: Vec<ModuleId>,
+    /// The module mounted at `std.host`, the one place a definition may be
+    /// left for the target to answer.
+    pub host: ModuleId,
     /// Each module's source, by module.
     module_sources: Vec<SourceId>,
 }
@@ -38,6 +41,7 @@ impl<P> ResolvedProgram<P> {
             sources: self.sources,
             symbols: self.symbols,
             package: self.package,
+            host: self.host,
             module_sources: self.module_sources,
         }
     }
@@ -158,6 +162,7 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
         sites,
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         package: loaded.package,
+        host: loaded.host,
         sources: loaded.sources,
         symbols: loaded.symbols,
         program: h::Program { modules },

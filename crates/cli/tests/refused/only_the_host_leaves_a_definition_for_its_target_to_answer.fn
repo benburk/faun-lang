@@ -1,0 +1,11 @@
+import std.host {Host}
+
+# The target's own routine, declared again over a number anyone can make,
+# would write with no `Stdout` in hand.
+fd_put! : (U32, List(U8)) -> Nat
+
+main! : Host -> []
+main!(host) -> (
+  went = fd_put!(U32.of_nat(1), "written\n".to_utf8())
+  host.exit!(0)
+)

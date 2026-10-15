@@ -1,0 +1,8 @@
+error: `Box.peek` has a signature and no clauses
+ --> a_method_without_a_body_that_is_not_derived_is_refused.fn:4:3
+  |
+4 |   peek : Box -> Nat
+  |   ^^^^^^^^^^^^^^^^^
+  |
+  = note: only the host leaves a definition for its target to answer
+  = help: write the clauses of `Box.peek`

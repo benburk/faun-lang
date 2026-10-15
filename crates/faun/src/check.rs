@@ -17,6 +17,9 @@
 //! catch-all close it. A word a declaration claims waits, as a method does,
 //! for its position's type to choose between the tag and the constructor.
 //!
+//! Only the host leaves a definition without clauses, for its target to
+//! answer.
+//!
 //! `where` bounds are structural. A signed body meets its written bounds at
 //! its rigid variables; a use of a bounded definition owes its bounds, met
 //! where the use's types are known or owed in turn. An unsigned component's
@@ -170,7 +173,8 @@ pub fn type_check(
     prelude: PreludeIds,
 ) -> Result<CheckedProgram, Diagnostic> {
     crate::derive::requested(&mut resolved, &prelude)?;
-    let facts = validate_effects(&resolved.program, &resolved.symbols)
+    let facts = validate_externals(&resolved.program, resolved.host, &resolved.symbols)
+        .and_then(|()| validate_effects(&resolved.program, &resolved.symbols))
         .and_then(|()| {
             Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
         })
@@ -4633,6 +4637,36 @@ fn free_scheme(scheme: &Scheme) -> HashSet<u32> {
         .collect()
 }
 
+/// Refuse a definition left without clauses outside the host. A target
+/// answers such a definition by its spelling alone, so one written anywhere
+/// else would reach the target's routine at whatever type it claimed, and
+/// with no capability in hand.
+fn validate_externals(
+    program: &n::Program,
+    host: ModuleId,
+    symbols: &Symbols,
+) -> Result<(), CheckError> {
+    let bodyless = program
+        .functions
+        .iter()
+        .find(|function| function.clauses.is_empty() && function.module != host);
+    let Some(function) = bodyless else {
+        return Ok(());
+    };
+    let span = function
+        .signature
+        .as_ref()
+        .map_or_else(super::ast::Span::default, |signature| signature.span);
+    let name = spelled(function.name, symbols);
+    Err(failure(
+        function.module,
+        span,
+        format!("`{name}` has a signature and no clauses"),
+    )
+    .note("only the host leaves a definition for its target to answer")
+    .help(format!("write the clauses of `{name}`")))
+}
+
 fn validate_effects(program: &n::Program, symbols: &Symbols) -> Result<(), CheckError> {
     for function in &program.functions {
         for clause in &function.clauses {
@@ -5743,7 +5777,8 @@ mod tests {
     #[test]
     fn pure_definitions_and_nested_expressions_cannot_hide_effects() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load("stop! : Nat -> Nat\nbad : Nat\nbad = stop!(0)\n");
+        let (prelude, resolved) =
+            fixture.load("stop! : Nat -> Nat\nstop!(n) -> n\nbad : Nat\nbad = stop!(0)\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(
             failure
@@ -5752,7 +5787,7 @@ mod tests {
         );
 
         let (prelude, resolved) = fixture.load(
-            "stop! : Nat -> Nat\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat -> Nat\nbad!(n) -> id(stop!(n))\n",
+            "stop! : Nat -> Nat\nstop!(n) -> n\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat -> Nat\nbad!(n) -> id(stop!(n))\n",
         );
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(failure.message.contains("must stand on its own"));

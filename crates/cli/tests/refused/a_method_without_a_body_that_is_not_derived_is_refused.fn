@@ -1,0 +1,8 @@
+import std.host {Host}
+
+Box : [Box(Nat)].(
+  peek : Box -> Nat
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(Box(1).peek()))
