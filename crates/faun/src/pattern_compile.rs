@@ -229,18 +229,40 @@ pub(crate) enum Decision {
 }
 
 impl Decision {
+    /// Whether this tests a natural for a numeral anywhere, the decisions
+    /// in the bodies it answers among them.
     pub(crate) fn tests_numerals(&self) -> bool {
         match self {
-            Self::Body { .. } | Self::Unreachable { .. } => false,
+            Self::Unreachable { .. } => false,
+            Self::Body { body, .. } => body.tests_numerals(),
             Self::Numeral { .. } => true,
             Self::Match { arms, .. } => arms.iter().any(|arm| arm.decision.tests_numerals()),
-            Self::Record { decision, .. }
-            | Self::Split { decision, .. }
-            | Self::Let { decision, .. } => decision.tests_numerals(),
+            Self::Record { decision, .. } | Self::Split { decision, .. } => {
+                decision.tests_numerals()
+            }
+            Self::Let {
+                subject, decision, ..
+            } => subject.tests_numerals() || decision.tests_numerals(),
             Self::Guard {
-                otherwise, answer, ..
-            } => otherwise.tests_numerals() || answer.tests_numerals(),
+                condition,
+                otherwise,
+                answer,
+                ..
+            } => {
+                condition.tests_numerals() || otherwise.tests_numerals() || answer.tests_numerals()
+            }
         }
+    }
+}
+
+impl Body {
+    /// Whether a decision this body binds tests for a numeral.
+    fn tests_numerals(&self) -> bool {
+        self.bindings.iter().any(|binding| match &binding.value {
+            Bound::Value(_) => false,
+            Bound::If { yes, no, .. } => yes.tests_numerals() || no.tests_numerals(),
+            Bound::Match { decision, .. } => decision.tests_numerals(),
+        })
     }
 }
 

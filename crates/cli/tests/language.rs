@@ -8,6 +8,22 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "a numeral an expression's arms test is tested as a clause's is",
+        "bucket : Nat -> Nat
+         bucket(x) -> x is (
+           70 -> 1
+           200 -> 2
+           _ -> 0
+         )
+         
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(bucket(n + 69) * 10 + bucket(n + 199) + bucket(n)))
+         )",
+        12,
+    ),
+    (
         "numerals past what is taken apart beside a successor are each tested once",
         "f : Nat -> Nat
          f(0) -> 3
