@@ -10,9 +10,10 @@
 //! renders as its message. Either way it starts `error: `, as each
 //! diagnostic found with it does.
 //!
-//! A pass that refuses before its source is at hand gathers the same
-//! [`Advice`] on its own error, and it is carried over when the error is
-//! placed.
+//! Reading a file refuses with a syntax error, and every pass after loading
+//! with a `Refusal`: a place in a module rather than in a source, so it is
+//! made without the sources at hand. Either gathers the same [`Advice`],
+//! carried over when it is told as a diagnostic.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -73,72 +74,73 @@ pub(crate) fn given(count: usize) -> String {
     }
 }
 
-/// A refusal whose place its maker does not know: whoever does places it.
+/// Why a pass after loading refuses a program: what it says, where, and
+/// what else helps. Places are a module and a span, so a refusal is made
+/// without the sources at hand and told as a [`Diagnostic`] by whoever holds
+/// them.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Unplaced {
+pub(crate) struct Refusal {
     pub message: String,
-    pub advice: Advice,
-}
-
-impl From<String> for Unplaced {
-    fn from(message: String) -> Self {
-        Self {
-            message,
-            advice: Advice::default(),
-        }
-    }
-}
-
-impl From<&str> for Unplaced {
-    fn from(message: &str) -> Self {
-        Self::from(message.to_owned())
-    }
-}
-
-impl Advised for Unplaced {
-    fn advice(&mut self) -> &mut Advice {
-        &mut self.advice
-    }
-}
-
-/// A lowering failure, located before source owners are released.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LowerError {
-    pub message: String,
-    /// Where in the source it is about, when that is known.
+    /// Where it happened. A refusal made where that is not known is placed
+    /// by whoever knows it; one never placed is told without a place.
     pub at: Option<(crate::ModuleId, Span)>,
     /// Boxed, as it is only filled on the way out, so a `Result` carrying
-    /// the error stays small on the path that succeeds.
+    /// the refusal stays small on the path that succeeds.
     pub advice: Box<Advice>,
     /// Other places explaining it, and what is at each.
     pub secondary: Vec<((crate::ModuleId, Span), String)>,
 }
 
-impl LowerError {
-    /// A failure with nothing more to say than `message`.
-    pub(crate) fn new(message: impl Into<String>, at: Option<(crate::ModuleId, Span)>) -> Self {
+impl Refusal {
+    /// A refusal at `span` in `module`.
+    pub(crate) fn at(module: crate::ModuleId, span: Span, message: impl Into<String>) -> Self {
+        Self::from(message.into()).placed(module, span)
+    }
+
+    /// The same, at `span` in `module`.
+    #[must_use]
+    pub(crate) const fn placed(mut self, module: crate::ModuleId, span: Span) -> Self {
+        self.at = Some((module, span));
+        self
+    }
+
+    /// Told as a diagnostic, each place read from the source of its module.
+    pub(crate) fn told<'s>(self, source: impl Fn(crate::ModuleId) -> &'s Source) -> Diagnostic {
+        let diagnostic = Diagnostic::new(self.message);
+        let diagnostic = match self.at {
+            Some((module, span)) => diagnostic.at(source(module), span),
+            None => diagnostic,
+        };
+        let mut diagnostic = diagnostic.advised(*self.advice);
+        for ((module, span), text) in self.secondary {
+            diagnostic = diagnostic.secondary(source(module), span, text);
+        }
+        diagnostic
+    }
+}
+
+impl From<String> for Refusal {
+    fn from(message: String) -> Self {
         Self {
-            message: message.into(),
-            at,
+            message,
+            at: None,
             advice: Box::default(),
             secondary: Vec::new(),
         }
     }
 }
 
-impl Advised for LowerError {
+impl From<&str> for Refusal {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
+impl Advised for Refusal {
     fn advice(&mut self) -> &mut Advice {
         &mut self.advice
     }
 }
-
-impl fmt::Display for LowerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for LowerError {}
 
 /// A span resolved against its source: where it is, and the line it is on.
 #[derive(Clone, Debug, PartialEq, Eq)]

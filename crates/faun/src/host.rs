@@ -4,6 +4,8 @@
 //! discovers their identities once so entry validation and lowering do not
 //! infer authority or providers from coincidental spellings elsewhere.
 
+use crate::ast::Span;
+use crate::check::{CheckedProgram, InferredType};
 use crate::diagnostic::Diagnostic;
 use crate::hir as h;
 use crate::modules::LoadedProgram;
@@ -33,27 +35,42 @@ impl HostIds {
             .public
             .types
             .get(&host_name)
-            .ok_or_else(|| error("the selected host module must export `Host`"))?;
+            .ok_or_else(|| Diagnostic::new("the selected host module must export `Host`"))?;
         let exposes_constructor = program.modules.iter().any(|module| {
             module.public.types.values().any(|candidate| {
                 candidate.canonical == binding.canonical && !candidate.constructors.is_empty()
             })
         });
         if exposes_constructor {
-            return Err(error("the `Host` constructor must not be publicly exposed"));
+            return Err(Diagnostic::new(
+                "the `Host` constructor must not be publicly exposed",
+            ));
         }
         let exit_name = symbol(program, "exit!")?;
-        let exit = binding
-            .methods
-            .get(&exit_name)
-            .copied()
-            .ok_or_else(|| error("the selected host's `Host` must have an `exit!` method"))?;
+        let exit = binding.methods.get(&exit_name).copied().ok_or_else(|| {
+            Diagnostic::new("the selected host's `Host` must have an `exit!` method")
+        })?;
         if has_method_clause(program, program.host, "exit!")? {
-            return Err(error("the selected host must declare `exit!` bodyless"));
+            return Err(Diagnostic::new(
+                "the selected host must declare `exit!` bodyless",
+            ));
         }
         Ok(Self {
             host: binding.canonical,
             exit,
+        })
+    }
+
+    /// The signature the ABI gives an entry `name`, spelled `spelling`:
+    /// `Host -> []`.
+    pub(crate) fn entry_signature(&self, span: Span, name: Symbol, spelling: Symbol) -> h::Item {
+        h::Item::Signature(h::SignatureDecl {
+            span,
+            name,
+            spelling,
+            parameters: vec![h::Type::Named(self.host, Vec::new())],
+            result: h::Type::Variants(Vec::new()),
+            constraints: Vec::new(),
         })
     }
 }
@@ -92,14 +109,71 @@ pub fn sign_main(resolved: &mut crate::resolve::ResolvedProgram, host: &HostIds,
     else {
         return;
     };
-    module.items.push(h::Item::Signature(h::SignatureDecl {
-        span,
-        name: main.symbol,
-        spelling,
-        parameters: vec![h::Type::Named(host.host, Vec::new())],
-        result: h::Type::Variants(Vec::new()),
-        constraints: Vec::new(),
-    }));
+    module
+        .items
+        .push(host.entry_signature(span, main.symbol, spelling));
+}
+
+/// Validate the selected host ABI and the application's `main!` signature.
+///
+/// # Errors
+///
+/// Rejects host declarations or an entry whose checked type differs from the
+/// canonical `Host` and `U8` identities or the structural empty variant type.
+pub fn check_application_abi(
+    checked: &CheckedProgram,
+    host: &HostIds,
+    main: &Main,
+) -> Result<(), Diagnostic> {
+    let resolved = &checked.resolved;
+    let functions = &resolved.program.functions;
+    let span = functions
+        .iter()
+        .find(|function| function.name == main.symbol)
+        .map_or_else(Span::default, |function| function.span);
+    let refused = |message: String| resolved.diagnostic(main.module, span, message);
+    // `Host` wraps the record of startup values its target produces.
+    let wrapper = resolved
+        .program
+        .data
+        .get(&host.host)
+        .and_then(|data| data.wrapper.as_ref());
+    if !wrapper.is_some_and(|wrapper| matches!(wrapper.field, h::Type::Record(..))) {
+        let message = "the application ABI requires `Host` to wrap a record of startup values";
+        return Err(refused(message.to_owned()));
+    }
+    let named = |name| InferredType::Named(name, Vec::new());
+    let required = [
+        (
+            main.symbol,
+            effect(vec![named(host.host)]),
+            "main! : Host -> []",
+        ),
+        (
+            host.exit,
+            effect(vec![named(host.host), named(checked.prelude.u8_)]),
+            "exit! : (Host, U8) -> []",
+        ),
+    ];
+    for (name, expected, written) in required {
+        let meets = functions.iter().any(|function| {
+            function.name == name
+                && function.scheme.variables.is_empty()
+                && function.scheme.ty == expected
+        });
+        if !meets {
+            return Err(refused(format!("the application ABI requires `{written}`")));
+        }
+    }
+    Ok(())
+}
+
+/// An effect taking `parameters` and answering nothing, `[]`.
+fn effect(parameters: Vec<InferredType>) -> InferredType {
+    InferredType::Function(
+        parameters,
+        Box::new(InferredType::Variants(Vec::new(), None)),
+    )
 }
 
 /// An application's entry point: the `main!` its entry module defines.
@@ -128,13 +202,13 @@ impl Main {
         let source = program
             .sources
             .get(module.source)
-            .ok_or_else(|| error("the entry module has no loaded source"))?
+            .ok_or_else(|| Diagnostic::new("the entry module has no loaded source"))?
             .text();
         let defines_main = module.syntax.items.iter().any(|item| {
             matches!(item, crate::ast::Item::Clause(clause) if clause.name.text(source) == "main!")
         });
         if !defines_main {
-            return Err(error("the entry module must define `main!`")
+            return Err(Diagnostic::new("the entry module must define `main!`")
                 .help("write `main! : Host -> []` and a clause `main!(host) -> ...`"));
         }
         Ok(Some(Self {
@@ -154,7 +228,7 @@ fn has_method_clause(
     let source = program
         .sources
         .get(module.source)
-        .ok_or_else(|| error("the selected host module has no loaded source"))?
+        .ok_or_else(|| Diagnostic::new("the selected host module has no loaded source"))?
         .text();
     Ok(module.syntax.items.iter().any(|item| {
         matches!(item, crate::ast::Item::Data(data) if data.methods.iter().any(|method| {
@@ -168,11 +242,7 @@ fn symbol(program: &LoadedProgram, name: &str) -> Result<Symbol, Diagnostic> {
     program
         .symbols
         .find(name)
-        .ok_or_else(|| error(format!("host name `{name}` was never declared")))
-}
-
-fn error(message: impl Into<String>) -> Diagnostic {
-    Diagnostic::new(message)
+        .ok_or_else(|| Diagnostic::new(format!("host name `{name}` was never declared")))
 }
 
 #[cfg(test)]

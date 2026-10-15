@@ -50,6 +50,14 @@ pub(crate) struct Body {
     pub(crate) result: Expr,
 }
 
+impl Body {
+    /// Each line's value, then the answer.
+    pub(crate) fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        let values = self.bindings.iter().map(|binding| &binding.value);
+        values.chain([&self.result])
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Binding {
     pub(crate) pattern: Pattern,
@@ -63,6 +71,113 @@ pub(crate) struct Expr {
     pub(crate) span: crate::ast::Span,
     pub(crate) ty: Type,
     pub(crate) kind: ExprKind,
+}
+
+impl Expr {
+    /// Visit each expression directly inside this one, in the order it is
+    /// worked out. A walk matches the forms it has something to say of and
+    /// leaves the rest to this.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per expression form, so a new form must say what is inside it"
+    )]
+    pub(crate) fn for_each_child<'a>(&'a self, mut visit: impl FnMut(&'a Self)) {
+        match &self.kind {
+            ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
+            ExprKind::Construct(_, list)
+            | ExprKind::Tuple(list)
+            | ExprKind::DirectCall(_, list)
+            | ExprKind::Continue(list)
+            | ExprKind::Break(list) => list.iter().for_each(visit),
+            ExprKind::Record(fields) => {
+                for (_, value) in fields {
+                    visit(value);
+                }
+            }
+            ExprKind::Update(base, fields) => {
+                visit(base);
+                for (_, value) in fields {
+                    visit(value);
+                }
+            }
+            ExprKind::Project(inner, _)
+            | ExprKind::Widen(inner)
+            | ExprKind::Try(inner)
+            | ExprKind::Return(inner) => visit(inner),
+            ExprKind::If(condition, yes, no) => {
+                visit(condition);
+                visit(yes);
+                visit(no);
+            }
+            ExprKind::Is(value, rows) => {
+                visit(value);
+                rows.iter()
+                    .filter_map(|(_, guard)| guard.as_ref())
+                    .for_each(visit);
+            }
+            ExprKind::Match(value, arms) => {
+                visit(value);
+                for arm in arms {
+                    let guards = arm.rows.iter().filter_map(|(_, guard)| guard.as_ref());
+                    guards.chain([&arm.body]).for_each(&mut visit);
+                }
+            }
+            ExprKind::Block(body) => body.exprs().for_each(visit),
+            ExprKind::Loop(looped) => {
+                for (initial, _, _) in &looped.carried {
+                    visit(initial);
+                }
+                match &looped.head {
+                    LoopHead::While(value) | LoopHead::For(_, value) => visit(value),
+                }
+                looped.body.exprs().for_each(&mut visit);
+                looped.rest.exprs().for_each(visit);
+            }
+        }
+    }
+
+    /// Visit this expression, then every one inside it.
+    pub(crate) fn for_each_within<'a>(&'a self, visit: &mut impl FnMut(&'a Self)) {
+        visit(self);
+        self.for_each_child(|child| child.for_each_within(visit));
+    }
+
+    /// Visit each local this expression binds itself, not those its
+    /// children bind.
+    pub(crate) fn for_each_bound(&self, mut visit: impl FnMut(LocalId)) {
+        let visit = &mut visit;
+        match &self.kind {
+            ExprKind::Is(_, rows) => rows
+                .iter()
+                .for_each(|(pattern, _)| pattern.for_each_bound(visit)),
+            ExprKind::Match(_, arms) => {
+                let rows = arms.iter().flat_map(|arm| &arm.rows);
+                for (pattern, _) in rows {
+                    pattern.for_each_bound(visit);
+                }
+            }
+            ExprKind::Block(body) => {
+                for binding in &body.bindings {
+                    binding.pattern.for_each_bound(visit);
+                }
+            }
+            // A loop binds what it carries, its pattern, and its lines.
+            ExprKind::Loop(looped) => {
+                for (_, within, after) in &looped.carried {
+                    visit(*within);
+                    visit(*after);
+                }
+                if let LoopHead::For(pattern, _) = &looped.head {
+                    pattern.for_each_bound(visit);
+                }
+                let lines = looped.body.bindings.iter().chain(&looped.rest.bindings);
+                for binding in lines {
+                    binding.pattern.for_each_bound(visit);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

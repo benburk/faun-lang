@@ -107,7 +107,9 @@ fn clause_builders(clause: &mut h::Clause, pairings: &HashSet<Symbol>, sites: &m
     if let Some(guard) = &mut clause.guard {
         builder.expr(guard);
     }
-    builder.body(&mut clause.body);
+    for expression in clause.body.exprs_mut() {
+        builder.expr(expression);
+    }
     clause.locals = builder.next;
 }
 
@@ -125,113 +127,13 @@ impl Builder<'_> {
         local
     }
 
-    fn body(&mut self, body: &mut h::Body) {
-        for binding in &mut body.bindings {
-            self.expr(&mut binding.value);
-        }
-        self.expr(&mut body.result);
-    }
-
-    fn exprs<'e>(&mut self, expressions: impl IntoIterator<Item = &'e mut h::Expr>) {
-        for expression in expressions {
-            self.expr(expression);
-        }
-    }
-
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one arm per expression form, which the walk must reach into"
-    )]
+    /// Each builder inside `expression` first, then `expression` itself.
     fn expr(&mut self, expression: &mut h::Expr) {
-        match &mut expression.kind {
-            h::ExprKind::Loop(looped) => {
-                for (initial, _, _) in &mut looped.carried {
-                    self.expr(initial);
-                }
-                match &mut looped.head {
-                    h::LoopHead::While(condition) => self.expr(condition),
-                    h::LoopHead::For(_, list) => self.expr(list),
-                }
-                for body in [&mut looped.body, &mut looped.rest] {
-                    for binding in &mut body.bindings {
-                        self.expr(&mut binding.value);
-                    }
-                    self.expr(&mut body.result);
-                }
-            }
-            h::ExprKind::Continue(values) | h::ExprKind::Break(values) => {
-                self.exprs(values.iter_mut());
-            }
-            h::ExprKind::Block(body) => {
-                for binding in &mut body.bindings {
-                    self.expr(&mut binding.value);
-                }
-                self.expr(&mut body.result);
-            }
-            h::ExprKind::Local(_)
-            | h::ExprKind::Global(_)
-            | h::ExprKind::Constructor(_)
-            | h::ExprKind::Tag(_)
-            | h::ExprKind::Associated(..)
-            | h::ExprKind::Dual(_)
-            | h::ExprKind::Number(_)
-            | h::ExprKind::Decimal(..) => {}
-            h::ExprKind::String(parts) => {
-                for part in parts {
-                    if let h::StringPart::Splice(inner) = part {
-                        self.expr(inner);
-                    }
-                }
-            }
-            h::ExprKind::List(elements, rest) => {
-                self.exprs(elements.iter_mut());
-                if let Some(rest) = rest {
-                    self.expr(rest);
-                }
-            }
-            h::ExprKind::Record(fields) => self.exprs(fields.iter_mut().map(|(_, value)| value)),
-            h::ExprKind::Update(base, fields) => {
-                self.expr(base);
-                self.exprs(fields.iter_mut().map(|(_, value)| value));
-            }
-            h::ExprKind::Tuple(members) => self.exprs(members.iter_mut()),
-            h::ExprKind::Lambda(_, body)
-            | h::ExprKind::Try(body)
-            | h::ExprKind::Return(body)
-            | h::ExprKind::Unary(_, body) => {
-                self.expr(body);
-            }
-            h::ExprKind::Member(head, _) => self.expr(head),
-            h::ExprKind::Method(head, _, arguments) => {
-                self.expr(head);
-                self.exprs(arguments.iter_mut());
-            }
-            h::ExprKind::Binary(_, left, right) => {
-                self.expr(left);
-                self.expr(right);
-            }
-            h::ExprKind::Is(value, _) => self.expr(value),
-            h::ExprKind::Match(value, arms) => {
-                self.expr(value);
-                for arm in arms {
-                    if let Some(guard) = &mut arm.guard {
-                        self.expr(guard);
-                    }
-                    self.expr(&mut arm.body);
-                }
-            }
-            h::ExprKind::If(condition, yes, no) => {
-                self.expr(condition);
-                self.expr(yes);
-                self.expr(no);
-            }
-            h::ExprKind::Call(head, arguments) => {
-                self.expr(head);
-                self.exprs(arguments.iter_mut());
-                if let Some(built) = self.built(expression.span, head, arguments) {
-                    expression.kind = built;
-                }
-            }
+        expression.for_each_child_mut(|inner| self.expr(inner));
+        if let h::ExprKind::Call(head, arguments) = &expression.kind
+            && let Some(built) = self.built(expression.span, head, arguments)
+        {
+            expression.kind = built;
         }
     }
 

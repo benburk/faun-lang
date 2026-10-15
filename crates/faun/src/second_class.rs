@@ -11,21 +11,20 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ModuleId;
-use crate::diagnostic::{Advised, LowerError};
-use crate::specialize::{Body, Clause, Definition, Expr, ExprKind, FunctionKey, Program, Type};
+use crate::diagnostic::{Advised, Refusal};
+use crate::specialize::{Clause, Definition, Expr, ExprKind, FunctionKey, Program, Type};
 
 /// Refuse the first function value held anywhere but a call's argument.
-pub(crate) fn check(program: &Program, package: &[ModuleId]) -> Result<(), LowerError> {
+pub(crate) fn check(program: &Program, package: &[ModuleId]) -> Result<(), Refusal> {
     for function in &program.functions {
         let Definition::Body(clauses) = &function.definition else {
             continue;
         };
-        for Clause { guard, body, .. } in clauses {
-            let checked = guard
-                .iter()
-                .try_for_each(|guard| value(guard, false))
-                .and_then(|()| self::body(body));
-            if let Err(error) = checked {
+        for clause in clauses {
+            if let Err(error) = clause
+                .exprs()
+                .try_for_each(|expression| value(expression, false))
+            {
                 return Err(blamed(program, package, &function.key, error));
             }
         }
@@ -40,8 +39,8 @@ fn blamed(
     program: &Program,
     package: &[ModuleId],
     refused: &FunctionKey,
-    error: LowerError,
-) -> LowerError {
+    error: Refusal,
+) -> Refusal {
     let Some(held) = error.at else {
         return error;
     };
@@ -76,173 +75,36 @@ fn callers(program: &Program) -> HashMap<&FunctionKey, Vec<(&FunctionKey, &Expr)
         let Definition::Body(clauses) = &function.definition else {
             continue;
         };
-        for Clause { guard, body, .. } in clauses {
-            let expressions = guard
-                .iter()
-                .chain(body.bindings.iter().map(|binding| &binding.value))
-                .chain([&body.result]);
-            for expression in expressions {
-                calls(expression, &mut |callee, call| {
+        for expression in clauses.iter().flat_map(Clause::exprs) {
+            expression.for_each_within(&mut |call| {
+                if let ExprKind::DirectCall(callee, _) = &call.kind {
                     callers
                         .entry(callee)
                         .or_default()
                         .push((&function.key, call));
-                });
-            }
+                }
+            });
         }
     }
     callers
 }
 
-/// The expressions a loop holds: what it carries in, its head, and its
-/// round's and what follows it's lines.
-fn loop_parts(looped: &crate::specialize::Loop) -> Vec<&Expr> {
-    let head = match &looped.head {
-        crate::specialize::LoopHead::While(condition) => condition,
-        crate::specialize::LoopHead::For(_, list) => list,
-    };
-    looped
-        .carried
-        .iter()
-        .map(|(initial, _, _)| initial)
-        .chain([head])
-        .chain([&looped.body, &looped.rest].into_iter().flat_map(|body| {
-            body.bindings
-                .iter()
-                .map(|binding| &binding.value)
-                .chain([&body.result])
-        }))
-        .collect()
-}
-
-/// Each call in `expression` naming a definition, with what it names.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm for each kind of expression, to reach every call it holds"
-)]
-fn calls<'a>(expression: &'a Expr, found: &mut impl FnMut(&'a FunctionKey, &'a Expr)) {
-    let inner: Vec<&Expr> = match &expression.kind {
-        ExprKind::Local(_)
-        | ExprKind::Function(_)
-        | ExprKind::ConstructorFunction(_)
-        | ExprKind::Natural(_)
-        | ExprKind::Bytes(_) => Vec::new(),
-        ExprKind::Construct(_, fields) | ExprKind::Tuple(fields) => fields.iter().collect(),
-        ExprKind::Record(fields) => fields.iter().map(|(_, field)| field).collect(),
-        ExprKind::Update(base, fields) => std::iter::once(&**base)
-            .chain(fields.iter().map(|(_, field)| field))
-            .collect(),
-        ExprKind::Project(inner, _)
-        | ExprKind::Lambda(_, _, inner)
-        | ExprKind::Widen(inner)
-        | ExprKind::Try(inner)
-        | ExprKind::Return(inner) => vec![&**inner],
-        ExprKind::If(condition, yes, no) => vec![&**condition, &**yes, &**no],
-        ExprKind::Is(value, rows) => std::iter::once(&**value)
-            .chain(rows.iter().filter_map(|(_, guard)| guard.as_ref()))
-            .collect(),
-        ExprKind::Loop(looped) => loop_parts(looped),
-        ExprKind::Continue(values) | ExprKind::Break(values) => values.iter().collect(),
-        ExprKind::Match(value, arms) => std::iter::once(&**value)
-            .chain(arms.iter().flat_map(|arm| {
-                arm.rows
-                    .iter()
-                    .filter_map(|(_, guard)| guard.as_ref())
-                    .chain([&arm.body])
-            }))
-            .collect(),
-        ExprKind::DirectCall(callee, arguments) => {
-            found(callee, expression);
-            arguments.iter().collect()
-        }
-        ExprKind::Invoke(head, arguments) => std::iter::once(&**head).chain(arguments).collect(),
-        ExprKind::Block(body) => body
-            .bindings
-            .iter()
-            .map(|binding| &binding.value)
-            .chain([&body.result])
-            .collect(),
-    };
-    for expression in inner {
-        calls(expression, found);
-    }
-}
-
-fn body(body: &Body) -> Result<(), LowerError> {
-    for binding in &body.bindings {
-        value(&binding.value, false)?;
-    }
-    value(&body.result, false)
-}
-
 /// Check `expression`, which is a call's argument or head when `passed`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm for each kind of expression, to reach every one it holds"
-)]
-fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
+/// A block answers a value: a function stands in none of its lines.
+fn value(expression: &Expr, passed: bool) -> Result<(), Refusal> {
     placed(expression, passed)?;
     match &expression.kind {
-        ExprKind::Local(_)
-        | ExprKind::Function(_)
-        | ExprKind::ConstructorFunction(_)
-        | ExprKind::Natural(_)
-        | ExprKind::Bytes(_) => Ok(()),
-        ExprKind::Construct(_, fields) => fields.iter().try_for_each(|field| value(field, false)),
-        ExprKind::Record(fields) => fields.iter().try_for_each(|(_, field)| value(field, false)),
-        ExprKind::Update(base, fields) => {
-            value(base, false)?;
-            fields.iter().try_for_each(|(_, field)| value(field, false))
+        ExprKind::DirectCall(..) | ExprKind::Invoke(..) => {
+            expression.try_for_each_child(|inner| value(inner, true))
         }
-        ExprKind::Tuple(members) => members.iter().try_for_each(|member| value(member, false)),
-        ExprKind::Project(receiver, _) => value(receiver, false),
-        // A block answers a value: a function stands in none of its lines.
-        ExprKind::Block(inner) => body(inner),
-        ExprKind::DirectCall(_, arguments) => arguments
-            .iter()
-            .try_for_each(|argument| value(argument, true)),
-        ExprKind::Invoke(head, arguments) => {
-            value(head, true)?;
-            arguments
-                .iter()
-                .try_for_each(|argument| value(argument, true))
-        }
-        ExprKind::Lambda(_, _, result) => value(result, false),
         ExprKind::Widen(inner) => value(inner, passed),
-        ExprKind::Try(inner) | ExprKind::Return(inner) => value(inner, false),
-        ExprKind::Is(tested, rows) => {
-            value(tested, false)?;
-            rows.iter()
-                .filter_map(|(_, guard)| guard.as_ref())
-                .try_for_each(|guard| value(guard, false))
-        }
-        ExprKind::If(condition, yes, no) => {
-            value(condition, false)?;
-            value(yes, false)?;
-            value(no, false)
-        }
-        ExprKind::Loop(looped) => loop_parts(looped)
-            .into_iter()
-            .try_for_each(|part| value(part, false)),
-        ExprKind::Continue(values) | ExprKind::Break(values) => {
-            values.iter().try_for_each(|part| value(part, false))
-        }
-        ExprKind::Match(tested, arms) => {
-            value(tested, false)?;
-            arms.iter().try_for_each(|arm| {
-                arm.rows
-                    .iter()
-                    .filter_map(|(_, guard)| guard.as_ref())
-                    .try_for_each(|guard| value(guard, false))?;
-                value(&arm.body, false)
-            })
-        }
+        _ => expression.try_for_each_child(|inner| value(inner, false)),
     }
 }
 
 /// A function, which may only go straight into a call, and never one with
 /// no parameters, which is a value.
-fn placed(expression: &Expr, passed: bool) -> Result<(), LowerError> {
+fn placed(expression: &Expr, passed: bool) -> Result<(), Refusal> {
     let Type::Function(signature) = &expression.ty else {
         return Ok(());
     };
@@ -262,6 +124,6 @@ fn placed(expression: &Expr, passed: bool) -> Result<(), LowerError> {
     Ok(())
 }
 
-fn located(expression: &Expr, message: &str) -> LowerError {
-    LowerError::new(message, Some((expression.module, expression.span)))
+fn located(expression: &Expr, message: &str) -> Refusal {
+    Refusal::at(expression.module, expression.span, message)
 }

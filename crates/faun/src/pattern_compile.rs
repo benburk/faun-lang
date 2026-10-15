@@ -14,7 +14,7 @@ use num_traits::ToPrimitive;
 
 use crate::blessed::PreludeIds;
 use crate::declarations::Data;
-use crate::diagnostic::LowerError;
+use crate::diagnostic::Refusal;
 use crate::first_order::{self as d, Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::specialize::{FunctionKey, Instance, Pattern, Signature, Split, Type};
@@ -85,7 +85,7 @@ pub(crate) fn compile(
     program: d::Program,
     prelude: &PreludeIds,
     symbols: &Symbols,
-) -> Result<Program, LowerError> {
+) -> Result<Program, Refusal> {
     let joins = Joins::default();
     let compiler = Compiler {
         data: &program.data,
@@ -126,7 +126,7 @@ pub(crate) fn compile(
                                 locals: HashMap::new(),
                             })
                         })
-                        .collect::<Result<Vec<_>, LowerError>>()?;
+                        .collect::<Result<Vec<_>, Refusal>>()?;
                     let mut next = u32::try_from(subjects.len()).expect("a sane arity");
                     let planning = Compiler {
                         clauses: Some(Rc::new(Clauses::of(&function.key))),
@@ -140,7 +140,7 @@ pub(crate) fn compile(
                 definition,
             })
         })
-        .collect::<Result<_, LowerError>>()?;
+        .collect::<Result<_, Refusal>>()?;
     functions.extend(joins.functions.into_inner());
     Ok(Program {
         entry: program.entry,
@@ -351,7 +351,7 @@ enum RunOut {
 impl Compiler<'_> {
     /// A body the function answers, made so that each branch that may
     /// leave answers it too; see [`Self::joined`].
-    fn tail_body(&self, body: d::Body, key: &FunctionKey) -> Result<Body, LowerError> {
+    fn tail_body(&self, body: d::Body, key: &FunctionKey) -> Result<Body, Refusal> {
         self.tail_body_then(body, key, None)
     }
 
@@ -361,7 +361,7 @@ impl Compiler<'_> {
         body: d::Body,
         key: &FunctionKey,
         then: Option<&(FunctionKey, Vec<(LocalId, Type)>)>,
-    ) -> Result<Body, LowerError> {
+    ) -> Result<Body, Refusal> {
         let body = d::Body {
             bindings: body
                 .bindings
@@ -422,7 +422,7 @@ impl Compiler<'_> {
         (module, span): (ModuleId, crate::ast::Span),
         key: &FunctionKey,
         then: Option<&(FunctionKey, Vec<(LocalId, Type)>)>,
-    ) -> Result<Expr, LowerError> {
+    ) -> Result<Expr, Refusal> {
         let answer = key.signature.result.as_ref().clone();
         let d::Loop {
             carried,
@@ -663,7 +663,7 @@ impl Compiler<'_> {
     /// of the branch's value and what they read, which each branch going
     /// on calls; a branch leaving answers the function itself. The same is
     /// made of each branch, and of the join point, in turn.
-    fn joined(&self, mut body: d::Body, key: &FunctionKey) -> Result<d::Body, LowerError> {
+    fn joined(&self, mut body: d::Body, key: &FunctionKey) -> Result<d::Body, Refusal> {
         let Some(at) = body
             .bindings
             .iter()
@@ -746,8 +746,8 @@ impl Compiler<'_> {
         answer: &Type,
         join: Option<&(FunctionKey, Vec<(LocalId, Type)>)>,
         key: &FunctionKey,
-    ) -> Result<Expr, LowerError> {
-        let branch = |branch: Expr| -> Result<Expr, LowerError> {
+    ) -> Result<Expr, Refusal> {
+        let branch = |branch: Expr| -> Result<Expr, Refusal> {
             let ExprKind::Block(body) = branch.kind else {
                 unreachable!("hoisting makes each branch a block")
             };
@@ -805,7 +805,7 @@ impl Compiler<'_> {
                             body: branch(arm.body)?,
                         })
                     })
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             _ => unreachable!("only an `if` or arms has branches that leave"),
         };
@@ -817,7 +817,7 @@ impl Compiler<'_> {
         })
     }
 
-    fn body(&self, body: d::Body) -> Result<Body, LowerError> {
+    fn body(&self, body: d::Body) -> Result<Body, Refusal> {
         let body = d::Body {
             bindings: body
                 .bindings
@@ -841,7 +841,7 @@ impl Compiler<'_> {
         alternatives: Vec<(Pattern, Option<Expr>)>,
         yes: d::Body,
         no: d::Body,
-    ) -> Result<Bound, LowerError> {
+    ) -> Result<Bound, Refusal> {
         let subjects = [Subject {
             value: Value(0),
             ty: subject.ty.clone(),
@@ -872,7 +872,7 @@ impl Compiler<'_> {
     /// `subject is ( arms )`, as a decision on the subject: a row for each
     /// alternative of each arm, in order, each answering its arm's body.
     /// Checking found the arms cover every value.
-    fn arms(&self, subject: Expr, arms: Vec<d::Arm>) -> Result<Bound, LowerError> {
+    fn arms(&self, subject: Expr, arms: Vec<d::Arm>) -> Result<Bound, Refusal> {
         let subjects = [Subject {
             value: Value(0),
             ty: subject.ty.clone(),
@@ -903,7 +903,7 @@ impl Compiler<'_> {
 
     /// A body [`hoisted`] already, whose `if`s each stand alone on a line,
     /// their branches hoisted too.
-    fn compiled(&self, body: d::Body) -> Result<Body, LowerError> {
+    fn compiled(&self, body: d::Body) -> Result<Body, Refusal> {
         let bindings = body
             .bindings
             .into_iter()
@@ -936,14 +936,14 @@ impl Compiler<'_> {
                 };
                 Ok(Binding { unpack, value })
             })
-            .collect::<Result<_, LowerError>>()?;
+            .collect::<Result<_, Refusal>>()?;
         Ok(Body {
             bindings,
             result: self.left(body.result),
         })
     }
 
-    fn unpack(&self, pattern: Pattern, ty: &Type) -> Result<Unpack, LowerError> {
+    fn unpack(&self, pattern: Pattern, ty: &Type) -> Result<Unpack, Refusal> {
         let fields = match (pattern, ty) {
             (Pattern::Wild, _) => return Ok(Unpack::Ignore),
             (Pattern::Bind(local), _) => return Ok(Unpack::Bind(local)),
@@ -968,7 +968,7 @@ impl Compiler<'_> {
                 let [(only, fields)] = constructors.as_slice() else {
                     return Err(error(format!(
                         "a binding takes apart only what always matches, and `{}` is one of several constructors",
-                        source_name(constructor, self.symbols)
+                        self.symbols.spelling(constructor)
                     )));
                 };
                 debug_assert_eq!(*only, constructor, "checking matched the constructor");
@@ -995,7 +995,7 @@ impl Compiler<'_> {
         rows: &[Row],
         subjects: &[Subject],
         next: &mut u32,
-    ) -> Result<Decision, LowerError> {
+    ) -> Result<Decision, Refusal> {
         if let Some(clauses) = &self.clauses {
             let mut types = clauses.types.borrow_mut();
             for subject in subjects {
@@ -1250,7 +1250,7 @@ impl Compiler<'_> {
         alternatives: Vec<(Pattern, Option<Expr>)>,
         (rows, subjects): (&[Row], &[Subject]),
         next: &mut u32,
-    ) -> Result<Decision, LowerError> {
+    ) -> Result<Decision, Refusal> {
         let value = Value(*next);
         *next = next.checked_add(1).expect("fewer than 2^32 plan values");
         let mut tested = subjects.to_vec();
@@ -1291,7 +1291,7 @@ impl Compiler<'_> {
     /// failing has every row below it planned again on each way it fails,
     /// and each of those again, which a join point plans once. Rows no
     /// more than a catch-all are kept, as copying one copies nothing more.
-    fn rest(&self, rest: &[Row], subjects: &[Subject]) -> Result<Vec<Row>, LowerError> {
+    fn rest(&self, rest: &[Row], subjects: &[Subject]) -> Result<Vec<Row>, Refusal> {
         let Some(clauses) = &self.clauses else {
             return Ok(rest.to_vec());
         };
@@ -1414,7 +1414,7 @@ impl Compiler<'_> {
         column: usize,
         split: Split,
         next: &mut u32,
-    ) -> Result<Decision, LowerError> {
+    ) -> Result<Decision, Refusal> {
         let subject = &subjects[column];
         let count = split.last.len();
         let mut fresh = || {
@@ -1514,7 +1514,7 @@ impl Compiler<'_> {
         first.filter(|_| largest > num_bigint::BigUint::from(peeled))
     }
 
-    fn normalize_pattern(&self, pattern: Pattern, expected: &Type) -> Result<Pattern, LowerError> {
+    fn normalize_pattern(&self, pattern: Pattern, expected: &Type) -> Result<Pattern, Refusal> {
         match pattern {
             Pattern::Number {
                 magnitude,
@@ -1570,7 +1570,7 @@ impl Compiler<'_> {
         magnitude: num_bigint::BigUint,
         negative: bool,
         expected: &Type,
-    ) -> Result<Pattern, LowerError> {
+    ) -> Result<Pattern, Refusal> {
         let Type::Named(name, arguments) = expected else {
             return Err(error("numeric pattern does not have a named type"));
         };
@@ -1611,7 +1611,7 @@ impl Compiler<'_> {
         Err(error("a numeric pattern must infer as Nat or Int"))
     }
 
-    fn natural_pattern(&self, magnitude: &num_bigint::BigUint) -> Result<Pattern, LowerError> {
+    fn natural_pattern(&self, magnitude: &num_bigint::BigUint) -> Result<Pattern, Refusal> {
         const MAX_PATTERN_MAGNITUDE: usize = 1_024;
         let count = magnitude
             .to_usize()
@@ -1666,7 +1666,7 @@ fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
 fn exported(mut body: d::Body) -> d::Body {
     let mut read = HashSet::new();
     let reads = |expression: &Expr, read: &mut HashSet<LocalId>| {
-        each_expr(expression, &mut |inner| {
+        expression.for_each_within(&mut |inner| {
             if let ExprKind::Local(local) = inner.kind {
                 read.insert(local);
             }
@@ -1863,7 +1863,7 @@ fn branches_leave(value: &Expr) -> bool {
 /// Whether a `?` or a `return` is anywhere in `expression`.
 fn leaves(expression: &Expr) -> bool {
     let mut found = false;
-    each_expr(expression, &mut |inner| {
+    expression.for_each_within(&mut |inner| {
         found |= matches!(
             inner.kind,
             ExprKind::Try(_)
@@ -1885,163 +1885,26 @@ fn live_in(rest: &d::Body, answered: LocalId) -> Vec<(LocalId, Type)> {
 /// What `body` reads that neither it binds nor `own` holds, each at its
 /// type, in order.
 fn free_in(body: &d::Body, own: &HashSet<LocalId>) -> Vec<(LocalId, Type)> {
-    let rest = body;
     let mut read = BTreeMap::new();
     let mut bound = own.clone();
-    for binding in &rest.bindings {
-        pattern_bound(&binding.pattern, &mut bound);
+    for binding in &body.bindings {
+        binding.pattern.for_each_bound(&mut |local| {
+            bound.insert(local);
+        });
     }
-    let mut visit = |inner: &Expr| match &inner.kind {
-        ExprKind::Local(local) => {
-            read.entry(*local).or_insert_with(|| inner.ty.clone());
-        }
-        ExprKind::Block(body) => {
-            for binding in &body.bindings {
-                pattern_bound(&binding.pattern, &mut bound);
+    for expression in body.exprs() {
+        expression.for_each_within(&mut |inner| {
+            if let ExprKind::Local(local) = inner.kind {
+                read.entry(local).or_insert_with(|| inner.ty.clone());
             }
-        }
-        ExprKind::Is(_, rows) => {
-            for (pattern, _) in rows {
-                pattern_bound(pattern, &mut bound);
-            }
-        }
-        ExprKind::Match(_, arms) => {
-            for (pattern, _) in arms.iter().flat_map(|arm| &arm.rows) {
-                pattern_bound(pattern, &mut bound);
-            }
-        }
-        ExprKind::Loop(looped) => {
-            for (_, within, after) in &looped.carried {
-                bound.extend([*within, *after]);
-            }
-            if let d::LoopHead::For(pattern, _) = &looped.head {
-                pattern_bound(pattern, &mut bound);
-            }
-            for binding in looped.body.bindings.iter().chain(&looped.rest.bindings) {
-                pattern_bound(&binding.pattern, &mut bound);
-            }
-        }
-        _ => {}
-    };
-    for binding in &rest.bindings {
-        each_expr(&binding.value, &mut visit);
+            inner.for_each_bound(|local| {
+                bound.insert(local);
+            });
+        });
     }
-    each_expr(&rest.result, &mut visit);
     read.into_iter()
         .filter(|(local, _)| !bound.contains(local))
         .collect()
-}
-
-/// The locals `pattern` binds.
-fn pattern_bound(pattern: &Pattern, bound: &mut HashSet<LocalId>) {
-    match pattern {
-        Pattern::Bind(local) => {
-            bound.insert(*local);
-        }
-        Pattern::As(local, inner) => {
-            bound.insert(*local);
-            pattern_bound(inner, bound);
-        }
-        Pattern::Constructor(_, parts) | Pattern::Product(parts) => {
-            for part in parts {
-                pattern_bound(part, bound);
-            }
-        }
-        Pattern::List(elements, rest) => {
-            for part in elements.iter().chain(rest.as_deref()) {
-                pattern_bound(part, bound);
-            }
-        }
-        Pattern::Record(fields) => {
-            for (_, part) in fields {
-                pattern_bound(part, bound);
-            }
-        }
-        Pattern::Split(split) => {
-            for part in std::iter::once(&split.front).chain(&split.last) {
-                pattern_bound(part, bound);
-            }
-        }
-        Pattern::Wild
-        | Pattern::Number { .. }
-        | Pattern::Range
-        | Pattern::String
-        | Pattern::Ending => {}
-    }
-}
-
-/// `visit` on `expression` and every expression inside it.
-fn each_expr(expression: &Expr, visit: &mut impl FnMut(&Expr)) {
-    visit(expression);
-    match &expression.kind {
-        ExprKind::Loop(looped) => {
-            for (initial, _, _) in &looped.carried {
-                each_expr(initial, visit);
-            }
-            match &looped.head {
-                d::LoopHead::While(condition) => each_expr(condition, visit),
-                d::LoopHead::For(_, list) => each_expr(list, visit),
-            }
-            for body in [&looped.body, &looped.rest] {
-                for binding in &body.bindings {
-                    each_expr(&binding.value, visit);
-                }
-                each_expr(&body.result, visit);
-            }
-        }
-        ExprKind::Continue(values) | ExprKind::Break(values) => {
-            for value in values {
-                each_expr(value, visit);
-            }
-        }
-        ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
-        ExprKind::Construct(_, list) | ExprKind::Tuple(list) | ExprKind::DirectCall(_, list) => {
-            for inner in list {
-                each_expr(inner, visit);
-            }
-        }
-        ExprKind::Record(fields) => {
-            for (_, inner) in fields {
-                each_expr(inner, visit);
-            }
-        }
-        ExprKind::Update(base, fields) => {
-            each_expr(base, visit);
-            for (_, inner) in fields {
-                each_expr(inner, visit);
-            }
-        }
-        ExprKind::Project(inner, _)
-        | ExprKind::Widen(inner)
-        | ExprKind::Try(inner)
-        | ExprKind::Return(inner) => each_expr(inner, visit),
-        ExprKind::If(condition, yes, no) => {
-            for inner in [condition, yes, no] {
-                each_expr(inner, visit);
-            }
-        }
-        ExprKind::Is(value, rows) => {
-            each_expr(value, visit);
-            for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
-                each_expr(guard, visit);
-            }
-        }
-        ExprKind::Match(value, arms) => {
-            each_expr(value, visit);
-            for arm in arms {
-                for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
-                    each_expr(guard, visit);
-                }
-                each_expr(&arm.body, visit);
-            }
-        }
-        ExprKind::Block(body) => {
-            for binding in &body.bindings {
-                each_expr(&binding.value, visit);
-            }
-            each_expr(&body.result, visit);
-        }
-    }
 }
 
 /// `expression` with every test the condition of an `if` of its own: an
@@ -2224,7 +2087,7 @@ fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
     let (module, span) = (condition.module, condition.span);
     let bound = bound_by(&condition, prelude);
     let mut read: Vec<(LocalId, Type)> = Vec::new();
-    each_expr(&yes, &mut |expression| {
+    yes.for_each_within(&mut |expression| {
         if let ExprKind::Local(local) = expression.kind
             && bound.contains(&local)
             && !read.iter().any(|(seen, _)| *seen == local)
@@ -2288,7 +2151,7 @@ fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
 /// more than a value.
 fn branches(expression: &Expr) -> bool {
     let mut found = false;
-    each_expr(expression, &mut |part| {
+    expression.for_each_within(&mut |part| {
         found |= matches!(
             part.kind,
             ExprKind::If(..) | ExprKind::Match(..) | ExprKind::Loop(..) | ExprKind::Block(..)
@@ -2304,7 +2167,9 @@ fn bound_by(condition: &Expr, prelude: &PreludeIds) -> HashSet<LocalId> {
         ExprKind::Is(_, alternatives) => {
             let each = alternatives.iter().map(|(pattern, guard)| {
                 let mut bound = HashSet::new();
-                pattern_bound(pattern, &mut bound);
+                pattern.for_each_bound(&mut |local| {
+                    bound.insert(local);
+                });
                 if let Some(guard) = guard {
                     bound.extend(bound_by(guard, prelude));
                 }
@@ -2582,16 +2447,8 @@ const fn irrefutable(pattern: &Pattern) -> bool {
     matches!(pattern, Pattern::Wild | Pattern::Bind(_))
 }
 
-fn source_name(symbol: Symbol, symbols: &Symbols) -> &str {
-    // Resolution prefixes globals with a module identity separated by `$$`.
-    let canonical = symbols.text(symbol);
-    canonical
-        .rsplit_once("$$")
-        .map_or(canonical, |(_, spelling)| spelling)
-}
-
-fn error(message: impl Into<String>) -> LowerError {
-    LowerError::new(message.into(), None)
+fn error(message: impl Into<String>) -> Refusal {
+    Refusal::from(message.into())
 }
 
 #[cfg(test)]

@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::Symbol;
-use crate::diagnostic::{Advised, LowerError};
+use crate::diagnostic::{Advised, Refusal};
 use crate::first_order as d;
 use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
@@ -40,7 +40,7 @@ use crate::specialize::{
 /// Return first-order IR directly. The input must have passed
 /// [`crate::second_class::check`]; source sites identify lambdas even when
 /// generated lambdas share a diagnostic span. Failure exposes no partial output.
-pub(crate) fn lower(program: Program) -> Result<d::Program, LowerError> {
+pub(crate) fn lower(program: Program) -> Result<d::Program, Refusal> {
     let mut pass = Callbacks::new(&program);
     let mut functions = Vec::with_capacity(program.functions.len());
     for function in &program.functions {
@@ -211,7 +211,9 @@ impl<'a> Callbacks<'a> {
                             });
                     }
                 };
-                for_each_in_clause(clause, &mut found);
+                for expression in clause.exprs() {
+                    expression.for_each_within(&mut found);
+                }
             }
         }
         Self {
@@ -259,7 +261,7 @@ impl<'a> Callbacks<'a> {
         source: &Source,
         callbacks: &[Callback],
         key: FunctionKey,
-    ) -> Result<d::Function, LowerError> {
+    ) -> Result<d::Function, Refusal> {
         match source {
             Source::Written(written) => {
                 let function = self.functions[written];
@@ -278,7 +280,7 @@ impl<'a> Callbacks<'a> {
         function: &Function,
         frame: &Frame,
         callbacks: &[Callback],
-    ) -> Result<d::Function, LowerError> {
+    ) -> Result<d::Function, Refusal> {
         let written = match &function.definition {
             Definition::External(provider) => {
                 return Ok(d::Function {
@@ -329,13 +331,13 @@ impl<'a> Callbacks<'a> {
         owner: &FunctionKey,
         site: SiteId,
         callbacks: &[Callback],
-    ) -> Result<d::Function, LowerError> {
+    ) -> Result<d::Function, Refusal> {
         let lambda = &self.lambdas[&(owner.clone(), site)];
         let (patterns, body, ty) = (lambda.patterns, lambda.body, lambda.ty);
         let captures = captures(patterns, body);
         let mut highest = expr_highest(body);
         for pattern in patterns {
-            highest = highest.max(pattern_highest(pattern));
+            pattern.for_each_bound(&mut |local| highest = highest.max(local.0));
         }
         for (local, _) in &captures {
             highest = highest.max(local.0);
@@ -389,7 +391,7 @@ impl<'a> Callbacks<'a> {
         })
     }
 
-    fn body(&mut self, frame: &mut Frame, body: &Body) -> Result<d::Body, LowerError> {
+    fn body(&mut self, frame: &mut Frame, body: &Body) -> Result<d::Body, Refusal> {
         let bindings = body
             .bindings
             .iter()
@@ -399,18 +401,18 @@ impl<'a> Callbacks<'a> {
                     value: self.expr(frame, &binding.value)?,
                 })
             })
-            .collect::<Result<_, LowerError>>()?;
+            .collect::<Result<_, Refusal>>()?;
         Ok(d::Body {
             bindings,
             result: self.expr(frame, &body.result)?,
         })
     }
 
-    fn exprs(&mut self, frame: &mut Frame, list: &[Expr]) -> Result<Vec<d::Expr>, LowerError> {
+    fn exprs(&mut self, frame: &mut Frame, list: &[Expr]) -> Result<Vec<d::Expr>, Refusal> {
         list.iter().map(|each| self.expr(frame, each)).collect()
     }
 
-    fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, LowerError> {
+    fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, Refusal> {
         let kind = match &expression.kind {
             ExprKind::Block(body) => d::ExprKind::Block(Box::new(self.body(frame, body)?)),
             ExprKind::Loop(looped) => d::ExprKind::Loop(Box::new(d::Loop {
@@ -420,7 +422,7 @@ impl<'a> Callbacks<'a> {
                     .map(|(initial, within, after)| {
                         Ok((self.expr(frame, initial)?, *within, *after))
                     })
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
                 head: match &looped.head {
                     LoopHead::While(condition) => d::LoopHead::While(self.expr(frame, condition)?),
                     LoopHead::For(pattern, list) => {
@@ -454,14 +456,14 @@ impl<'a> Callbacks<'a> {
                 fields
                     .iter()
                     .map(|(name, field)| Ok((*name, self.expr(frame, field)?)))
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             ExprKind::Update(base, fields) => d::ExprKind::Update(
                 Box::new(self.expr(frame, base)?),
                 fields
                     .iter()
                     .map(|(name, field)| Ok((*name, self.expr(frame, field)?)))
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             ExprKind::Tuple(members) => d::ExprKind::Tuple(self.exprs(frame, members)?),
             ExprKind::Project(receiver, field) => {
@@ -480,7 +482,7 @@ impl<'a> Callbacks<'a> {
                             .transpose()?;
                         Ok((pattern.clone(), guard))
                     })
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             ExprKind::If(condition, yes, no) => d::ExprKind::If(
                 Box::new(self.expr(frame, condition)?),
@@ -501,13 +503,13 @@ impl<'a> Callbacks<'a> {
                                     .transpose()?;
                                 Ok((pattern.clone(), guard))
                             })
-                            .collect::<Result<_, LowerError>>()?;
+                            .collect::<Result<_, Refusal>>()?;
                         Ok(d::Arm {
                             rows,
                             body: self.expr(frame, &arm.body)?,
                         })
                     })
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             ExprKind::DirectCall(key, arguments) => self.call(frame, key, arguments)?,
             ExprKind::Invoke(head, arguments) => {
@@ -530,7 +532,7 @@ impl<'a> Callbacks<'a> {
         frame: &mut Frame,
         key: &FunctionKey,
         arguments: &[Expr],
-    ) -> Result<d::ExprKind, LowerError> {
+    ) -> Result<d::ExprKind, Refusal> {
         if !takes_function(key) {
             return Ok(d::ExprKind::DirectCall(
                 key.clone(),
@@ -554,7 +556,7 @@ impl<'a> Callbacks<'a> {
         carried: Vec<d::Expr>,
         arguments: &[Expr],
         answer: &Type,
-    ) -> Result<d::ExprKind, LowerError> {
+    ) -> Result<d::ExprKind, Refusal> {
         match callback {
             Callback::Function(key) => self.call(frame, &key, arguments),
             Callback::Constructor(constructor, _) => Ok(d::ExprKind::Construct(
@@ -585,7 +587,7 @@ impl<'a> Callbacks<'a> {
 
     /// `arguments` as a call hands them: each function among them as its
     /// callback, and what it carries in its place.
-    fn hand(&mut self, frame: &mut Frame, arguments: &[Expr]) -> Result<Handed, LowerError> {
+    fn hand(&mut self, frame: &mut Frame, arguments: &[Expr]) -> Result<Handed, Refusal> {
         let mut handed = Handed {
             callbacks: Vec::new(),
             arguments: Vec::with_capacity(arguments.len()),
@@ -604,7 +606,7 @@ impl<'a> Callbacks<'a> {
 }
 
 /// The callback a function value is, and what it carries.
-fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<d::Expr>), LowerError> {
+fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<d::Expr>), Refusal> {
     let local = |(local, ty): &(LocalId, Type)| d::Expr {
         module: expression.module,
         span: expression.span,
@@ -689,365 +691,58 @@ fn takes_function(key: &FunctionKey) -> bool {
         .any(|parameter| matches!(parameter, Type::Function(_)))
 }
 
-/// Visit every expression in `clause`, lambdas' bodies included.
-fn for_each_in_clause<'a>(clause: &'a Clause, visit: &mut impl FnMut(&'a Expr)) {
-    if let Some(guard) = &clause.guard {
-        for_each(guard, visit);
-    }
-    for binding in &clause.body.bindings {
-        for_each(&binding.value, visit);
-    }
-    for_each(&clause.body.result, visit);
-}
-
-fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
-    visit(expression);
-    match &expression.kind {
-        ExprKind::Local(_)
-        | ExprKind::Function(_)
-        | ExprKind::ConstructorFunction(_)
-        | ExprKind::Natural(_)
-        | ExprKind::Bytes(_) => {}
-        ExprKind::Construct(_, list) | ExprKind::Tuple(list) | ExprKind::DirectCall(_, list) => {
-            for each in list {
-                for_each(each, visit);
-            }
-        }
-        ExprKind::Record(fields) => {
-            for (_, field) in fields {
-                for_each(field, visit);
-            }
-        }
-        ExprKind::Update(base, fields) => {
-            for_each(base, visit);
-            for (_, field) in fields {
-                for_each(field, visit);
-            }
-        }
-        ExprKind::Project(value, _)
-        | ExprKind::Widen(value)
-        | ExprKind::Try(value)
-        | ExprKind::Return(value) => {
-            for_each(value, visit);
-        }
-        ExprKind::If(condition, yes, no) => {
-            for each in [condition, yes, no] {
-                for_each(each, visit);
-            }
-        }
-        ExprKind::Is(value, rows) => {
-            for_each(value, visit);
-            for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
-                for_each(guard, visit);
-            }
-        }
-        ExprKind::Match(value, arms) => {
-            for_each(value, visit);
-            for arm in arms {
-                for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
-                    for_each(guard, visit);
-                }
-                for_each(&arm.body, visit);
-            }
-        }
-        ExprKind::Invoke(head, arguments) => {
-            for_each(head, visit);
-            for each in arguments {
-                for_each(each, visit);
-            }
-        }
-        ExprKind::Lambda(_, _, body) => for_each(body, visit),
-        ExprKind::Block(body) => {
-            for binding in &body.bindings {
-                for_each(&binding.value, visit);
-            }
-            for_each(&body.result, visit);
-        }
-        ExprKind::Loop(looped) => {
-            for (initial, _, _) in &looped.carried {
-                for_each(initial, visit);
-            }
-            match &looped.head {
-                LoopHead::While(condition) => for_each(condition, visit),
-                LoopHead::For(_, list) => for_each(list, visit),
-            }
-            for body in [&looped.body, &looped.rest] {
-                for binding in &body.bindings {
-                    for_each(&binding.value, visit);
-                }
-                for_each(&body.result, visit);
-            }
-        }
-        ExprKind::Continue(values) | ExprKind::Break(values) => {
-            for value in values {
-                for_each(value, visit);
-            }
-        }
-    }
-}
-
-/// The highest local `clause` names anywhere.
+/// The highest local `clause` names anywhere, reading or binding it.
 fn clause_highest(clause: &Clause) -> u32 {
-    let mut highest = clause
-        .patterns
-        .iter()
-        .map(pattern_highest)
-        .max()
-        .unwrap_or(0);
-    for binding in &clause.body.bindings {
-        highest = highest.max(pattern_highest(&binding.pattern));
+    let mut highest = 0;
+    let lines = clause.body.bindings.iter().map(|binding| &binding.pattern);
+    for pattern in clause.patterns.iter().chain(lines) {
+        pattern.for_each_bound(&mut |local| highest = highest.max(local.0));
     }
-    let mut visit = |expression: &Expr| {
-        highest = highest.max(expr_local_highest(expression));
-    };
-    for_each_in_clause(clause, &mut visit);
-    highest
+    clause.exprs().map(expr_highest).fold(highest, u32::max)
 }
 
+/// The highest local `expression` names anywhere, reading or binding it.
 fn expr_highest(expression: &Expr) -> u32 {
     let mut highest = 0;
-    for_each(expression, &mut |each: &Expr| {
-        highest = highest.max(expr_local_highest(each));
+    expression.for_each_within(&mut |inner| {
+        if let ExprKind::Local(local) = inner.kind {
+            highest = highest.max(local.0);
+        }
+        inner.for_each_bound(|local| highest = highest.max(local.0));
     });
     highest
 }
 
-/// The highest local `expression` itself names or binds, not its parts'.
-fn expr_local_highest(expression: &Expr) -> u32 {
-    match &expression.kind {
-        ExprKind::Local(local) => local.0,
-        ExprKind::Lambda(_, patterns, _) => patterns.iter().map(pattern_highest).max().unwrap_or(0),
-        ExprKind::Block(body) => body
-            .bindings
-            .iter()
-            .map(|binding| pattern_highest(&binding.pattern))
-            .max()
-            .unwrap_or(0),
-        _ => 0,
-    }
+fn located(expression: &Expr, message: &str) -> Refusal {
+    Refusal::at(expression.module, expression.span, message)
 }
 
-fn pattern_highest(pattern: &Pattern) -> u32 {
-    match pattern {
-        Pattern::Bind(local) => local.0,
-        Pattern::As(local, pattern) => local.0.max(pattern_highest(pattern)),
-        Pattern::Constructor(_, fields) | Pattern::Product(fields) => {
-            fields.iter().map(pattern_highest).max().unwrap_or(0)
-        }
-        Pattern::List(elements, rest) => elements
-            .iter()
-            .chain(rest.as_deref())
-            .map(pattern_highest)
-            .max()
-            .unwrap_or(0),
-        Pattern::Record(fields) => fields
-            .iter()
-            .map(|(_, field)| pattern_highest(field))
-            .max()
-            .unwrap_or(0),
-        Pattern::Split(split) => std::iter::once(&split.front)
-            .chain(&split.last)
-            .map(pattern_highest)
-            .max()
-            .unwrap_or(0),
-        Pattern::Wild
-        | Pattern::Number { .. }
-        | Pattern::Range
-        | Pattern::String
-        | Pattern::Ending => 0,
-    }
+fn internal(what: &str) -> Refusal {
+    Refusal::from(format!("callback specialization expected {what}"))
 }
 
-fn located(expression: &Expr, message: &str) -> LowerError {
-    LowerError::new(message, Some((expression.module, expression.span)))
-}
-
-fn internal(what: &str) -> LowerError {
-    LowerError::new(format!("callback specialization expected {what}"), None)
-}
-
-/// The locals a lambda's body reads that its parameters do not bind.
+/// The locals a lambda's body reads that it does not bind, each at its
+/// type, in order. Locals are numbered apart across a clause, so one bound
+/// anywhere in the lambda is never the one of the same number outside.
 fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
     let mut bound = HashSet::new();
     for pattern in patterns {
-        pattern_locals(pattern, &mut bound);
+        pattern.for_each_bound(&mut |local| {
+            bound.insert(local);
+        });
     }
-    // What a test binds is bound inside the body, where resolution scoped it.
-    for_each(body, &mut |expression| match &expression.kind {
-        ExprKind::Is(_, rows) => {
-            for (pattern, _) in rows {
-                pattern_locals(pattern, &mut bound);
-            }
+    let mut read = BTreeMap::new();
+    body.for_each_within(&mut |expression| {
+        if let ExprKind::Local(local) = expression.kind {
+            read.entry(local).or_insert_with(|| expression.ty.clone());
         }
-        ExprKind::Match(_, arms) => {
-            for (pattern, _) in arms.iter().flat_map(|arm| &arm.rows) {
-                pattern_locals(pattern, &mut bound);
-            }
-        }
-        // What a block binds may be read after it, where it assigned a
-        // name of the body around it.
-        ExprKind::Block(body) => {
-            for binding in &body.bindings {
-                pattern_locals(&binding.pattern, &mut bound);
-            }
-        }
-        // A loop binds what it carries, its pattern, and its lines.
-        ExprKind::Loop(looped) => {
-            for (_, within, after) in &looped.carried {
-                bound.extend([*within, *after]);
-            }
-            if let LoopHead::For(pattern, _) = &looped.head {
-                pattern_locals(pattern, &mut bound);
-            }
-            for binding in looped.body.bindings.iter().chain(&looped.rest.bindings) {
-                pattern_locals(&binding.pattern, &mut bound);
-            }
-        }
-        _ => {}
+        expression.for_each_bound(|local| {
+            bound.insert(local);
+        });
     });
-    let mut found = BTreeMap::new();
-    free_locals(body, &bound, &mut found);
-    found.into_iter().collect()
-}
-
-fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap<LocalId, Type>) {
-    use ExprKind as S;
-    match &expression.kind {
-        S::Local(local) => {
-            if !bound.contains(local) {
-                found.entry(*local).or_insert_with(|| expression.ty.clone());
-            }
-        }
-        S::Function(_) | S::ConstructorFunction(_) | S::Natural(_) | S::Bytes(_) => {}
-        S::Construct(_, fields) | S::DirectCall(_, fields) | S::Tuple(fields) => {
-            for field in fields {
-                free_locals(field, bound, found);
-            }
-        }
-        S::Update(base, fields) => {
-            free_locals(base, bound, found);
-            for (_, field) in fields {
-                free_locals(field, bound, found);
-            }
-        }
-        S::Record(fields) => {
-            for (_, field) in fields {
-                free_locals(field, bound, found);
-            }
-        }
-        S::Project(receiver, _) | S::Widen(receiver) | S::Try(receiver) | S::Return(receiver) => {
-            free_locals(receiver, bound, found);
-        }
-        S::If(condition, yes, no) => {
-            for each in [condition, yes, no] {
-                free_locals(each, bound, found);
-            }
-        }
-        S::Is(value, rows) => {
-            free_locals(value, bound, found);
-            for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
-                free_locals(guard, bound, found);
-            }
-        }
-        S::Match(value, arms) => {
-            free_locals(value, bound, found);
-            for arm in arms {
-                for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
-                    free_locals(guard, bound, found);
-                }
-                free_locals(&arm.body, bound, found);
-            }
-        }
-        S::Invoke(head, arguments) => {
-            free_locals(head, bound, found);
-            for argument in arguments {
-                free_locals(argument, bound, found);
-            }
-        }
-        S::Lambda(_, patterns, body) => {
-            let mut nested = bound.clone();
-            for pattern in patterns {
-                pattern_locals(pattern, &mut nested);
-            }
-            free_locals(body, &nested, found);
-        }
-        // Each binding's value reads what came before it; what follows
-        // reads what it binds.
-        S::Block(body) => {
-            let mut nested = bound.clone();
-            for binding in &body.bindings {
-                free_locals(&binding.value, &nested, found);
-                pattern_locals(&binding.pattern, &mut nested);
-            }
-            free_locals(&body.result, &nested, found);
-        }
-        S::Loop(looped) => {
-            let mut nested = bound.clone();
-            for (initial, within, after) in &looped.carried {
-                free_locals(initial, bound, found);
-                nested.extend([*within, *after]);
-            }
-            match &looped.head {
-                LoopHead::While(condition) => free_locals(condition, &nested, found),
-                LoopHead::For(pattern, list) => {
-                    free_locals(list, bound, found);
-                    pattern_locals(pattern, &mut nested);
-                }
-            }
-            for body in [&looped.body, &looped.rest] {
-                for binding in &body.bindings {
-                    free_locals(&binding.value, &nested, found);
-                    pattern_locals(&binding.pattern, &mut nested);
-                }
-                free_locals(&body.result, &nested, found);
-            }
-        }
-        S::Continue(values) | S::Break(values) => {
-            for value in values {
-                free_locals(value, bound, found);
-            }
-        }
-    }
-}
-
-fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
-    match pattern {
-        Pattern::Bind(local) => {
-            output.insert(*local);
-        }
-        Pattern::As(local, pattern) => {
-            output.insert(*local);
-            pattern_locals(pattern, output);
-        }
-        Pattern::Constructor(_, fields)
-        | Pattern::List(fields, None)
-        | Pattern::Product(fields) => {
-            for field in fields {
-                pattern_locals(field, output);
-            }
-        }
-        Pattern::List(fields, Some(rest)) => {
-            for field in fields {
-                pattern_locals(field, output);
-            }
-            pattern_locals(rest, output);
-        }
-        Pattern::Record(fields) => {
-            for (_, pattern) in fields {
-                pattern_locals(pattern, output);
-            }
-        }
-        Pattern::Split(split) => {
-            for pattern in std::iter::once(&split.front).chain(&split.last) {
-                pattern_locals(pattern, output);
-            }
-        }
-        Pattern::Wild
-        | Pattern::Number { .. }
-        | Pattern::Range
-        | Pattern::String
-        | Pattern::Ending => {}
-    }
+    read.into_iter()
+        .filter(|(local, _)| !bound.contains(local))
+        .collect()
 }
 
 #[cfg(test)]

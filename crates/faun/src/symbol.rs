@@ -51,6 +51,14 @@ impl Symbols {
         &self.names[symbol.index()]
     }
 
+    /// A global's name as its program spells it: its text without the
+    /// module identity resolution prefixes it with, `$$`.
+    #[must_use]
+    pub fn spelling(&self, symbol: Symbol) -> &str {
+        let text = self.text(symbol);
+        text.rsplit_once("$$").map_or(text, |(_, spelled)| spelled)
+    }
+
     #[must_use]
     pub fn find(&self, text: &str) -> Option<Symbol> {
         self.buckets.get(&hash(text.as_bytes())).and_then(|bucket| {

@@ -131,7 +131,7 @@ pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, 
 fn identities(
     loaded: &modules::LoadedProgram,
 ) -> Result<(blessed::PreludeIds, host::HostIds), Diagnostic> {
-    let prelude = blessed::PreludeIds::find_in(loaded).map_err(|e| Diagnostic::new(e.message))?;
+    let prelude = blessed::PreludeIds::find_in(loaded)?;
     Ok((prelude, host::HostIds::find_in(loaded)?))
 }
 
@@ -146,7 +146,7 @@ fn lower_resolved(
     let program = declarations::normalize(resolved);
     let checked = check::type_check(program, prelude)?;
     if let Some(main) = main {
-        check::check_application_abi(&checked, host, main)?;
+        host::check_application_abi(&checked, host, main)?;
     }
     let located = |error| checked.resolved.told(error);
     let program = specialize::monomorphize_package(&checked, host, main).map_err(located)?;

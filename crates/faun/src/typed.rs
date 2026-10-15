@@ -46,6 +46,13 @@ pub struct Clause {
     pub locals: u32,
 }
 
+impl Clause {
+    /// Its guard, then its body's expressions.
+    pub(crate) fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        self.guard.iter().chain(self.body.exprs())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signature {
     pub parameters: Vec<InferredType>,
@@ -68,6 +75,14 @@ pub struct Body {
     pub result: Expr,
 }
 
+impl Body {
+    /// Each line's value, then the answer.
+    pub(crate) fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        let values = self.bindings.iter().map(|binding| &binding.value);
+        values.chain([&self.result])
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub pattern: Pattern,
@@ -80,6 +95,79 @@ pub struct Expr {
     pub span: Span,
     pub ty: InferredType,
     pub kind: ExprKind,
+}
+
+impl Expr {
+    /// Visit each expression directly inside this one, in the order it is
+    /// worked out. A walk matches the forms it has something to say of and
+    /// leaves the rest to this.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per expression form, so a new form must say what is inside it"
+    )]
+    pub(crate) fn for_each_child<'a>(&'a self, mut visit: impl FnMut(&'a Self)) {
+        match &self.kind {
+            ExprKind::Local(_)
+            | ExprKind::Function(_)
+            | ExprKind::Constructor(_)
+            | ExprKind::Literal(_)
+            | ExprKind::Numeral(_) => {}
+            ExprKind::Construct(_, list)
+            | ExprKind::Tuple(list)
+            | ExprKind::Method(_, list)
+            | ExprKind::Continue(list)
+            | ExprKind::Break(list) => list.iter().for_each(visit),
+            ExprKind::Record(fields) => {
+                for (_, value) in fields {
+                    visit(value);
+                }
+            }
+            ExprKind::Update(base, fields) => {
+                visit(base);
+                for (_, value) in fields {
+                    visit(value);
+                }
+            }
+            ExprKind::Call(head, arguments) => {
+                visit(head);
+                arguments.iter().for_each(visit);
+            }
+            ExprKind::Lambda(_, inner)
+            | ExprKind::Is(inner, _)
+            | ExprKind::Project(inner, _)
+            | ExprKind::Widen(inner)
+            | ExprKind::Try(inner)
+            | ExprKind::Return(inner) => visit(inner),
+            ExprKind::If(condition, yes, no) => {
+                visit(condition);
+                visit(yes);
+                visit(no);
+            }
+            ExprKind::Match(value, arms) => {
+                visit(value);
+                for arm in arms {
+                    arm.guard.iter().chain([&arm.body]).for_each(&mut visit);
+                }
+            }
+            ExprKind::Block(body) => body.exprs().for_each(visit),
+            ExprKind::Loop(looped) => {
+                for (initial, _, _) in &looped.carried {
+                    visit(initial);
+                }
+                match &looped.head {
+                    LoopHead::While(value) | LoopHead::For(_, value) => visit(value),
+                }
+                looped.body.exprs().for_each(&mut visit);
+                looped.rest.exprs().for_each(visit);
+            }
+        }
+    }
+
+    /// Visit this expression, then every one inside it.
+    pub(crate) fn for_each_within<'a>(&'a self, visit: &mut impl FnMut(&'a Self)) {
+        visit(self);
+        self.for_each_child(|child| child.for_each_within(visit));
+    }
 }
 
 #[derive(Clone, Debug)]

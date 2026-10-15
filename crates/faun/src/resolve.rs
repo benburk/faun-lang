@@ -5,10 +5,9 @@
 #![allow(clippy::too_many_lines)]
 
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 
 use super::ast as s;
-use super::diagnostic::{Advice, Advised, Diagnostic, Location, LowerError, Unplaced, counted};
+use super::diagnostic::{Advised, Diagnostic, Location, Refusal, counted};
 use super::hir as h;
 use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
@@ -55,20 +54,12 @@ impl<P> ResolvedProgram<P> {
         Diagnostic::new(message).at(self.source(module), span)
     }
 
-    /// A lowering failure as a diagnostic, at its place where it names one.
+    /// A refusal as a diagnostic, at its places.
     ///
     /// # Panics
     /// If it names a module not one of this program's.
-    pub(crate) fn told(&self, error: LowerError) -> Diagnostic {
-        let diagnostic = match error.at {
-            Some((module, span)) => self.diagnostic(module, span, error.message),
-            None => Diagnostic::new(error.message),
-        };
-        let mut diagnostic = diagnostic.advised(*error.advice);
-        for ((module, span), text) in error.secondary {
-            diagnostic = diagnostic.secondary(self.source(module), span, text);
-        }
-        diagnostic
+    pub(crate) fn told(&self, refusal: Refusal) -> Diagnostic {
+        refusal.told(|module| self.source(module))
     }
 
     /// Where `span` is in `module`.
@@ -86,28 +77,6 @@ impl<P> ResolvedProgram<P> {
             .expect("a resolved module has a source")
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolveError {
-    pub module: ModuleId,
-    pub span: s::Span,
-    pub message: String,
-    pub advice: Advice,
-}
-
-impl Advised for ResolveError {
-    fn advice(&mut self) -> &mut Advice {
-        &mut self.advice
-    }
-}
-
-impl fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ResolveError {}
 
 /// Resolve every loaded module without mutating or concatenating its surface AST.
 ///
@@ -149,14 +118,14 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
             (&mut loaded.symbols, &mut sites),
             (&mut aliases, &mut constraint_aliases),
         );
-        modules.push(resolved.map_err(|error| located(&loaded, error))?);
+        modules.push(resolved.map_err(|error| told(&loaded, error))?);
     }
     expand_aliases(
         &mut modules,
         (&aliases, &constraint_aliases),
         &mut loaded.symbols,
     )
-    .map_err(|error| located(&loaded, error))?;
+    .map_err(|error| told(&loaded, error))?;
     crate::builders::desugar(&mut modules, &mut sites);
     Ok(ResolvedProgram {
         sites,
@@ -211,16 +180,14 @@ fn values(loaded: &LoadedProgram, scopes: &[Interface]) -> Values {
     values
 }
 
-/// A resolve error as a diagnostic at the place it names.
-fn located(loaded: &LoadedProgram, error: ResolveError) -> Diagnostic {
-    let module = loaded.module(error.module);
-    let source = loaded
-        .sources
-        .get(module.source)
-        .expect("loaded module has source");
-    Diagnostic::new(error.message)
-        .at(source, error.span)
-        .advised(error.advice)
+/// A refusal as a diagnostic, at its places in `loaded`'s sources.
+fn told(loaded: &LoadedProgram, refusal: Refusal) -> Diagnostic {
+    refusal.told(|module| {
+        loaded
+            .sources
+            .get(loaded.module(module).source)
+            .expect("loaded module has source")
+    })
 }
 
 /// An alias, `Name = type` or `Name(a) = type`: its parameters, and the
@@ -251,7 +218,7 @@ fn resolve_module(
     (scope, values): (&Interface, &Values),
     (symbols, sites): (&mut Symbols, &mut h::Sites),
     (aliases, constraint_aliases): (&mut Aliases, &mut ConstraintAliases),
-) -> Result<h::Module, ResolveError> {
+) -> Result<h::Module, Refusal> {
     let mut items = Vec::new();
     let mut expectations = Vec::new();
     for item in &module.syntax.items {
@@ -395,7 +362,7 @@ fn alias_parameters(
     ty: &h::Type,
     source: &str,
     symbols: &mut Symbols,
-) -> Result<Vec<Symbol>, ResolveError> {
+) -> Result<Vec<Symbol>, Refusal> {
     let name = alias.name.text(source);
     let mut parameters = Vec::with_capacity(alias.params.len());
     for parameter in &alias.params {
@@ -500,7 +467,7 @@ fn expand_aliases(
     modules: &mut [h::Module],
     (aliases, constraint_aliases): (&Aliases, &ConstraintAliases),
     symbols: &mut Symbols,
-) -> Result<(), ResolveError> {
+) -> Result<(), Refusal> {
     // Every constraint alias is expanded once over its own parameters, so
     // one applying itself, or applied wrongly, is refused where it is
     // declared whether or not anything applies it.
@@ -585,7 +552,7 @@ fn expand_signature(
     signature: &mut h::SignatureDecl,
     (aliases, constraint_aliases): (&Aliases, &ConstraintAliases),
     symbols: &mut Symbols,
-) -> Result<(), Unplaced> {
+) -> Result<(), Refusal> {
     signature.constraints =
         expand_constraints(&signature.constraints, constraint_aliases, symbols)?;
     let written = signature
@@ -644,7 +611,7 @@ fn typed(
     named(&ty, constraint_aliases).map_or(Ok(ty), |alias| {
         Err(format!(
             "`{}` is a constraint alias, which is applied in a `where` clause and is no type",
-            spelled(alias, symbols)
+            symbols.spelling(alias).to_owned()
         ))
     })
 }
@@ -743,7 +710,7 @@ impl Expansion<'_> {
         symbols: &mut Symbols,
     ) -> Result<(), String> {
         let aliases = self.aliases;
-        let spelled = spelled(name, symbols);
+        let spelled = symbols.spelling(name).to_owned();
         let alias = aliases
             .get(&name)
             .ok_or_else(|| format!("`{spelled}` is not a constraint alias"))?;
@@ -773,7 +740,7 @@ impl Expansion<'_> {
             let outermost = self.expanding.first().copied().unwrap_or(name);
             return Err(format!(
                 "constraint alias `{}` applies more than {ALIAS_PARTS} aliases",
-                self::spelled(outermost, symbols)
+                symbols.spelling(outermost).to_owned()
             ));
         }
         let mut substitution: HashMap<Symbol, h::Type> = alias
@@ -847,14 +814,6 @@ impl Expansion<'_> {
         }
         Ok(())
     }
-}
-
-/// A declared name as it was written, without its module's prefix.
-fn spelled(name: Symbol, symbols: &Symbols) -> String {
-    let text = symbols.text(name);
-    text.rsplit_once("$$")
-        .map_or(text, |(_, spelled)| spelled)
-        .to_owned()
 }
 
 /// Every type variable `ty` names, in the order written.
@@ -975,13 +934,8 @@ fn expand(
     aliases: &Aliases,
     symbols: &Symbols,
     expanding: &mut Vec<Symbol>,
-) -> Result<h::Type, Unplaced> {
-    let spelled = |name: Symbol| {
-        let text = symbols.text(name);
-        text.rsplit_once("$$")
-            .map_or(text, |(_, spelled)| spelled)
-            .to_owned()
-    };
+) -> Result<h::Type, Refusal> {
+    let spelled = |name: Symbol| symbols.spelling(name).to_owned();
     Ok(match ty {
         h::Type::Named(name, arguments) if aliases.contains_key(name) => {
             let alias = &aliases[name];
@@ -995,11 +949,11 @@ fn expand(
                         arguments.len()
                     ),
                 };
-                return Err(Unplaced::from(message));
+                return Err(Refusal::from(message));
             }
             if expanding.contains(name) {
                 let message = format!("alias `{}` names itself", spelled(*name));
-                return Err(Unplaced::from(message).help("declare a recursive type with `:`"));
+                return Err(Refusal::from(message).help("declare a recursive type with `:`"));
             }
             let arguments = arguments
                 .iter()
@@ -1019,7 +973,7 @@ fn expand(
                 },
             );
             if made > ALIAS_PARTS {
-                return Err(Unplaced::from(format!(
+                return Err(Refusal::from(format!(
                     "alias `{}` names a type of more than {ALIAS_PARTS} parts",
                     spelled(*name)
                 )));
@@ -1051,23 +1005,23 @@ fn expand(
                             .fields
                             .iter()
                             .map(|field| expand(field, aliases, symbols, expanding))
-                            .collect::<Result<_, Unplaced>>()?,
+                            .collect::<Result<_, Refusal>>()?,
                     })
                 })
-                .collect::<Result<_, Unplaced>>()?,
+                .collect::<Result<_, Refusal>>()?,
         ),
         h::Type::Record(fields, open) => h::Type::Record(
             fields
                 .iter()
                 .map(|(name, field)| Ok((*name, expand(field, aliases, symbols, expanding)?)))
-                .collect::<Result<_, Unplaced>>()?,
+                .collect::<Result<_, Refusal>>()?,
             *open,
         ),
         h::Type::Tuple(members) => h::Type::Tuple(
             members
                 .iter()
                 .map(|member| expand(member, aliases, symbols, expanding))
-                .collect::<Result<_, Unplaced>>()?,
+                .collect::<Result<_, Refusal>>()?,
         ),
     })
 }
@@ -1079,7 +1033,7 @@ fn resolve_data(
     (scope, values): (&Interface, &Values),
     symbols: &mut Symbols,
     sites: &mut h::Sites,
-) -> Result<h::DataDecl, ResolveError> {
+) -> Result<h::DataDecl, Refusal> {
     let local = symbols
         .find(data.name.text(source))
         .expect("declaration collection interns type names");
@@ -1109,7 +1063,7 @@ fn resolve_data(
                         .collect::<Result<_, _>>()?;
                     Ok(h::ConstructorDecl { name, fields })
                 })
-                .collect::<Result<_, ResolveError>>()?,
+                .collect::<Result<_, Refusal>>()?,
             None,
         ),
         s::DataRepresentation::Wrapper(representation) => (
@@ -1161,7 +1115,7 @@ fn resolve_signature(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
-) -> Result<h::SignatureDecl, ResolveError> {
+) -> Result<h::SignatureDecl, Refusal> {
     Ok(h::SignatureDecl {
         span: signature.span,
         name,
@@ -1176,7 +1130,7 @@ fn resolve_signature(
             .constraints
             .iter()
             .map(|constraint| resolve_constraint(module, constraint, source, scope, symbols))
-            .collect::<Result<_, ResolveError>>()?,
+            .collect::<Result<_, Refusal>>()?,
     })
 }
 
@@ -1186,7 +1140,7 @@ fn resolve_constraint(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
-) -> Result<h::Constraint, ResolveError> {
+) -> Result<h::Constraint, Refusal> {
     Ok(match constraint {
         s::Constraint::Member {
             variable,
@@ -1239,7 +1193,7 @@ fn written_type(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
-) -> Result<h::Type, ResolveError> {
+) -> Result<h::Type, Refusal> {
     if let Some(span) = hole(ty) {
         return Err(error(
             module,
@@ -1273,7 +1227,7 @@ fn resolve_type(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
-) -> Result<h::Type, ResolveError> {
+) -> Result<h::Type, Refusal> {
     match ty {
         s::Type::Named {
             span,
@@ -1334,7 +1288,7 @@ fn resolve_type(
                             .collect::<Result<_, _>>()?,
                     })
                 })
-                .collect::<Result<_, ResolveError>>()?,
+                .collect::<Result<_, Refusal>>()?,
         )),
         s::Type::Tuple { members, .. } => Ok(h::Type::Tuple(
             members
@@ -1351,7 +1305,7 @@ fn resolve_type(
                         resolve_type(module, ty, source, scope, symbols)?,
                     ))
                 })
-                .collect::<Result<Vec<_>, ResolveError>>()?;
+                .collect::<Result<Vec<_>, Refusal>>()?;
             resolved.sort_by_key(|(name, _)| *name);
             if resolved.windows(2).any(|pair| pair[0].0 == pair[1].0) {
                 return Err(error(module, *span, "record type repeats a field"));
@@ -1377,7 +1331,7 @@ fn resolve_clauses(
     (scope, values): (&Interface, &Values),
     methods: Option<&TypeBinding>,
     (symbols, sites): (&mut Symbols, &mut h::Sites),
-) -> Result<Vec<h::Clause>, ResolveError> {
+) -> Result<Vec<h::Clause>, Refusal> {
     let mut named = Vec::new();
     for pattern in &clause.patterns {
         standing_in(pattern, source, scope, symbols, &mut named);
@@ -1412,7 +1366,7 @@ fn resolve_clauses(
     // bind somewhere, and one carrying more has a field the clause never
     // named.
     if let Some(&(constructor, carried)) = variants.iter().find(|(_, carried)| *carried != bound) {
-        let constructor = spelled(constructor, symbols);
+        let constructor = symbols.spelling(constructor).to_owned();
         return Err(error(
             module,
             span,
@@ -1570,7 +1524,7 @@ fn resolve_clause(
     (scope, values): (&Interface, &Values),
     (methods, standing): (Option<&TypeBinding>, Option<(Symbol, Symbol)>),
     (symbols, sites): (&mut Symbols, &mut h::Sites),
-) -> Result<h::Clause, ResolveError> {
+) -> Result<h::Clause, Refusal> {
     let mut resolver = ClauseResolver {
         module,
         source,
@@ -1744,7 +1698,7 @@ impl ClauseResolver<'_> {
     /// A condition whose tests bind into the current scope: those of a
     /// test, along a chain of `&` those of each part, and of an `|` the
     /// names both sides bind. Anything else binds for nothing outside it.
-    fn condition(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
+    fn condition(&mut self, expression: &s::Expr) -> Result<h::Expr, Refusal> {
         self.conditional += 1;
         let asked = self.asked(expression);
         self.conditional -= 1;
@@ -1752,7 +1706,7 @@ impl ClauseResolver<'_> {
     }
 
     /// [`Self::condition`], within it.
-    fn asked(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
+    fn asked(&mut self, expression: &s::Expr) -> Result<h::Expr, Refusal> {
         let kind = match &expression.kind {
             // A test, each `==name` in its pattern asked after it matches.
             s::ExprKind::Is(tested, pattern) => {
@@ -1789,7 +1743,7 @@ impl ClauseResolver<'_> {
 
     /// One arm: what its pattern binds, as a test's does, seen by its guard
     /// and its body, and nowhere after the arm.
-    fn arm(&mut self, arm: &s::Arm) -> Result<(h::Arm, HashMap<Symbol, h::LocalId>), ResolveError> {
+    fn arm(&mut self, arm: &s::Arm) -> Result<(h::Arm, HashMap<Symbol, h::LocalId>), Refusal> {
         self.part_compared(&arm.pattern, "value")?;
         let before = self.locals.clone();
         let outer = std::mem::replace(&mut self.matching, true);
@@ -1821,7 +1775,7 @@ impl ClauseResolver<'_> {
 
     /// Refuse `==name` as a test's or an arm's whole pattern: it compares a
     /// part, and the whole value is compared with `==` between values.
-    fn part_compared(&self, pattern: &s::Pattern, value: &str) -> Result<(), ResolveError> {
+    fn part_compared(&self, pattern: &s::Pattern, value: &str) -> Result<(), Refusal> {
         let s::Pattern::Equal { span, name } = pattern else {
             return Ok(());
         };
@@ -1838,7 +1792,7 @@ impl ClauseResolver<'_> {
 
     /// `name = …` where `name` is in scope: a new local the name is from
     /// here on, at whatever type it is given.
-    fn assign(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, ResolveError> {
+    fn assign(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, Refusal> {
         let shown = name.text(self.source);
         if self.conditional > 0 {
             return Err(error(
@@ -1870,7 +1824,7 @@ impl ClauseResolver<'_> {
     /// `name` in a pattern where it is in scope, a binding's or a test's: a
     /// new local the name is from here on, where the pattern matched. In a
     /// lambda, a test's shadows the body's around it within the lambda.
-    fn rebind(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, ResolveError> {
+    fn rebind(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, Refusal> {
         let shown = name.text(self.source);
         if let Some(bound) = self.shadowing.as_mut()
             && !bound.insert(spelling)
@@ -1897,7 +1851,7 @@ impl ClauseResolver<'_> {
         &mut self,
         (head, body, rest): (&s::LoopHead, &s::Body, &s::Body),
         span: s::Span,
-    ) -> Result<h::ExprKind, ResolveError> {
+    ) -> Result<h::ExprKind, Refusal> {
         let before = self.locals.clone();
         let list = match head {
             s::LoopHead::For(_, list) => Some(self.expr(list)?),
@@ -1947,7 +1901,7 @@ impl ClauseResolver<'_> {
         head: &s::LoopHead,
         list: Option<h::Expr>,
         body: &s::Body,
-    ) -> Result<(h::LoopHead, h::Body), ResolveError> {
+    ) -> Result<(h::LoopHead, h::Body), Refusal> {
         let head = match (head, list) {
             (s::LoopHead::While(condition), _) => h::LoopHead::While(self.condition(condition)?),
             // The element binds a name in scope again, as a test's would.
@@ -1971,7 +1925,7 @@ impl ClauseResolver<'_> {
         head: &s::LoopHead,
         body: &s::Body,
         before: &HashMap<Symbol, h::LocalId>,
-    ) -> Result<Vec<Symbol>, ResolveError> {
+    ) -> Result<Vec<Symbol>, Refusal> {
         let hidden = self.hidden.clone();
         let merged = self.merged.len();
         self.ahead += 1;
@@ -2002,7 +1956,7 @@ impl ClauseResolver<'_> {
 
     /// Each name the innermost loop carries, as it is here: what a
     /// `continue` or a `break` at `span` hands on.
-    fn carried_now(&mut self, span: s::Span) -> Result<Vec<h::Expr>, ResolveError> {
+    fn carried_now(&mut self, span: s::Span) -> Result<Vec<h::Expr>, Refusal> {
         let Some(carried) = self.loops.last().cloned() else {
             let refused = error(
                 self.module,
@@ -2099,11 +2053,7 @@ impl ClauseResolver<'_> {
     /// The two sides of an `|`, the right binding as the same locals the
     /// names the left bound. A name both bind is seen past the `|`, where
     /// one side or the other held; one only a side binds is hidden.
-    fn either(
-        &mut self,
-        left: &s::Expr,
-        right: &s::Expr,
-    ) -> Result<(h::Expr, h::Expr), ResolveError> {
+    fn either(&mut self, left: &s::Expr, right: &s::Expr) -> Result<(h::Expr, h::Expr), Refusal> {
         let before = self.locals.clone();
         let left = self.condition(left)?;
         let after_left = std::mem::replace(&mut self.locals, before.clone());
@@ -2133,7 +2083,7 @@ impl ClauseResolver<'_> {
     /// A body's bindings in order, then its answer: each binding's value
     /// reads the names as they were, and what follows reads the ones it
     /// binds, a name it rebinds shadowing the one before.
-    fn body(&mut self, body: &s::Body) -> Result<h::Body, ResolveError> {
+    fn body(&mut self, body: &s::Body) -> Result<h::Body, Refusal> {
         let mut bindings = Vec::with_capacity(body.bindings.len());
         for binding in &body.bindings {
             let value = self.expr(&binding.value)?;
@@ -2155,7 +2105,7 @@ impl ClauseResolver<'_> {
         &mut self,
         span: s::Span,
         alternatives: &[s::Pattern],
-    ) -> Result<h::Pattern, ResolveError> {
+    ) -> Result<h::Pattern, Refusal> {
         let before = self.locals.clone();
         let newly = |locals: &HashMap<Symbol, h::LocalId>| -> HashMap<Symbol, h::LocalId> {
             locals
@@ -2199,7 +2149,7 @@ impl ClauseResolver<'_> {
 
     /// A pattern that must match whatever it is handed, a binding's or a
     /// lambda's, which no `|` may choose within.
-    fn total_pattern(&mut self, pattern: &s::Pattern) -> Result<h::Pattern, ResolveError> {
+    fn total_pattern(&mut self, pattern: &s::Pattern) -> Result<h::Pattern, Refusal> {
         if let Some(span) = named_whole(pattern) {
             return Err(error(
                 self.module,
@@ -2220,7 +2170,7 @@ impl ClauseResolver<'_> {
         Ok(resolved)
     }
 
-    fn pattern(&mut self, pattern: &s::Pattern) -> Result<h::Pattern, ResolveError> {
+    fn pattern(&mut self, pattern: &s::Pattern) -> Result<h::Pattern, Refusal> {
         match pattern {
             s::Pattern::Wild(_) => Ok(h::Pattern::Wild),
             s::Pattern::Bind(name) => {
@@ -2413,7 +2363,7 @@ impl ClauseResolver<'_> {
                             self.pattern(pattern)?,
                         ))
                     })
-                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                    .collect::<Result<Vec<_>, Refusal>>()?;
                 resolved.sort_by_key(|(name, _)| *name);
                 if resolved.windows(2).any(|pair| pair[0].0 == pair[1].0) {
                     return Err(error(self.module, *span, "record pattern repeats a field"));
@@ -2479,7 +2429,7 @@ impl ClauseResolver<'_> {
         }
     }
 
-    fn expr(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
+    fn expr(&mut self, expression: &s::Expr) -> Result<h::Expr, Refusal> {
         let kind = match &expression.kind {
             s::ExprKind::Name(name) => self.name(*name)?,
             s::ExprKind::Number(numeral) if numeral.kind == s::NumeralKind::Decimal => {
@@ -2530,7 +2480,7 @@ impl ClauseResolver<'_> {
                             Ok(h::StringPart::Splice(padded))
                         }
                     })
-                    .collect::<Result<_, ResolveError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             s::ExprKind::List(elements, rest) => h::ExprKind::List(
                 elements
@@ -2824,7 +2774,7 @@ impl ClauseResolver<'_> {
 
     /// What a call's head names. A sum's own name applied is the
     /// constructor its clause's head took apart, in this copy of it.
-    fn applied(&mut self, head: &s::Expr) -> Result<h::Expr, ResolveError> {
+    fn applied(&mut self, head: &s::Expr) -> Result<h::Expr, Refusal> {
         let s::ExprKind::Name(name) = &head.kind else {
             return self.expr(head);
         };
@@ -2856,7 +2806,7 @@ impl ClauseResolver<'_> {
         self.expr(head)
     }
 
-    fn name(&mut self, name: s::Name) -> Result<h::ExprKind, ResolveError> {
+    fn name(&mut self, name: s::Name) -> Result<h::ExprKind, Refusal> {
         let spelling = self.symbols.intern(name.text(self.source));
         if let Some(&local) = self.locals.get(&spelling) {
             return Ok(h::ExprKind::Local(local));
@@ -2931,7 +2881,7 @@ impl ClauseResolver<'_> {
     }
 
     /// A value, at `span`, written as a function called.
-    fn called_value(&self, span: s::Span) -> ResolveError {
+    fn called_value(&self, span: s::Span) -> Refusal {
         let shown = span.text(self.source);
         error(
             self.module,
@@ -2964,7 +2914,7 @@ impl ClauseResolver<'_> {
         &mut self,
         fields: &[(s::Name, s::Expr)],
         span: s::Span,
-    ) -> Result<Vec<(Symbol, h::Expr)>, ResolveError> {
+    ) -> Result<Vec<(Symbol, h::Expr)>, Refusal> {
         let mut seen = HashSet::new();
         let mut resolved = Vec::with_capacity(fields.len());
         for (name, value) in fields {
@@ -3001,7 +2951,7 @@ impl ClauseResolver<'_> {
         &mut self,
         head: &s::Expr,
         member: s::Name,
-    ) -> Option<Result<h::ExprKind, ResolveError>> {
+    ) -> Option<Result<h::ExprKind, Refusal>> {
         let s::ExprKind::Name(owner) = &head.kind else {
             return None;
         };
@@ -3034,7 +2984,7 @@ impl ClauseResolver<'_> {
     /// The constructor `Type.Ctor` names: that type's, outright, never a
     /// structural tag. A constructor the type does not export here is
     /// private, and naming it qualified is no way round that.
-    fn qualified(&mut self, owner: s::Name, member: s::Name) -> Result<Symbol, ResolveError> {
+    fn qualified(&mut self, owner: s::Name, member: s::Name) -> Result<Symbol, Refusal> {
         let owner_spelling = self.symbols.intern(owner.text(self.source));
         let member_spelling = self.symbols.intern(member.text(self.source));
         self.scope
@@ -3075,7 +3025,7 @@ fn global_value(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
-) -> Result<Symbol, ResolveError> {
+) -> Result<Symbol, Refusal> {
     let spelling = symbols.intern(name.text(source));
     scope.values.get(&spelling).copied().ok_or_else(|| {
         error(
@@ -3092,7 +3042,7 @@ fn method_name(
     source: &str,
     binding: &TypeBinding,
     symbols: &mut Symbols,
-) -> Result<Symbol, ResolveError> {
+) -> Result<Symbol, Refusal> {
     let spelling = symbols.intern(name.text(source));
     binding.methods.get(&spelling).copied().ok_or_else(|| {
         error(
@@ -3103,14 +3053,8 @@ fn method_name(
     })
 }
 
-fn error(module: ModuleId, span: s::Span, said: impl Into<Unplaced>) -> ResolveError {
-    let said = said.into();
-    ResolveError {
-        module,
-        span,
-        message: said.message,
-        advice: said.advice,
-    }
+fn error(module: ModuleId, span: s::Span, said: impl Into<Refusal>) -> Refusal {
+    said.into().placed(module, span)
 }
 
 #[cfg(test)]

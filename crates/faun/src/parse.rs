@@ -73,11 +73,7 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
     let (lines, mut errors) = grammar::file(&tokens, source);
     let more = errors.len() >= grammar::ERRORS_SHOWN;
     errors.truncate(grammar::ERRORS_SHOWN);
-    let mut errors = errors.into_iter().map(|error| {
-        let mut spanned = spanned(source, error.span, error.message);
-        spanned.advice = Box::new(error.advice);
-        spanned
-    });
+    let mut errors = errors.into_iter().map(|error| syntax(source, error));
     if let Some(mut first) = errors.next() {
         first.also = errors.collect();
         if more {
@@ -88,17 +84,20 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
         }
         return Err(first);
     }
-    let items = lines::items(lines, source).map_err(|error| {
-        let mut spanned = spanned(source, error.span, error.message);
-        spanned.advice = Box::new(error.advice);
-        spanned
-    })?;
+    let items = lines::items(lines, source).map_err(|error| syntax(source, error))?;
     literal::validate(&tokens, source)
         .map_err(|error| spanned(source, error.span, error.message))?;
     Ok(Module {
         source: source_id,
         items,
     })
+}
+
+/// A line's syntax error, with what it advises.
+fn syntax(source: &str, error: grammar::SyntaxError) -> ParseError {
+    let mut spanned = spanned(source, error.span, error.message);
+    spanned.advice = Box::new(error.advice);
+    spanned
 }
 
 /// An error about the text `span` covers.

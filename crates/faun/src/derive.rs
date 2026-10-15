@@ -81,7 +81,7 @@ fn ordered(
     for (owner, at) in ordered {
         if let Some(&index) = members.get(&(owner, equals)) {
             let declared = &resolved.program.functions[index];
-            let type_name = spelled(owner, &resolved.symbols);
+            let type_name = resolved.symbols.spelling(owner);
             let message = format!("`{type_name}` declares both `equals` and `cmp`");
             return Err(resolved
                 .diagnostic(declared.module, declared_at(declared), message)
@@ -258,7 +258,7 @@ fn derive(
             .constructors
             .iter()
             .map(|constructor| {
-                let text = spelled(constructor.name, symbols);
+                let text = symbols.spelling(constructor.name);
                 writer.constructor_to_str(constructor.name, text, constructor.fields.len())
             })
             .collect(),
@@ -290,7 +290,7 @@ fn misfit(
     signature: &h::SignatureDecl,
     symbols: &Symbols,
 ) -> String {
-    let mut own = spelled(data.name, symbols).to_owned();
+    let mut own = symbols.spelling(data.name).to_owned();
     if !data.parameters.is_empty() {
         let parameters: Vec<&str> = data
             .parameters
@@ -309,13 +309,6 @@ fn misfit(
         "`{}` without a body is derived, and is derived only as `{expected}`",
         symbols.text(signature.spelling)
     )
-}
-
-/// What a declaration's canonical name spells in source.
-fn spelled(name: Symbol, symbols: &Symbols) -> &str {
-    let text = symbols.text(name);
-    text.rsplit_once("$$")
-        .map_or(text, |(_, spelling)| spelling)
 }
 
 /// Writes one member's clauses, each at its signature.

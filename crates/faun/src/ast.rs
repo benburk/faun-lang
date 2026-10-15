@@ -290,10 +290,25 @@ pub struct Arm {
     pub body: Expr,
 }
 
+impl Arm {
+    /// Its guard, then its body.
+    fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        self.guard.iter().chain([&self.body])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Body {
     pub bindings: Vec<Binding>,
     pub result: Expr,
+}
+
+impl Body {
+    /// Each line's value, then the answer.
+    pub(crate) fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        let values = self.bindings.iter().map(|binding| &binding.value);
+        values.chain([&self.result])
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -448,6 +463,93 @@ impl Pattern {
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
+}
+
+impl Expr {
+    /// Visit each expression directly inside this one, in the order
+    /// written, stopping at the first `visit` refuses. A walk matches the
+    /// forms it has something to say of and leaves the rest to this.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per expression form, so a new form must say what is inside it"
+    )]
+    pub(crate) fn try_for_each_child<'a, E>(
+        &'a self,
+        mut visit: impl FnMut(&'a Self) -> Result<(), E>,
+    ) -> Result<(), E> {
+        match &self.kind {
+            ExprKind::Name(_)
+            | ExprKind::Number(_)
+            | ExprKind::Continue
+            | ExprKind::Break
+            | ExprKind::Wild
+            | ExprKind::Equal(_)
+            | ExprKind::Range(..) => Ok(()),
+            ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
+                StringPart::Text(_) => Ok(()),
+                StringPart::Splice(inner, _) => visit(inner),
+            }),
+            ExprKind::List(elements, rest) => {
+                elements.iter().chain(rest.as_deref()).try_for_each(visit)
+            }
+            ExprKind::Ending(front, last) => {
+                visit(front)?;
+                last.iter().try_for_each(visit)
+            }
+            ExprKind::Record(fields) => fields.iter().try_for_each(|(_, value)| visit(value)),
+            ExprKind::Update(fields, base) => {
+                fields.iter().try_for_each(|(_, value)| visit(value))?;
+                visit(base)
+            }
+            ExprKind::Tuple(members) => members.iter().try_for_each(visit),
+            ExprKind::Lambda(_, inner)
+            | ExprKind::Member(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Try(inner)
+            | ExprKind::Return(inner)
+            | ExprKind::Is(inner, _) => visit(inner),
+            ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
+                visit(head)?;
+                arguments.iter().try_for_each(visit)
+            }
+            ExprKind::Binary(_, left, right) => {
+                visit(left)?;
+                visit(right)
+            }
+            ExprKind::If(condition, yes, no) => {
+                visit(condition)?;
+                visit(yes)?;
+                visit(no)
+            }
+            ExprKind::Match(value, arms) => {
+                visit(value)?;
+                arms.iter().flat_map(Arm::exprs).try_for_each(visit)
+            }
+            ExprKind::Arms(arms) => arms.iter().flat_map(Arm::exprs).try_for_each(visit),
+            ExprKind::Else {
+                condition,
+                otherwise: out,
+                rest,
+            }
+            | ExprKind::Leave {
+                condition,
+                out,
+                rest,
+            } => {
+                visit(condition)?;
+                visit(out)?;
+                rest.exprs().try_for_each(visit)
+            }
+            ExprKind::Loop { head, body, rest } => {
+                match head {
+                    LoopHead::While(value) | LoopHead::For(_, value) => visit(value)?,
+                }
+                body.exprs().try_for_each(&mut visit)?;
+                rest.exprs().try_for_each(visit)
+            }
+            ExprKind::Block(body) => body.exprs().try_for_each(visit),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

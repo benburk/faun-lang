@@ -110,79 +110,12 @@ impl Reads<'_> {
                     // A loop that ends of itself hands on what its round had.
                     self.feed(*after, *within);
                 }
-                match &looped.head {
-                    h::LoopHead::While(condition) => self.expr(condition, owner, carried),
-                    h::LoopHead::For(_, list) => self.expr(list, owner, carried),
-                }
+                self.expr(looped.head.value(), owner, carried);
                 self.body(&looped.body, owner, &inner);
                 self.body(&looped.rest, owner, carried);
             }
             h::ExprKind::Block(body) => self.body(body, owner, carried),
-            h::ExprKind::Match(value, arms) => {
-                self.expr(value, owner, carried);
-                for arm in arms {
-                    if let Some(guard) = &arm.guard {
-                        self.expr(guard, owner, carried);
-                    }
-                    self.expr(&arm.body, owner, carried);
-                }
-            }
-            h::ExprKind::String(parts) => {
-                for part in parts {
-                    if let h::StringPart::Splice(value) = part {
-                        self.expr(value, owner, carried);
-                    }
-                }
-            }
-            h::ExprKind::List(elements, rest) => {
-                for element in elements.iter().chain(rest.as_deref()) {
-                    self.expr(element, owner, carried);
-                }
-            }
-            h::ExprKind::Record(fields) => {
-                for (_, value) in fields {
-                    self.expr(value, owner, carried);
-                }
-            }
-            h::ExprKind::Update(base, fields) => {
-                self.expr(base, owner, carried);
-                for (_, value) in fields {
-                    self.expr(value, owner, carried);
-                }
-            }
-            h::ExprKind::Tuple(members) => {
-                for member in members {
-                    self.expr(member, owner, carried);
-                }
-            }
-            h::ExprKind::Call(head, arguments) | h::ExprKind::Method(head, _, arguments) => {
-                self.expr(head, owner, carried);
-                for argument in arguments {
-                    self.expr(argument, owner, carried);
-                }
-            }
-            h::ExprKind::Binary(_, left, right) => {
-                self.expr(left, owner, carried);
-                self.expr(right, owner, carried);
-            }
-            h::ExprKind::If(condition, yes, no) => {
-                self.expr(condition, owner, carried);
-                self.expr(yes, owner, carried);
-                self.expr(no, owner, carried);
-            }
-            h::ExprKind::Lambda(_, value)
-            | h::ExprKind::Member(value, _)
-            | h::ExprKind::Unary(_, value)
-            | h::ExprKind::Try(value)
-            | h::ExprKind::Return(value)
-            | h::ExprKind::Is(value, _) => self.expr(value, owner, carried),
-            h::ExprKind::Global(_)
-            | h::ExprKind::Constructor(_)
-            | h::ExprKind::Tag(_)
-            | h::ExprKind::Associated(..)
-            | h::ExprKind::Dual(_)
-            | h::ExprKind::Number(_)
-            | h::ExprKind::Decimal(..) => {}
+            _ => expression.for_each_child(|inner| self.expr(inner, owner, carried)),
         }
     }
 }
@@ -227,80 +160,12 @@ impl Dropper<'_> {
                 looped
                     .carried
                     .retain(|_| keep.next().copied().unwrap_or(true));
-                match &mut looped.head {
-                    h::LoopHead::While(condition) => self.expr(condition, kept),
-                    h::LoopHead::For(_, list) => self.expr(list, kept),
-                }
+                self.expr(looped.head.value_mut(), kept);
                 self.body(&mut looped.body, Some(&inner));
                 self.body(&mut looped.rest, kept);
             }
             h::ExprKind::Block(body) => self.body(body, kept),
-            h::ExprKind::Match(value, arms) => {
-                self.expr(value, kept);
-                for arm in arms {
-                    if let Some(guard) = &mut arm.guard {
-                        self.expr(guard, kept);
-                    }
-                    self.expr(&mut arm.body, kept);
-                }
-            }
-            h::ExprKind::String(parts) => {
-                for part in parts {
-                    if let h::StringPart::Splice(value) = part {
-                        self.expr(value, kept);
-                    }
-                }
-            }
-            h::ExprKind::List(elements, rest) => {
-                for element in elements.iter_mut().chain(rest.as_deref_mut()) {
-                    self.expr(element, kept);
-                }
-            }
-            h::ExprKind::Update(base, fields) => {
-                self.expr(base, kept);
-                for (_, value) in fields {
-                    self.expr(value, kept);
-                }
-            }
-            h::ExprKind::Record(fields) => {
-                for (_, value) in fields {
-                    self.expr(value, kept);
-                }
-            }
-            h::ExprKind::Tuple(values) => {
-                for value in values {
-                    self.expr(value, kept);
-                }
-            }
-            h::ExprKind::Call(head, arguments) | h::ExprKind::Method(head, _, arguments) => {
-                self.expr(head, kept);
-                for argument in arguments {
-                    self.expr(argument, kept);
-                }
-            }
-            h::ExprKind::Binary(_, left, right) => {
-                self.expr(left, kept);
-                self.expr(right, kept);
-            }
-            h::ExprKind::If(condition, yes, no) => {
-                self.expr(condition, kept);
-                self.expr(yes, kept);
-                self.expr(no, kept);
-            }
-            h::ExprKind::Lambda(_, value)
-            | h::ExprKind::Member(value, _)
-            | h::ExprKind::Unary(_, value)
-            | h::ExprKind::Try(value)
-            | h::ExprKind::Return(value)
-            | h::ExprKind::Is(value, _) => self.expr(value, kept),
-            h::ExprKind::Local(_)
-            | h::ExprKind::Global(_)
-            | h::ExprKind::Constructor(_)
-            | h::ExprKind::Tag(_)
-            | h::ExprKind::Associated(..)
-            | h::ExprKind::Dual(_)
-            | h::ExprKind::Number(_)
-            | h::ExprKind::Decimal(..) => {}
+            _ => expression.for_each_child_mut(|inner| self.expr(inner, kept)),
         }
     }
 }

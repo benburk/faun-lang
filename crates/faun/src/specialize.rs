@@ -22,10 +22,12 @@ use num_bigint::BigUint;
 use crate::blessed::NumeralType;
 use crate::blessed::{LiteralExpr, PreludeIds};
 use crate::check::{CheckedProgram, InferredBound, InferredScheme, InferredType, TypeVariable};
-use crate::diagnostic::{Advised, LowerError};
+use crate::diagnostic::{Advised, Refusal};
 use crate::hir as h;
 use crate::typed as t;
 use crate::{ModuleId, Symbol};
+
+mod structural;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Type {
@@ -53,7 +55,7 @@ impl Type {
     }
 
     /// Take the signature at a checked function boundary.
-    fn into_signature(self) -> Result<Signature, LowerError> {
+    fn into_signature(self) -> Result<Signature, Refusal> {
         match self {
             Self::Function(signature) => Ok(signature),
             _ => Err(error("a checked function has a non-function type")),
@@ -64,7 +66,7 @@ impl Type {
     pub(crate) fn constructors(
         &self,
         data: &HashMap<Symbol, crate::declarations::Data>,
-    ) -> Result<Vec<(Symbol, Vec<Self>)>, LowerError> {
+    ) -> Result<Vec<(Symbol, Vec<Self>)>, Refusal> {
         if let Self::Variants(tags) = self {
             return Ok(tags.clone());
         }
@@ -91,7 +93,7 @@ impl Type {
                     .fields
                     .iter()
                     .map(|field| surface_type(field, &variables))
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ));
         }
         if let Some(wrapper) = &data.wrapper {
@@ -173,6 +175,13 @@ pub(crate) struct Clause {
     pub(crate) body: Body,
 }
 
+impl Clause {
+    /// Its guard, then its body's expressions.
+    pub(crate) fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        self.guard.iter().chain(self.body.exprs())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum Pattern {
     Wild,
@@ -199,6 +208,42 @@ pub(crate) enum Pattern {
     As(h::LocalId, Box<Self>),
 }
 
+impl Pattern {
+    /// Visit each local the pattern binds.
+    pub(crate) fn for_each_bound(&self, visit: &mut impl FnMut(h::LocalId)) {
+        match self {
+            Self::Bind(local) => visit(*local),
+            Self::As(local, inner) => {
+                visit(*local);
+                inner.for_each_bound(visit);
+            }
+            Self::Constructor(_, parts) | Self::Product(parts) => {
+                for part in parts {
+                    part.for_each_bound(visit);
+                }
+            }
+            Self::List(elements, rest) => {
+                let parts = elements.iter().chain(rest.as_deref());
+                for part in parts {
+                    part.for_each_bound(visit);
+                }
+            }
+            Self::Record(fields) => {
+                for (_, part) in fields {
+                    part.for_each_bound(visit);
+                }
+            }
+            Self::Split(split) => {
+                let parts = std::iter::once(&split.front).chain(&split.last);
+                for part in parts {
+                    part.for_each_bound(visit);
+                }
+            }
+            Self::Wild | Self::Number { .. } | Self::Range | Self::String | Self::Ending => {}
+        }
+    }
+}
+
 /// A list's end, `[*front, a, b]`, as a clause takes it apart: the list
 /// split before its last `last.len()` elements, through its type's `len`,
 /// `take` and `drop` at this element type, each side matched as written.
@@ -217,6 +262,14 @@ pub(crate) struct Body {
     pub(crate) result: Expr,
 }
 
+impl Body {
+    /// Each line's value, then the answer.
+    pub(crate) fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        let values = self.bindings.iter().map(|binding| &binding.value);
+        values.chain([&self.result])
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Binding {
     pub(crate) pattern: Pattern,
@@ -229,6 +282,134 @@ pub(crate) struct Expr {
     pub(crate) span: crate::ast::Span,
     pub(crate) ty: Type,
     pub(crate) kind: ExprKind,
+}
+
+impl Expr {
+    /// Visit each expression directly inside this one, in the order it is
+    /// worked out. A walk matches the forms it has something to say of and
+    /// leaves the rest to this.
+    pub(crate) fn for_each_child<'a>(&'a self, mut visit: impl FnMut(&'a Self)) {
+        let visited: Result<(), std::convert::Infallible> = self.try_for_each_child(|child| {
+            visit(child);
+            Ok(())
+        });
+        let Ok(()) = visited;
+    }
+
+    /// The same, stopping at the first child `visit` refuses.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per expression form, so a new form must say what is inside it"
+    )]
+    pub(crate) fn try_for_each_child<'a, E>(
+        &'a self,
+        mut visit: impl FnMut(&'a Self) -> Result<(), E>,
+    ) -> Result<(), E> {
+        match &self.kind {
+            ExprKind::Local(_)
+            | ExprKind::Function(_)
+            | ExprKind::ConstructorFunction(_)
+            | ExprKind::Natural(_)
+            | ExprKind::Bytes(_) => Ok(()),
+            ExprKind::Construct(_, list)
+            | ExprKind::Tuple(list)
+            | ExprKind::DirectCall(_, list)
+            | ExprKind::Continue(list)
+            | ExprKind::Break(list) => list.iter().try_for_each(visit),
+            ExprKind::Record(fields) => fields.iter().try_for_each(|(_, value)| visit(value)),
+            ExprKind::Update(base, fields) => {
+                visit(base)?;
+                fields.iter().try_for_each(|(_, value)| visit(value))
+            }
+            ExprKind::Project(inner, _)
+            | ExprKind::Lambda(_, _, inner)
+            | ExprKind::Widen(inner)
+            | ExprKind::Try(inner)
+            | ExprKind::Return(inner) => visit(inner),
+            ExprKind::Invoke(head, arguments) => {
+                visit(head)?;
+                arguments.iter().try_for_each(visit)
+            }
+            ExprKind::If(condition, yes, no) => {
+                visit(condition)?;
+                visit(yes)?;
+                visit(no)
+            }
+            ExprKind::Is(value, rows) => {
+                visit(value)?;
+                rows.iter()
+                    .filter_map(|(_, guard)| guard.as_ref())
+                    .try_for_each(visit)
+            }
+            ExprKind::Match(value, arms) => {
+                visit(value)?;
+                arms.iter().try_for_each(|arm| {
+                    let guards = arm.rows.iter().filter_map(|(_, guard)| guard.as_ref());
+                    guards.chain([&arm.body]).try_for_each(&mut visit)
+                })
+            }
+            ExprKind::Block(body) => body.exprs().try_for_each(visit),
+            ExprKind::Loop(looped) => {
+                for (initial, _, _) in &looped.carried {
+                    visit(initial)?;
+                }
+                match &looped.head {
+                    LoopHead::While(value) | LoopHead::For(_, value) => visit(value)?,
+                }
+                looped.body.exprs().try_for_each(&mut visit)?;
+                looped.rest.exprs().try_for_each(visit)
+            }
+        }
+    }
+
+    /// Visit this expression, then every one inside it, lambdas' bodies
+    /// included.
+    pub(crate) fn for_each_within<'a>(&'a self, visit: &mut impl FnMut(&'a Self)) {
+        visit(self);
+        self.for_each_child(|child| child.for_each_within(visit));
+    }
+
+    /// Visit each local this expression binds itself, not those its
+    /// children bind.
+    pub(crate) fn for_each_bound(&self, mut visit: impl FnMut(h::LocalId)) {
+        let visit = &mut visit;
+        match &self.kind {
+            ExprKind::Lambda(_, patterns, _) => {
+                for pattern in patterns {
+                    pattern.for_each_bound(visit);
+                }
+            }
+            ExprKind::Is(_, rows) => rows
+                .iter()
+                .for_each(|(pattern, _)| pattern.for_each_bound(visit)),
+            ExprKind::Match(_, arms) => {
+                let rows = arms.iter().flat_map(|arm| &arm.rows);
+                for (pattern, _) in rows {
+                    pattern.for_each_bound(visit);
+                }
+            }
+            ExprKind::Block(body) => {
+                for binding in &body.bindings {
+                    binding.pattern.for_each_bound(visit);
+                }
+            }
+            // A loop binds what it carries, its pattern, and its lines.
+            ExprKind::Loop(looped) => {
+                for (_, within, after) in &looped.carried {
+                    visit(*within);
+                    visit(*after);
+                }
+                if let LoopHead::For(pattern, _) = &looped.head {
+                    pattern.for_each_bound(visit);
+                }
+                let lines = looped.body.bindings.iter().chain(&looped.rest.bindings);
+                for binding in lines {
+                    binding.pattern.for_each_bound(visit);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -306,7 +487,7 @@ pub(crate) struct Arm {
 pub(crate) fn monomorphize_from_entry(
     checked: &CheckedProgram,
     entry: Symbol,
-) -> Result<Program, LowerError> {
+) -> Result<Program, Refusal> {
     let specializer = Specializer::new(checked);
     let entry = specializer.entry_key(entry, None)?;
     specializer.run(Some(entry), Vec::new())
@@ -326,7 +507,7 @@ pub(crate) fn monomorphize_package(
     checked: &CheckedProgram,
     host: &crate::host::HostIds,
     main: Option<&crate::host::Main>,
-) -> Result<Program, LowerError> {
+) -> Result<Program, Refusal> {
     let specializer = Specializer::new(checked);
     let entry = main
         .map(|main| specializer.entry_key(main.symbol, Some(host.host)))
@@ -336,7 +517,7 @@ pub(crate) fn monomorphize_package(
 
 /// The package's definitions that stand on their own, in the order written,
 /// each generic one at the empty type.
-fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, LowerError> {
+fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Refusal> {
     let resolved = &checked.resolved;
     let mut roots = Vec::new();
     for function in &resolved.program.functions {
@@ -471,7 +652,7 @@ impl<'a> Specializer<'a> {
         &self,
         entry: Symbol,
         application_host: Option<Symbol>,
-    ) -> Result<FunctionKey, LowerError> {
+    ) -> Result<FunctionKey, Refusal> {
         let scheme = self
             .definitions
             .get(&entry)
@@ -502,7 +683,7 @@ impl<'a> Specializer<'a> {
         mut self,
         entry: Option<FunctionKey>,
         roots: Vec<FunctionKey>,
-    ) -> Result<Program, LowerError> {
+    ) -> Result<Program, Refusal> {
         for key in entry.iter().cloned().chain(roots) {
             // A root is asked for by nothing the last root reached.
             self.current = None;
@@ -555,7 +736,7 @@ impl<'a> Specializer<'a> {
         &mut self,
         key: FunctionKey,
         at: (ModuleId, crate::ast::Span),
-    ) -> Result<(), LowerError> {
+    ) -> Result<(), Refusal> {
         if self.is_structural(key.name, &key.signature.parameters) {
             self.structural.entry(key.clone()).or_insert(at);
         }
@@ -571,7 +752,7 @@ impl<'a> Specializer<'a> {
         &mut self,
         key: FunctionKey,
         at: (ModuleId, crate::ast::Span),
-    ) -> Result<(), LowerError> {
+    ) -> Result<(), Refusal> {
         if self.requested.contains_key(&key) {
             return Ok(());
         }
@@ -588,10 +769,7 @@ impl<'a> Specializer<'a> {
                     && self.reached_through(earlier)
             });
         if grows {
-            let canonical = self.symbols.text(key.name);
-            let name = canonical
-                .rsplit_once("$$")
-                .map_or(canonical, |(_, spelled)| spelled);
+            let name = self.symbols.spelling(key.name);
             let message = format!("this call asks for `{name}` again, at a larger type");
             return Err(located(at.0, at.1, &message)
                 .note("each round would ask for another definition, without end")
@@ -617,27 +795,7 @@ impl<'a> Specializer<'a> {
         false
     }
 
-    /// Whether `name` on these parameters is a closed record's or a
-    /// tuple's own `equals`, `cmp`, `to_str` or `hash_into`, or a tag row's
-    /// own `equals` or `to_str`.
-    fn is_structural(&self, name: Symbol, parameters: &[Type]) -> bool {
-        let receiver = parameters.first();
-        let name = Some(name);
-        (name == self.prelude.equals
-            && matches!(
-                receiver,
-                Some(Type::Record(_) | Type::Tuple(_) | Type::Variants(_))
-            ))
-            || ((name == self.prelude.cmp || name == self.prelude.hash_into)
-                && matches!(receiver, Some(Type::Record(_) | Type::Tuple(_))))
-            || (name == self.prelude.to_str
-                && matches!(
-                    receiver,
-                    Some(Type::Record(_) | Type::Tuple(_) | Type::Variants(_))
-                ))
-    }
-
-    fn specialize_function(&mut self, key: &FunctionKey) -> Result<Function, LowerError> {
+    fn specialize_function(&mut self, key: &FunctionKey) -> Result<Function, Refusal> {
         if let Some(&at) = self.structural.get(key) {
             return self.structural_function(key, at);
         }
@@ -679,402 +837,6 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    /// A record's, a tuple's or a tag row's `equals`, every component equal,
-    /// a tuple's `cmp`, the first position not `Eq`, or a record's or a
-    /// tuple's `hash_into`, each component fed in order, each component
-    /// taken by its own type's member. Values of a row are equal where
-    /// they are one tag with equal fields.
-    fn structural_function(
-        &mut self,
-        key: &FunctionKey,
-        at: (ModuleId, crate::ast::Span),
-    ) -> Result<Function, LowerError> {
-        let receiver = key.signature.parameters[0].clone();
-        let answer = key.signature.result.as_ref().clone();
-        if Some(key.name) == self.prelude.to_str {
-            return match &receiver {
-                Type::Variants(tags) => self.row_to_str(key, at, tags),
-                Type::Tuple(members) => {
-                    let parts: Vec<_> = members.iter().map(|ty| (None, ty.clone())).collect();
-                    self.product_to_str(key, at, &parts, ("(", ")"), Pattern::Product)
-                }
-                Type::Record(fields) => {
-                    // In the order of their names, as Ori renders a record,
-                    // whatever order the record was written or held in.
-                    let mut order: Vec<_> = (0..fields.len()).collect();
-                    order.sort_by(|&a, &b| {
-                        self.symbols
-                            .text(fields[a].0)
-                            .cmp(self.symbols.text(fields[b].0))
-                    });
-                    let parts: Vec<_> = order
-                        .iter()
-                        .map(|&at| (Some(fields[at].0), fields[at].1.clone()))
-                        .collect();
-                    let shape = |binds: Vec<Pattern>| {
-                        Pattern::Record(order.iter().map(|&at| fields[at].0).zip(binds).collect())
-                    };
-                    self.product_to_str(key, at, &parts, ("{", "}"), shape)
-                }
-                _ => unreachable!("only records, tuples and rows have a structural `to_str`"),
-            };
-        }
-        let hashing = Some(key.name) == self.prelude.hash_into;
-        let clauses = match &receiver {
-            Type::Tuple(members) if hashing => {
-                vec![self.fed(key, at, &answer, members, Pattern::Product)?]
-            }
-            Type::Tuple(members) => {
-                vec![self.componentwise(key, at, &answer, members, Pattern::Product)?]
-            }
-            Type::Record(fields) if hashing => {
-                let components: Vec<Type> = fields.iter().map(|(_, ty)| ty.clone()).collect();
-                let shape = |binds: Vec<Pattern>| {
-                    Pattern::Record(fields.iter().map(|(name, _)| *name).zip(binds).collect())
-                };
-                vec![self.fed(key, at, &answer, &components, shape)?]
-            }
-            Type::Record(fields) => {
-                let components: Vec<Type> = fields.iter().map(|(_, ty)| ty.clone()).collect();
-                let shape = |binds: Vec<Pattern>| {
-                    Pattern::Record(fields.iter().map(|(name, _)| *name).zip(binds).collect())
-                };
-                vec![self.componentwise(key, at, &answer, &components, shape)?]
-            }
-            Type::Variants(tags) => {
-                let mut clauses = Vec::with_capacity(tags.len() + 1);
-                for (label, fields) in tags {
-                    let shape = |binds| Pattern::Constructor(*label, binds);
-                    clauses.push(self.componentwise(key, at, &answer, fields, shape)?);
-                }
-                // Two different tags, where there are two to differ.
-                if tags.len() != 1 {
-                    clauses.push(Clause {
-                        patterns: vec![Pattern::Wild, Pattern::Wild],
-                        guard: None,
-                        body: Body {
-                            bindings: Vec::new(),
-                            result: Expr {
-                                module: at.0,
-                                span: at.1,
-                                ty: answer.clone(),
-                                kind: ExprKind::Construct(self.prelude.bool_false, Vec::new()),
-                            },
-                        },
-                    });
-                }
-                clauses
-            }
-            _ => unreachable!("only records, tuples and rows have structural members"),
-        };
-        Ok(Function {
-            key: key.clone(),
-            definition: Definition::Body(clauses),
-        })
-    }
-
-    /// A tag row's `to_str`, as Ori writes a tag: its name, and the `to_str`
-    /// of each of its fields after it in parentheses, `Invalid(3)`.
-    fn row_to_str(
-        &mut self,
-        key: &FunctionKey,
-        (module, span): (ModuleId, crate::ast::Span),
-        tags: &[(Symbol, Vec<Type>)],
-    ) -> Result<Function, LowerError> {
-        let str_ = Type::Named(self.prelude.str_, Vec::new());
-        let concat = self.method_key(
-            self.prelude.str_concat,
-            &str_,
-            std::slice::from_ref(&str_),
-            &str_,
-        )?;
-        let mut clauses = Vec::with_capacity(tags.len());
-        for (label, fields) in tags {
-            let count =
-                u32::try_from(fields.len()).map_err(|_| error("a tag has too many fields"))?;
-            let name = self.symbols.text(*label).to_owned();
-            // The name, then each field and what follows it.
-            let opening = if fields.is_empty() {
-                name
-            } else {
-                format!("{name}(")
-            };
-            let mut pieces = vec![self.text(module, span, &opening)?];
-            for (index, field) in (0..count).zip(fields) {
-                let target = self.implementation(field, key.name)?;
-                let call = self.method_key(target, field, &[], &str_)?;
-                self.request_at(call.clone(), (module, span))?;
-                pieces.push(Expr {
-                    module,
-                    span,
-                    ty: str_.clone(),
-                    kind: ExprKind::DirectCall(
-                        call,
-                        vec![Expr {
-                            module,
-                            span,
-                            ty: field.clone(),
-                            kind: ExprKind::Local(h::LocalId(index)),
-                        }],
-                    ),
-                });
-                let after = if index + 1 == count { ")" } else { ", " };
-                pieces.push(self.text(module, span, after)?);
-            }
-            let mut pieces = pieces.into_iter();
-            let mut result = pieces.next().ok_or_else(|| error("a tag has a name"))?;
-            for next in pieces {
-                self.request(concat.clone());
-                result = Expr {
-                    module,
-                    span,
-                    ty: str_.clone(),
-                    kind: ExprKind::DirectCall(concat.clone(), vec![result, next]),
-                };
-            }
-            clauses.push(Clause {
-                patterns: vec![Pattern::Constructor(
-                    *label,
-                    (0..count)
-                        .map(|index| Pattern::Bind(h::LocalId(index)))
-                        .collect(),
-                )],
-                guard: None,
-                body: Body {
-                    bindings: Vec::new(),
-                    result,
-                },
-            });
-        }
-        Ok(Function {
-            key: key.clone(),
-            definition: Definition::Body(clauses),
-        })
-    }
-
-    /// A record's or a tuple's `to_str`: `open`, each part's own `to_str`
-    /// after its name where it has one, separated by `, `, then `close`, so
-    /// `{x: 1, y: 2}` and `(1, "a")`.
-    fn product_to_str(
-        &mut self,
-        key: &FunctionKey,
-        (module, span): (ModuleId, crate::ast::Span),
-        parts: &[(Option<Symbol>, Type)],
-        (open, close): (&str, &str),
-        shape: impl Fn(Vec<Pattern>) -> Pattern,
-    ) -> Result<Function, LowerError> {
-        let str_ = Type::Named(self.prelude.str_, Vec::new());
-        let concat = self.method_key(
-            self.prelude.str_concat,
-            &str_,
-            std::slice::from_ref(&str_),
-            &str_,
-        )?;
-        let count =
-            u32::try_from(parts.len()).map_err(|_| error("a product has too many parts"))?;
-        let mut pieces = Vec::new();
-        let mut before = open.to_owned();
-        for (index, (name, ty)) in (0..count).zip(parts) {
-            if let Some(name) = name {
-                before.push_str(self.symbols.text(*name));
-                before.push_str(": ");
-            }
-            pieces.push(self.text(module, span, &before)?);
-            let target = self.implementation(ty, key.name)?;
-            let call = self.method_key(target, ty, &[], &str_)?;
-            self.request_at(call.clone(), (module, span))?;
-            pieces.push(Expr {
-                module,
-                span,
-                ty: str_.clone(),
-                kind: ExprKind::DirectCall(
-                    call,
-                    vec![Expr {
-                        module,
-                        span,
-                        ty: ty.clone(),
-                        kind: ExprKind::Local(h::LocalId(index)),
-                    }],
-                ),
-            });
-            ", ".clone_into(&mut before);
-        }
-        let closing = if parts.is_empty() {
-            format!("{open}{close}")
-        } else {
-            close.to_owned()
-        };
-        pieces.push(self.text(module, span, &closing)?);
-        let mut pieces = pieces.into_iter();
-        let mut result = pieces
-            .next()
-            .ok_or_else(|| error("a product renders something"))?;
-        for next in pieces {
-            self.request(concat.clone());
-            result = Expr {
-                module,
-                span,
-                ty: str_.clone(),
-                kind: ExprKind::DirectCall(concat.clone(), vec![result, next]),
-            };
-        }
-        Ok(Function {
-            key: key.clone(),
-            definition: Definition::Body(vec![Clause {
-                patterns: vec![shape(
-                    (0..count)
-                        .map(|index| Pattern::Bind(h::LocalId(index)))
-                        .collect(),
-                )],
-                guard: None,
-                body: Body {
-                    bindings: Vec::new(),
-                    result,
-                },
-            }]),
-        })
-    }
-
-    /// A string literal of `text`.
-    fn text(
-        &mut self,
-        module: ModuleId,
-        span: crate::ast::Span,
-        text: &str,
-    ) -> Result<Expr, LowerError> {
-        let literal = crate::blessed::string(text.as_bytes(), self.prelude);
-        let str_ = Type::Named(self.prelude.str_, Vec::new());
-        self.literal(module, span, &literal, &str_)
-    }
-
-    /// The clause taking two values of one shape apart, `shape` holding the
-    /// binds of their `components`, that answers each pair of components
-    /// compared by the component type's own member, the answers joined.
-    fn componentwise(
-        &mut self,
-        key: &FunctionKey,
-        (module, span): (ModuleId, crate::ast::Span),
-        answer: &Type,
-        components: &[Type],
-        shape: impl Fn(Vec<Pattern>) -> Pattern,
-    ) -> Result<Clause, LowerError> {
-        let count = u32::try_from(components.len())
-            .map_err(|_| error("a product has too many components"))?;
-        let side = |offset: u32| {
-            shape(
-                (0..count)
-                    .map(|index| Pattern::Bind(h::LocalId(offset + index)))
-                    .collect(),
-            )
-        };
-        let patterns = vec![side(0), side(count)];
-        let local = |index: u32, ty: &Type| Expr {
-            module,
-            span,
-            ty: ty.clone(),
-            kind: ExprKind::Local(h::LocalId(index)),
-        };
-        let mut compared = Vec::with_capacity(components.len());
-        for (index, component) in (0..count).zip(components) {
-            let target = self.implementation(component, key.name)?;
-            let call =
-                self.method_key(target, component, std::slice::from_ref(component), answer)?;
-            self.request_at(call.clone(), (module, span))?;
-            compared.push(Expr {
-                module,
-                span,
-                ty: answer.clone(),
-                kind: ExprKind::DirectCall(
-                    call,
-                    vec![local(index, component), local(count + index, component)],
-                ),
-            });
-        }
-        let (join, unit) = if Some(key.name) == self.prelude.cmp {
-            (self.prelude.order_or, self.prelude.order_eq)
-        } else {
-            (self.prelude.bool_and, self.prelude.bool_true)
-        };
-        let join = self.method_key(join, answer, std::slice::from_ref(answer), answer)?;
-        let mut result = Expr {
-            module,
-            span,
-            ty: answer.clone(),
-            kind: ExprKind::Construct(unit, Vec::new()),
-        };
-        if let Some(last) = compared.pop() {
-            result = last;
-            self.request(join.clone());
-        }
-        // From the last position back, so the first decides first.
-        while let Some(earlier) = compared.pop() {
-            result = Expr {
-                module,
-                span,
-                ty: answer.clone(),
-                kind: ExprKind::DirectCall(join.clone(), vec![earlier, result]),
-            };
-        }
-        Ok(Clause {
-            patterns,
-            guard: None,
-            body: Body {
-                bindings: Vec::new(),
-                result,
-            },
-        })
-    }
-
-    /// The clause taking a value of one shape apart, `shape` holding the
-    /// binds of its `components`, and a hasher beside it, that feeds each
-    /// component to the hasher by the component type's own `hash_into`,
-    /// first to last, and answers the hasher fed.
-    fn fed(
-        &mut self,
-        key: &FunctionKey,
-        (module, span): (ModuleId, crate::ast::Span),
-        hasher: &Type,
-        components: &[Type],
-        shape: impl Fn(Vec<Pattern>) -> Pattern,
-    ) -> Result<Clause, LowerError> {
-        let count = u32::try_from(components.len())
-            .map_err(|_| error("a product has too many components"))?;
-        let patterns = vec![
-            shape(
-                (0..count)
-                    .map(|index| Pattern::Bind(h::LocalId(index)))
-                    .collect(),
-            ),
-            Pattern::Bind(h::LocalId(count)),
-        ];
-        let local = |index: u32, ty: &Type| Expr {
-            module,
-            span,
-            ty: ty.clone(),
-            kind: ExprKind::Local(h::LocalId(index)),
-        };
-        let mut result = local(count, hasher);
-        for (index, component) in (0..count).zip(components) {
-            let target = self.implementation(component, key.name)?;
-            let call = self.method_key(target, component, std::slice::from_ref(hasher), hasher)?;
-            self.request_at(call.clone(), (module, span))?;
-            result = Expr {
-                module,
-                span,
-                ty: hasher.clone(),
-                kind: ExprKind::DirectCall(call, vec![local(index, component), result]),
-            };
-        }
-        Ok(Clause {
-            patterns,
-            guard: None,
-            body: Body {
-                bindings: Vec::new(),
-                result,
-            },
-        })
-    }
-
     /// A written clause at this specialization: one clause for each row its
     /// `|` patterns stand for, each with the one guard and body.
     fn clause(
@@ -1083,7 +845,7 @@ impl<'a> Specializer<'a> {
         clause: &t::Clause,
         substitution: &HashMap<TypeVariable, Type>,
         parameters: &[Type],
-    ) -> Result<Vec<Clause>, LowerError> {
+    ) -> Result<Vec<Clause>, Refusal> {
         let guard = clause
             .guard
             .as_ref()
@@ -1114,7 +876,7 @@ impl<'a> Specializer<'a> {
         row: &[t::Pattern],
         parameters: &[Type],
         (guard, body): (Option<Expr>, Body),
-    ) -> Result<Clause, LowerError> {
+    ) -> Result<Clause, Refusal> {
         let mut next = clause.locals;
         let mut tests = Vec::new();
         let patterns = row
@@ -1144,7 +906,7 @@ impl<'a> Specializer<'a> {
         pattern: &t::Pattern,
         ty: &Type,
         (next, tests): (&mut u32, &mut Vec<Expr>),
-    ) -> Result<Pattern, LowerError> {
+    ) -> Result<Pattern, Refusal> {
         // A range binds nothing it shows: a fresh name, and each end it has
         // asked of that name, through the type's `cmp`.
         if let t::Pattern::Range(start, end) = pattern {
@@ -1303,7 +1065,7 @@ impl<'a> Specializer<'a> {
                             self.tested((module, span), field, &field_ty, (next, tests))?,
                         ))
                     })
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             (t::Pattern::Tuple(members), Type::Tuple(types)) => Pattern::Product(
                 members
@@ -1328,7 +1090,7 @@ impl<'a> Specializer<'a> {
         span: crate::ast::Span,
         tests: Vec<Expr>,
         guard: Option<Expr>,
-    ) -> Result<Option<Expr>, LowerError> {
+    ) -> Result<Option<Expr>, Refusal> {
         let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
         let and = self.method_key(
             self.prelude.bool_and,
@@ -1358,7 +1120,7 @@ impl<'a> Specializer<'a> {
         module: ModuleId,
         body: &t::Body,
         substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Body, LowerError> {
+    ) -> Result<Body, Refusal> {
         Ok(Body {
             bindings: body
                 .bindings
@@ -1369,7 +1131,7 @@ impl<'a> Specializer<'a> {
                         value: self.expr(module, &binding.value, substitution)?,
                     })
                 })
-                .collect::<Result<_, LowerError>>()?,
+                .collect::<Result<_, Refusal>>()?,
             result: self.expr(module, &body.result, substitution)?,
         })
     }
@@ -1379,7 +1141,7 @@ impl<'a> Specializer<'a> {
         module: ModuleId,
         expression: &t::Expr,
         substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Expr, LowerError> {
+    ) -> Result<Expr, Refusal> {
         let ty = self.site_type(&expression.ty, substitution)?;
         let span = expression.span;
         let kind = match &expression.kind {
@@ -1393,7 +1155,7 @@ impl<'a> Specializer<'a> {
                     .map(|(initial, within, after)| {
                         Ok((self.expr(module, initial, substitution)?, *within, *after))
                     })
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
                 head: match &looped.head {
                     t::LoopHead::While(condition) => {
                         LoopHead::While(self.expr(module, condition, substitution)?)
@@ -1448,14 +1210,14 @@ impl<'a> Specializer<'a> {
                 fields
                     .iter()
                     .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             t::ExprKind::Update(base, fields) => ExprKind::Update(
                 Box::new(self.expr(module, base, substitution)?),
                 fields
                     .iter()
                     .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
-                    .collect::<Result<_, LowerError>>()?,
+                    .collect::<Result<_, Refusal>>()?,
             ),
             t::ExprKind::Tuple(members) => ExprKind::Tuple(
                 members
@@ -1610,7 +1372,7 @@ impl<'a> Specializer<'a> {
         &self,
         template: &InferredType,
         substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Type, LowerError> {
+    ) -> Result<Type, Refusal> {
         let mut free = Vec::new();
         ordinary_variables(template, &mut free);
         free.retain(|variable| !substitution.contains_key(variable));
@@ -1626,7 +1388,7 @@ impl<'a> Specializer<'a> {
 
     /// The type of `owner`'s field `name`, where it is a record having it
     /// or a declared type whose record does.
-    fn field_type(&self, owner: &Type, name: Symbol) -> Result<Option<Type>, LowerError> {
+    fn field_type(&self, owner: &Type, name: Symbol) -> Result<Option<Type>, Refusal> {
         let fields = match owner {
             Type::Record(fields) => fields.clone(),
             Type::Named(owner, arguments) => {
@@ -1656,7 +1418,7 @@ impl<'a> Specializer<'a> {
     }
 
     /// Which method of `owner` is its `member`.
-    fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, LowerError> {
+    fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, Refusal> {
         if self.is_structural(member, std::slice::from_ref(owner)) {
             return Ok(member);
         }
@@ -1761,7 +1523,7 @@ impl<'a> Specializer<'a> {
         span: crate::ast::Span,
         numeral: &t::Numeral,
         ty: &Type,
-    ) -> Result<Expr, LowerError> {
+    ) -> Result<Expr, Refusal> {
         if let Some(scale) = numeral.scale {
             let float = match ty {
                 Type::Named(name, arguments) if arguments.is_empty() => {
@@ -1792,7 +1554,7 @@ impl<'a> Specializer<'a> {
         magnitude: BigUint,
         negative: bool,
         ty: &Type,
-    ) -> Result<Expr, LowerError> {
+    ) -> Result<Expr, Refusal> {
         let kind = match ty {
             Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.nat => {
                 Some(NumeralType::Nat)
@@ -1827,7 +1589,7 @@ impl<'a> Specializer<'a> {
         low: Expr,
         high: Expr,
         ty: &Type,
-    ) -> Result<Expr, LowerError> {
+    ) -> Result<Expr, Refusal> {
         let cmp = self
             .prelude
             .cmp
@@ -1861,7 +1623,7 @@ impl<'a> Specializer<'a> {
         receiver: &Type,
         arguments: &[Type],
         result: &Type,
-    ) -> Result<FunctionKey, LowerError> {
+    ) -> Result<FunctionKey, Refusal> {
         let mut parameters = Vec::with_capacity(arguments.len() + 1);
         parameters.push(receiver.clone());
         parameters.extend_from_slice(arguments);
@@ -1896,7 +1658,7 @@ impl<'a> Specializer<'a> {
         span: crate::ast::Span,
         literal: &LiteralExpr,
         expected: &Type,
-    ) -> Result<Expr, LowerError> {
+    ) -> Result<Expr, Refusal> {
         let kind = match literal {
             LiteralExpr::Natural(magnitude) => ExprKind::Natural(magnitude.clone()),
             LiteralExpr::Bytes(bytes) => ExprKind::Bytes(bytes.clone()),
@@ -1948,11 +1710,7 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    fn constructor_fields(
-        &self,
-        constructor: Symbol,
-        result: &Type,
-    ) -> Result<Vec<Type>, LowerError> {
+    fn constructor_fields(&self, constructor: Symbol, result: &Type) -> Result<Vec<Type>, Refusal> {
         let (declared_owner, fields) = self
             .constructors
             .get(&constructor)
@@ -2061,7 +1819,7 @@ fn ordinary_variables(ty: &InferredType, output: &mut Vec<TypeVariable>) {
     }
 }
 
-fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, LowerError> {
+fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, Refusal> {
     if !scheme.variables.is_empty() {
         return Err(error("entry has an ambiguous polymorphic type"));
     }
@@ -2133,7 +1891,7 @@ fn meet(
 fn substitute_type(
     ty: &InferredType,
     substitution: &HashMap<TypeVariable, Type>,
-) -> Result<Type, LowerError> {
+) -> Result<Type, Refusal> {
     match ty {
         InferredType::Variable(variable) => substitution
             .get(variable)
@@ -2165,7 +1923,7 @@ fn substitute_type(
                         .collect::<Result<_, _>>()?;
                     Ok((*label, fields))
                 })
-                .collect::<Result<Vec<_>, LowerError>>()?;
+                .collect::<Result<Vec<_>, Refusal>>()?;
             let rest = match tail.as_deref() {
                 None => Type::empty(),
                 Some(InferredType::Variable(variable)) => substitution
@@ -2185,7 +1943,7 @@ fn substitute_type(
             let mut record = fields
                 .iter()
                 .map(|(name, ty)| Ok((*name, substitute_type(ty, substitution)?)))
-                .collect::<Result<Vec<_>, LowerError>>()?;
+                .collect::<Result<Vec<_>, Refusal>>()?;
             let rest = match tail.as_deref() {
                 None => Type::Record(Vec::new()),
                 Some(InferredType::Variable(variable)) => substitution
@@ -2215,7 +1973,7 @@ fn match_signature(
     template: &InferredType,
     concrete: &Signature,
     substitution: &mut HashMap<TypeVariable, Type>,
-) -> Result<(), LowerError> {
+) -> Result<(), Refusal> {
     let InferredType::Function(parameters, result) = template else {
         return Err(error("a checked function has a non-function type"));
     };
@@ -2227,7 +1985,7 @@ fn match_parameters(
     result: &InferredType,
     concrete: &Signature,
     substitution: &mut HashMap<TypeVariable, Type>,
-) -> Result<(), LowerError> {
+) -> Result<(), Refusal> {
     if parameters.len() != concrete.parameters.len() {
         return Err(error("a concrete use does not match its inferred scheme"));
     }
@@ -2241,7 +1999,7 @@ fn match_type(
     template: &InferredType,
     concrete: &Type,
     substitution: &mut HashMap<TypeVariable, Type>,
-) -> Result<(), LowerError> {
+) -> Result<(), Refusal> {
     match (template, concrete) {
         (InferredType::Variable(variable), concrete) => {
             if let Some(previous) = substitution.get(variable) {
@@ -2315,7 +2073,7 @@ fn match_type(
     }
 }
 
-fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, LowerError> {
+fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, Refusal> {
     let InferredType::Function(_, template_result) = &scheme.ty else {
         return Err(error("literal helper is not a function"));
     };
@@ -2327,7 +2085,7 @@ fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, Lo
 pub(crate) fn surface_type(
     ty: &h::Type,
     variables: &HashMap<Symbol, Type>,
-) -> Result<Type, LowerError> {
+) -> Result<Type, Refusal> {
     match ty {
         h::Type::Named(name, arguments) => Ok(Type::Named(
             *name,
@@ -2361,13 +2119,13 @@ pub(crate) fn surface_type(
                         .collect::<Result<_, _>>()?;
                     Ok((constructor.name, fields))
                 })
-                .collect::<Result<_, LowerError>>()?,
+                .collect::<Result<_, Refusal>>()?,
         )),
         h::Type::Record(fields, _) => Ok(Type::Record(
             fields
                 .iter()
                 .map(|(name, ty)| Ok((*name, surface_type(ty, variables)?)))
-                .collect::<Result<_, LowerError>>()?,
+                .collect::<Result<_, Refusal>>()?,
         )),
         h::Type::Tuple(members) => Ok(Type::Tuple(
             members
@@ -2457,10 +2215,10 @@ impl Embedding {
     }
 }
 
-fn located(module: ModuleId, span: crate::ast::Span, message: &str) -> LowerError {
-    LowerError::new(message, Some((module, span)))
+fn located(module: ModuleId, span: crate::ast::Span, message: &str) -> Refusal {
+    Refusal::at(module, span, message)
 }
 
-fn error(message: impl Into<String>) -> LowerError {
-    LowerError::new(message.into(), None)
+fn error(message: impl Into<String>) -> Refusal {
+    Refusal::from(message.into())
 }

@@ -28,8 +28,9 @@ use std::collections::HashMap;
 use num_bigint::BigUint;
 
 use crate::blessed::PreludeIds;
-use crate::check::{CheckError, InferredType, failure};
+use crate::check::{InferredType, failure};
 use crate::diagnostic::Advised;
+use crate::diagnostic::Refusal;
 use crate::hir as h;
 use crate::typed as t;
 use crate::{Symbol, Symbols};
@@ -42,7 +43,7 @@ pub(crate) fn exhaustive(
     program: &t::Program,
     symbols: &Symbols,
     prelude: &PreludeIds,
-) -> Result<(), CheckError> {
+) -> Result<(), Refusal> {
     let checker = Coverage::new(program, prelude);
     for function in &program.functions {
         let t::Definition::Body(clauses) = &function.definition else {
@@ -64,7 +65,7 @@ pub(crate) fn exhaustive(
             .collect();
         if let Some(missing) = checker.missing(rows, &columns) {
             let example = checker.render_all(&missing, symbols);
-            let spelled = spelling(symbols, function.name);
+            let spelled = symbols.spelling(function.name);
             let missing = format!("`{spelled}({example})`");
             let message = format!("`{spelled}` does not cover every case");
             return Err(failure(function.module, first.span, message)
@@ -72,17 +73,12 @@ pub(crate) fn exhaustive(
                 .help(format!("add a clause matching {missing}")));
         }
         let mut found = Vec::new();
-        for clause in clauses {
-            for expression in clause.guard.iter().chain(
-                clause
-                    .body
-                    .bindings
-                    .iter()
-                    .map(|binding| &binding.value)
-                    .chain([&clause.body.result]),
-            ) {
-                with_arms(expression, &mut found);
-            }
+        for expression in clauses.iter().flat_map(t::Clause::exprs) {
+            expression.for_each_within(&mut |inner| {
+                if let t::ExprKind::Match(value, arms) = &inner.kind {
+                    found.push((&**value, arms.as_slice()));
+                }
+            });
         }
         for (value, arms) in found {
             let rows = arms
@@ -106,89 +102,6 @@ pub(crate) fn exhaustive(
         }
     }
     Ok(())
-}
-
-/// Each `is` with arms in `expression`, at any depth: the value it tests
-/// and its arms.
-fn with_arms<'e>(expression: &'e t::Expr, found: &mut Vec<(&'e t::Expr, &'e [t::Arm])>) {
-    let mut each = |inner: &'e t::Expr| with_arms(inner, found);
-    match &expression.kind {
-        t::ExprKind::Match(value, arms) => {
-            found.push((value, arms));
-            with_arms(value, found);
-            for arm in arms {
-                for inner in arm.guard.iter().chain([&arm.body]) {
-                    with_arms(inner, found);
-                }
-            }
-        }
-        t::ExprKind::Construct(_, list)
-        | t::ExprKind::Tuple(list)
-        | t::ExprKind::Method(_, list) => {
-            for inner in list {
-                each(inner);
-            }
-        }
-        t::ExprKind::Record(fields) => {
-            for (_, field) in fields {
-                each(field);
-            }
-        }
-        t::ExprKind::Update(base, fields) => {
-            each(base);
-            for (_, field) in fields {
-                each(field);
-            }
-        }
-        t::ExprKind::Call(head, arguments) => {
-            each(head);
-            for argument in arguments {
-                each(argument);
-            }
-        }
-        t::ExprKind::Lambda(_, inner)
-        | t::ExprKind::Is(inner, _)
-        | t::ExprKind::Project(inner, _)
-        | t::ExprKind::Widen(inner)
-        | t::ExprKind::Try(inner)
-        | t::ExprKind::Return(inner) => each(inner),
-        t::ExprKind::If(condition, yes, no) => {
-            for inner in [condition, yes, no] {
-                each(inner);
-            }
-        }
-        t::ExprKind::Block(body) => {
-            for binding in &body.bindings {
-                each(&binding.value);
-            }
-            each(&body.result);
-        }
-        t::ExprKind::Loop(looped) => {
-            for (initial, _, _) in &looped.carried {
-                each(initial);
-            }
-            match &looped.head {
-                t::LoopHead::While(condition) => each(condition),
-                t::LoopHead::For(_, list) => each(list),
-            }
-            for body in [&looped.body, &looped.rest] {
-                for binding in &body.bindings {
-                    each(&binding.value);
-                }
-                each(&body.result);
-            }
-        }
-        t::ExprKind::Continue(values) | t::ExprKind::Break(values) => {
-            for value in values {
-                each(value);
-            }
-        }
-        t::ExprKind::Local(_)
-        | t::ExprKind::Function(_)
-        | t::ExprKind::Constructor(_)
-        | t::ExprKind::Literal(_)
-        | t::ExprKind::Numeral(_) => {}
-    }
 }
 
 /// A declared type's parameters, and each constructor's field types
@@ -622,11 +535,11 @@ impl<'a> Coverage<'a> {
             Pattern::Constructor(name, fields) | Pattern::Tag(name, fields)
                 if fields.is_empty() =>
             {
-                spelling(symbols, *name).to_owned()
+                symbols.spelling(*name).to_owned()
             }
             Pattern::Constructor(name, fields) | Pattern::Tag(name, fields) => format!(
                 "{}({})",
-                spelling(symbols, *name),
+                symbols.spelling(*name),
                 self.render_all(fields, symbols)
             ),
             Pattern::Tuple(members) => format!("({})", self.render_all(members, symbols)),
@@ -636,7 +549,7 @@ impl<'a> Coverage<'a> {
                     .iter()
                     .map(|(name, field)| format!(
                         "{}: {}",
-                        spelling(symbols, *name),
+                        symbols.spelling(*name),
                         self.render(field, symbols)
                     ))
                     .collect::<Vec<_>>()
@@ -692,12 +605,4 @@ fn written(ty: &h::Type, bound: &HashMap<Symbol, &InferredType>) -> Column {
                 .collect::<Option<_>>()?,
         ),
     })
-}
-
-/// A global's name as the program spells it, without its module identity.
-fn spelling(symbols: &Symbols, name: Symbol) -> &str {
-    let canonical = symbols.text(name);
-    canonical
-        .rsplit_once("$$")
-        .map_or(canonical, |(_, spelled)| spelled)
 }

@@ -20,7 +20,7 @@ use super::diagnostic::{Advice, Advised};
 use super::lex::{Kind, Token};
 use super::lines::{self, Line, Statement, Typed};
 
-/// Why a line could not be read.
+/// Why a line could not be read, or could not be made an item.
 #[derive(Debug)]
 pub(crate) struct SyntaxError {
     pub(crate) span: Span,
@@ -29,7 +29,7 @@ pub(crate) struct SyntaxError {
 }
 
 impl SyntaxError {
-    fn new(span: Span, message: impl Into<String>) -> Self {
+    pub(crate) fn new(span: Span, message: impl Into<String>) -> Self {
         Self {
             span,
             message: message.into(),
@@ -41,16 +41,6 @@ impl SyntaxError {
 impl Advised for SyntaxError {
     fn advice(&mut self) -> &mut Advice {
         &mut self.advice
-    }
-}
-
-impl From<lines::Error> for SyntaxError {
-    fn from(error: lines::Error) -> Self {
-        Self {
-            span: error.span,
-            message: error.message,
-            advice: error.advice,
-        }
     }
 }
 
@@ -566,7 +556,7 @@ impl Parser<'_> {
             let written = self.operand()?;
             self.expect(Kind::KwIn, "`in`")?;
             let list = self.expr()?;
-            let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
+            let pattern = lines::pattern(written, self.source)?;
             LoopHead::For(pattern, Box::new(list))
         };
         self.expect(Kind::KwDo, "`do`")?;
@@ -1024,7 +1014,7 @@ impl Parser<'_> {
                 kind: ExprKind::Match(Box::new(value), arms),
             });
         }
-        let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
+        let pattern = lines::pattern(written, self.source)?;
         let span = value.span.through(pattern.span());
         if next.kind == Kind::KwIs {
             return Err(SyntaxError::new(
@@ -1148,8 +1138,7 @@ impl Parser<'_> {
         let patterns = parameters
             .into_iter()
             .map(|parameter| lines::pattern(parameter, self.source))
-            .collect::<Result<_, _>>()
-            .map_err(SyntaxError::from)?;
+            .collect::<Result<_, _>>()?;
         Ok(Expr {
             span: open.span().through(body.span),
             kind: ExprKind::Lambda(patterns, Box::new(body)),
@@ -1312,7 +1301,7 @@ impl Parser<'_> {
         self.note("`if`");
         self.expect(Kind::Arrow, "`->`")?;
         let body = self.expr()?;
-        let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
+        let pattern = lines::pattern(written, self.source)?;
         Ok(Arm {
             pattern,
             guard,

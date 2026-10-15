@@ -11,7 +11,7 @@ use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 
 use crate::blessed::PreludeIds;
 use crate::check::CheckedProgram;
-use crate::diagnostic::{Diagnostic, LowerError};
+use crate::diagnostic::{Diagnostic, Refusal};
 use crate::first_order::{Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::pattern_compile::{self as p, Decision, Unpack, Value};
@@ -22,7 +22,7 @@ use crate::{ModuleId, Symbol};
 /// Specialize what `entry`, a monomorphic parameterless function, reaches
 /// and emit Barb, for a test to read one definition's lowering.
 #[cfg(test)]
-fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
+fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, Refusal> {
     let specialized = specialize::monomorphize_from_entry(checked, entry)?;
     crate::second_class::check(&specialized, &checked.resolved.package)?;
     let program = crate::callbacks::lower(specialized)?;
@@ -90,7 +90,7 @@ impl<'a> Lowerer<'a> {
         checked: &'a CheckedProgram,
         routines: Option<&'a faun_core::platform::Routines>,
         program: p::Program,
-    ) -> Result<Self, LowerError> {
+    ) -> Result<Self, Refusal> {
         let mut lowerer = Self {
             resolved: &checked.resolved,
             prelude: &checked.prelude,
@@ -114,7 +114,7 @@ impl<'a> Lowerer<'a> {
         Ok(lowerer)
     }
 
-    fn lower(mut self) -> Result<barb::Program, LowerError> {
+    fn lower(mut self) -> Result<barb::Program, Refusal> {
         self.declare_types();
         self.define_types()?;
         self.declare_functions();
@@ -134,12 +134,15 @@ impl<'a> Lowerer<'a> {
     }
 
     /// A refusal, placed at the definition it names.
-    fn refused(&self, refusal: barb::Refusal) -> LowerError {
+    fn refused(&self, refusal: barb::Refusal) -> Refusal {
         let definition = refusal.function.and_then(|function| {
             let (key, _) = self.function_ids.iter().find(|(_, id)| **id == function)?;
             self.definition_site(key.name)
         });
-        LowerError::new(refusal.message, definition)
+        Refusal {
+            at: definition,
+            ..Refusal::from(refusal.message)
+        }
     }
 
     /// Where the first clause defining `name` is written.
@@ -153,14 +156,14 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Find every type the program holds, each of which Barb declares.
-    fn discover(&mut self) -> Result<(), LowerError> {
+    fn discover(&mut self) -> Result<(), Refusal> {
         let functions = std::mem::take(&mut self.program.functions);
         let found = self.discover_in(&functions);
         self.program.functions = functions;
         found
     }
 
-    fn discover_in(&mut self, functions: &[p::Function]) -> Result<(), LowerError> {
+    fn discover_in(&mut self, functions: &[p::Function]) -> Result<(), Refusal> {
         for function in functions {
             let parameters = &function.key.signature.parameters;
             let result = function.key.signature.result.as_ref();
@@ -194,7 +197,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn collect_decision(&mut self, decision: &Decision, answer: &Type) -> Result<(), LowerError> {
+    fn collect_decision(&mut self, decision: &Decision, answer: &Type) -> Result<(), Refusal> {
         match decision {
             Decision::Body { body, .. } => self.collect_body(body, answer)?,
             Decision::Match { owner, arms, .. } => {
@@ -244,7 +247,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn collect_body(&mut self, body: &p::Body, answer: &Type) -> Result<(), LowerError> {
+    fn collect_body(&mut self, body: &p::Body, answer: &Type) -> Result<(), Refusal> {
         for binding in &body.bindings {
             match &binding.value {
                 p::Bound::Value(value) => self.collect_expr(value, answer)?,
@@ -262,7 +265,7 @@ impl<'a> Lowerer<'a> {
         self.collect_expr(&body.result, answer)
     }
 
-    fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
+    fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), Refusal> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
             ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
@@ -318,7 +321,7 @@ impl<'a> Lowerer<'a> {
 
     /// Note that values of `from` are widened to `to`, and so are whatever
     /// of their fields differ between the two.
-    fn collect_widening(&mut self, from: &Type, to: &Type) -> Result<(), LowerError> {
+    fn collect_widening(&mut self, from: &Type, to: &Type) -> Result<(), Refusal> {
         if from == to || !self.widenings.insert((from.clone(), to.clone())) {
             return Ok(());
         }
@@ -337,7 +340,7 @@ impl<'a> Lowerer<'a> {
     /// Each constructor of `from` with its fields' types there and in `to`,
     /// which holds every one of them. A record is one constructor, named
     /// by nothing.
-    fn widening_fields(&self, from: &Type, to: &Type) -> Result<Widening, LowerError> {
+    fn widening_fields(&self, from: &Type, to: &Type) -> Result<Widening, Refusal> {
         if let (Some(source), Some(target)) = (from.members(), to.members()) {
             return Ok(vec![(None, source.into_iter().zip(target).collect())]);
         }
@@ -359,7 +362,7 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
-    fn collect_type(&mut self, ty: &Type) -> Result<(), LowerError> {
+    fn collect_type(&mut self, ty: &Type) -> Result<(), Refusal> {
         if !self.types.insert(ty.clone()) {
             return Ok(());
         }
@@ -409,7 +412,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn define_types(&mut self) -> Result<(), LowerError> {
+    fn define_types(&mut self) -> Result<(), Refusal> {
         let types: Vec<_> = self.types.iter().cloned().collect();
         for ty in types {
             let id = self.type_ids[&ty];
@@ -423,7 +426,7 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .map(|(name, fields)| {
                             (
-                                source_name(*name, &self.resolved.symbols).to_string(),
+                                self.resolved.symbols.spelling(*name).to_string(),
                                 fields
                                     .iter()
                                     .map(|field| self.type_ids[field])
@@ -495,7 +498,7 @@ impl<'a> Lowerer<'a> {
             .as_ref()
             .expect("a record wrapper")
             .constructor;
-        let spelled = source_name(wrapper, &self.resolved.symbols).to_owned();
+        let spelled = self.resolved.symbols.spelling(wrapper).to_owned();
         self.output
             .define_fields(id, &[(spelled.as_str(), held.as_slice())]);
         self.constructor_ids
@@ -576,7 +579,7 @@ impl<'a> Lowerer<'a> {
 
     /// Each widening rebuilds a value in the wider type: the constructor it
     /// was built with, each field widened in turn where its type differs.
-    fn define_widenings(&mut self) -> Result<(), LowerError> {
+    fn define_widenings(&mut self) -> Result<(), Refusal> {
         let widenings: Vec<_> = self.widenings.iter().cloned().collect();
         for (from, to) in widenings {
             let plan = self.widening_fields(&from, &to)?;
@@ -1219,24 +1222,12 @@ fn emit_projection(
     })
 }
 
-fn source_name(symbol: Symbol, symbols: &crate::Symbols) -> &str {
-    // Resolution prefixes globals with a module identity separated by `$$`.
-    // Barb IDs retain identity, while signatures show each specialization, so
-    // the diagnostic name can return to the spelling the programmer wrote.
-    let canonical = symbols.text(symbol);
-    canonical
-        .rsplit_once("$$")
-        .map_or(canonical, |(_, spelling)| spelling)
-}
-
 fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
     match ty {
-        Type::Named(name, arguments) if arguments.is_empty() => {
-            source_name(*name, symbols).to_string()
-        }
+        Type::Named(name, arguments) if arguments.is_empty() => symbols.spelling(*name).to_string(),
         Type::Named(name, arguments) => format!(
             "{}<{}>",
-            source_name(*name, symbols),
+            symbols.spelling(*name),
             arguments
                 .iter()
                 .map(|argument| type_name(argument, symbols))
@@ -1286,7 +1277,7 @@ fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
                 .iter()
                 .map(|(name, ty)| format!(
                     "{}: {}",
-                    source_name(*name, symbols),
+                    symbols.spelling(*name),
                     type_name(ty, symbols)
                 ))
                 .collect::<Vec<_>>()
@@ -1296,7 +1287,7 @@ fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
 }
 
 fn function_name(key: &FunctionKey, symbols: &crate::Symbols) -> String {
-    let name = source_name(key.name, symbols);
+    let name = symbols.spelling(key.name);
     match key.instance {
         specialize::Instance::Lambda(_) => format!("lambda in {name}"),
         specialize::Instance::Join(_) => format!("{name}, going on"),
@@ -1304,8 +1295,8 @@ fn function_name(key: &FunctionKey, symbols: &crate::Symbols) -> String {
     }
 }
 
-fn error(message: impl Into<String>) -> LowerError {
-    LowerError::new(message.into(), None)
+fn error(message: impl Into<String>) -> Refusal {
+    Refusal::from(message.into())
 }
 
 #[cfg(test)]
@@ -1361,7 +1352,7 @@ mod tests {
         let resolved = crate::resolve::resolve_names(loaded).unwrap();
         let checked =
             crate::check::type_check(crate::declarations::normalize(resolved), prelude).unwrap();
-        crate::check::check_application_abi(&checked, &host, &main).unwrap();
+        crate::host::check_application_abi(&checked, &host, &main).unwrap();
         for bits in [16, 32, 64] {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
             let specialized =

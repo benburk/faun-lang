@@ -11,6 +11,7 @@ use std::fmt;
 use faun_core::float::Operation;
 use num_bigint::BigUint;
 
+use super::diagnostic::Diagnostic;
 use super::modules::{LoadedProgram, TypeBinding};
 use super::{Symbol, Symbols};
 
@@ -105,19 +106,6 @@ pub struct Word {
     pub below: BigUint,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreludeError {
-    pub message: String,
-}
-
-impl fmt::Display for PreludeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for PreludeError {}
-
 impl PreludeIds {
     /// Locate and validate identities needed by literal syntax.
     ///
@@ -131,7 +119,7 @@ impl PreludeIds {
         clippy::too_many_lines,
         reason = "one standard identity per line, in the order the struct declares them"
     )]
-    pub fn find_in(program: &LoadedProgram) -> Result<Self, PreludeError> {
+    pub fn find_in(program: &LoadedProgram) -> Result<Self, Diagnostic> {
         let bool_ = binding(program, "Bool")?;
         let nat = binding(program, "Nat")?;
         let int = binding(program, "Int")?;
@@ -394,7 +382,7 @@ fn word(program: &LoadedProgram, name: &str) -> Option<Word> {
     })
 }
 
-fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, PreludeError> {
+fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, Diagnostic> {
     let local = symbol(&program.symbols, name)?;
     program
         .module(program.prelude)
@@ -402,15 +390,13 @@ fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, PreludeEr
         .types
         .get(&local)
         .cloned()
-        .ok_or_else(|| PreludeError {
-            message: format!("the prelude does not export type `{name}`"),
-        })
+        .ok_or_else(|| Diagnostic::new(format!("the prelude does not export type `{name}`")))
 }
 
 fn binding_with_private_constructor(
     program: &LoadedProgram,
     name: &str,
-) -> Result<TypeBinding, PreludeError> {
+) -> Result<TypeBinding, Diagnostic> {
     let public = binding(program, name)?;
     let local = symbol(&program.symbols, name)?;
     program
@@ -421,8 +407,10 @@ fn binding_with_private_constructor(
             binding.canonical == public.canonical && binding.constructors.contains_key(&local)
         })
         .cloned()
-        .ok_or_else(|| PreludeError {
-            message: format!("standard type `{name}` has no private wrapper constructor `{name}`"),
+        .ok_or_else(|| {
+            Diagnostic::new(format!(
+                "standard type `{name}` has no private wrapper constructor `{name}`"
+            ))
         })
 }
 
@@ -431,15 +419,13 @@ fn method(
     binding: &TypeBinding,
     owner: &str,
     name: &str,
-) -> Result<Symbol, PreludeError> {
+) -> Result<Symbol, Diagnostic> {
     let local = symbol(&program.symbols, name)?;
     binding
         .methods
         .get(&local)
         .copied()
-        .ok_or_else(|| PreludeError {
-            message: format!("standard type `{owner}` has no method `{name}`"),
-        })
+        .ok_or_else(|| Diagnostic::new(format!("standard type `{owner}` has no method `{name}`")))
 }
 
 fn constructor(
@@ -447,21 +433,19 @@ fn constructor(
     binding: &TypeBinding,
     owner: &str,
     name: &str,
-) -> Result<Symbol, PreludeError> {
+) -> Result<Symbol, Diagnostic> {
     let local = symbol(&program.symbols, name)?;
-    binding
-        .constructors
-        .get(&local)
-        .copied()
-        .ok_or_else(|| PreludeError {
-            message: format!("standard type `{owner}` has no constructor `{name}`"),
-        })
+    binding.constructors.get(&local).copied().ok_or_else(|| {
+        Diagnostic::new(format!(
+            "standard type `{owner}` has no constructor `{name}`"
+        ))
+    })
 }
 
-fn symbol(symbols: &Symbols, name: &str) -> Result<Symbol, PreludeError> {
-    symbols.find(name).ok_or_else(|| PreludeError {
-        message: format!("standard name `{name}` was never declared"),
-    })
+fn symbol(symbols: &Symbols, name: &str) -> Result<Symbol, Diagnostic> {
+    symbols
+        .find(name)
+        .ok_or_else(|| Diagnostic::new(format!("standard name `{name}` was never declared")))
 }
 
 #[cfg(test)]

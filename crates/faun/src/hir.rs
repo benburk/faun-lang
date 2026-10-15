@@ -5,6 +5,8 @@
 //! need to be consulted after this boundary. [`SiteId`] identifies written and
 //! generated occurrences independently of their diagnostic spans.
 
+use std::convert::Infallible;
+
 use num_bigint::BigUint;
 
 use super::ast::{BinaryOp, Span, UnaryOp};
@@ -224,30 +226,33 @@ impl<D: Clone> Pattern<D> {
         product(patterns.iter().map(Self::choices).collect())
     }
 
-    /// Whether an `|` is anywhere in this pattern.
-    #[must_use]
-    pub fn has_alternatives(&self) -> bool {
-        match self {
-            Self::Or(_) => true,
-            Self::Constructor(_, fields)
-            | Self::Tag(_, fields)
-            | Self::Dual(_, fields)
-            | Self::Tuple(fields) => fields.iter().any(Self::has_alternatives),
-            Self::List(elements, rest) => {
-                elements.iter().any(Self::has_alternatives)
-                    || rest.as_deref().is_some_and(Self::has_alternatives)
-            }
-            Self::Ending(front, last) => {
-                front.has_alternatives() || last.iter().any(Self::has_alternatives)
-            }
-            Self::Record(fields, _) => fields.iter().any(|(_, field)| field.has_alternatives()),
-            Self::As(_, pattern) => pattern.has_alternatives(),
+    /// Each pattern directly inside this one, in the order written; an
+    /// `|`'s are its alternatives.
+    pub fn parts(&self) -> impl Iterator<Item = &Self> {
+        let (before, list, fields, after): (_, &[Self], &[(Symbol, Self)], _) = match self {
+            Self::Constructor(_, parts)
+            | Self::Tag(_, parts)
+            | Self::Dual(_, parts)
+            | Self::Tuple(parts)
+            | Self::Or(parts) => (None, parts, &[], None),
+            Self::List(elements, rest) => (None, elements, &[], rest.as_deref()),
+            Self::Ending(front, last) => (Some(&**front), last, &[], None),
+            Self::Record(fields, _) => (None, &[], fields, None),
+            Self::As(_, inner) => (Some(&**inner), &[], &[], None),
             Self::Wild
             | Self::Bind(_)
             | Self::Number { .. }
             | Self::Range(..)
-            | Self::String(_) => false,
-        }
+            | Self::String(_) => (None, &[], &[], None),
+        };
+        let fields = fields.iter().map(|(_, field)| field);
+        before.into_iter().chain(list).chain(fields).chain(after)
+    }
+
+    /// Whether an `|` is anywhere in this pattern.
+    #[must_use]
+    pub fn has_alternatives(&self) -> bool {
+        matches!(self, Self::Or(_)) || self.parts().any(Self::has_alternatives)
     }
 
     /// This pattern once for each way of choosing an alternative of every
@@ -357,6 +362,20 @@ pub struct Body {
     pub result: Expr,
 }
 
+impl Body {
+    /// Each line's value, then the answer.
+    pub(crate) fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        let values = self.bindings.iter().map(|binding| &binding.value);
+        values.chain([&self.result])
+    }
+
+    /// [`Self::exprs`], each changeable.
+    pub(crate) fn exprs_mut(&mut self) -> impl Iterator<Item = &mut Expr> {
+        let values = self.bindings.iter_mut().map(|binding| &mut binding.value);
+        values.chain([&mut self.result])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
     pub pattern: Pattern,
@@ -368,6 +387,171 @@ pub struct Expr {
     pub site: SiteId,
     pub span: Span,
     pub kind: ExprKind,
+}
+
+impl Expr {
+    /// Visit each expression directly inside this one, in the order it is
+    /// worked out. A walk matches the forms it has something to say of and
+    /// leaves the rest to this.
+    pub(crate) fn for_each_child<'a>(&'a self, mut visit: impl FnMut(&'a Self)) {
+        let visited: Result<(), Infallible> = self.try_for_each_child(|child| {
+            visit(child);
+            Ok(())
+        });
+        let Ok(()) = visited;
+    }
+
+    /// The same, stopping at the first child `visit` refuses.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per expression form, so a new form must say what is inside it"
+    )]
+    pub(crate) fn try_for_each_child<'a, E>(
+        &'a self,
+        mut visit: impl FnMut(&'a Self) -> Result<(), E>,
+    ) -> Result<(), E> {
+        match &self.kind {
+            ExprKind::Local(_)
+            | ExprKind::Global(_)
+            | ExprKind::Constructor(_)
+            | ExprKind::Tag(_)
+            | ExprKind::Associated(..)
+            | ExprKind::Dual(_)
+            | ExprKind::Number(_)
+            | ExprKind::Decimal(..) => Ok(()),
+            ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
+                StringPart::Text(_) => Ok(()),
+                StringPart::Splice(inner) => visit(inner),
+            }),
+            ExprKind::List(elements, rest) => {
+                elements.iter().chain(rest.as_deref()).try_for_each(visit)
+            }
+            ExprKind::Record(fields) => fields.iter().try_for_each(|(_, value)| visit(value)),
+            ExprKind::Update(base, fields) => {
+                visit(base)?;
+                fields.iter().try_for_each(|(_, value)| visit(value))
+            }
+            ExprKind::Tuple(members) | ExprKind::Continue(members) | ExprKind::Break(members) => {
+                members.iter().try_for_each(visit)
+            }
+            ExprKind::Lambda(_, inner)
+            | ExprKind::Member(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Try(inner)
+            | ExprKind::Return(inner)
+            | ExprKind::Is(inner, _) => visit(inner),
+            ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
+                visit(head)?;
+                arguments.iter().try_for_each(visit)
+            }
+            ExprKind::Binary(_, left, right) => {
+                visit(left)?;
+                visit(right)
+            }
+            ExprKind::If(condition, yes, no) => {
+                visit(condition)?;
+                visit(yes)?;
+                visit(no)
+            }
+            ExprKind::Match(value, arms) => {
+                visit(value)?;
+                arms.iter().try_for_each(|arm| {
+                    arm.guard.iter().chain([&arm.body]).try_for_each(&mut visit)
+                })
+            }
+            ExprKind::Block(body) => body.exprs().try_for_each(visit),
+            ExprKind::Loop(looped) => {
+                for (initial, _, _) in &looped.carried {
+                    visit(initial)?;
+                }
+                visit(looped.head.value())?;
+                looped.body.exprs().try_for_each(&mut visit)?;
+                looped.rest.exprs().try_for_each(visit)
+            }
+        }
+    }
+
+    /// [`Self::for_each_child`], each child changeable.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per expression form, so a new form must say what is inside it"
+    )]
+    pub(crate) fn for_each_child_mut(&mut self, mut visit: impl FnMut(&mut Self)) {
+        match &mut self.kind {
+            ExprKind::Local(_)
+            | ExprKind::Global(_)
+            | ExprKind::Constructor(_)
+            | ExprKind::Tag(_)
+            | ExprKind::Associated(..)
+            | ExprKind::Dual(_)
+            | ExprKind::Number(_)
+            | ExprKind::Decimal(..) => {}
+            ExprKind::String(parts) => {
+                for part in parts {
+                    if let StringPart::Splice(inner) = part {
+                        visit(inner);
+                    }
+                }
+            }
+            ExprKind::List(elements, rest) => {
+                elements
+                    .iter_mut()
+                    .chain(rest.as_deref_mut())
+                    .for_each(visit);
+            }
+            ExprKind::Record(fields) => {
+                for (_, value) in fields.iter_mut() {
+                    visit(value);
+                }
+            }
+            ExprKind::Update(base, fields) => {
+                visit(base);
+                for (_, value) in fields.iter_mut() {
+                    visit(value);
+                }
+            }
+            ExprKind::Tuple(members) | ExprKind::Continue(members) | ExprKind::Break(members) => {
+                members.iter_mut().for_each(visit);
+            }
+            ExprKind::Lambda(_, inner)
+            | ExprKind::Member(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Try(inner)
+            | ExprKind::Return(inner)
+            | ExprKind::Is(inner, _) => visit(inner),
+            ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
+                visit(head);
+                arguments.iter_mut().for_each(visit);
+            }
+            ExprKind::Binary(_, left, right) => {
+                visit(left);
+                visit(right);
+            }
+            ExprKind::If(condition, yes, no) => {
+                visit(condition);
+                visit(yes);
+                visit(no);
+            }
+            ExprKind::Match(value, arms) => {
+                visit(value);
+                for arm in arms {
+                    arm.guard
+                        .iter_mut()
+                        .chain([&mut arm.body])
+                        .for_each(&mut visit);
+                }
+            }
+            ExprKind::Block(body) => body.exprs_mut().for_each(visit),
+            ExprKind::Loop(looped) => {
+                for (initial, _, _) in &mut looped.carried {
+                    visit(initial);
+                }
+                visit(looped.head.value_mut());
+                looped.body.exprs_mut().for_each(&mut visit);
+                looped.rest.exprs_mut().for_each(visit);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -445,6 +629,21 @@ pub enum LoopHead {
     While(Expr),
     /// Once for each element of the list, the pattern binding it.
     For(Pattern, Expr),
+}
+
+impl LoopHead {
+    /// What the head works out: the condition, or the list.
+    pub(crate) const fn value(&self) -> &Expr {
+        match self {
+            Self::While(value) | Self::For(_, value) => value,
+        }
+    }
+
+    pub(crate) const fn value_mut(&mut self) -> &mut Expr {
+        match self {
+            Self::While(value) | Self::For(_, value) => value,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

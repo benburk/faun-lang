@@ -13,12 +13,12 @@
 //! is; such a form is refused wherever it stays an expression.
 
 use super::ast::{
-    AliasDecl, Arm, BinaryOp, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl,
-    DataDecl, DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item,
-    LoopHead, MethodItem, Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type,
-    UnaryOp,
+    AliasDecl, BinaryOp, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl, DataDecl,
+    DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item, LoopHead,
+    MethodItem, Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
-use super::diagnostic::{Advice, Advised};
+use super::diagnostic::Advised;
+use super::grammar::SyntaxError;
 
 /// One line of a file or of a method block, as the grammar reads it.
 #[derive(Debug)]
@@ -80,28 +80,6 @@ pub(crate) enum Statement {
     Loop(Span, LoopHead, Vec<Self>),
 }
 
-/// Why lines do not make items.
-#[derive(Debug)]
-pub(crate) struct Error {
-    pub(crate) span: Span,
-    pub(crate) message: String,
-    pub(crate) advice: Advice,
-}
-
-impl Advised for Error {
-    fn advice(&mut self) -> &mut Advice {
-        &mut self.advice
-    }
-}
-
-fn error(span: Span, message: impl Into<String>) -> Error {
-    Error {
-        span,
-        message: message.into(),
-        advice: Advice::default(),
-    }
-}
-
 /// Whether `name` is a type's or a constructor's.
 pub(crate) fn is_type_name(name: Name, source: &str) -> bool {
     name.text(source)
@@ -115,7 +93,7 @@ pub(crate) fn is_type_name(name: Name, source: &str) -> bool {
 /// A head that is not the pattern or name its line needs, a line that
 /// belongs to nothing, a body that ends in a binding, or a pattern-only form
 /// left in an expression.
-pub(crate) fn items(lines: Vec<Line>, source: &str) -> Result<Vec<Item>, Error> {
+pub(crate) fn items(lines: Vec<Line>, source: &str) -> Result<Vec<Item>, SyntaxError> {
     let items = Grouping::new(source, false).group(lines)?;
     for item in &items {
         match item {
@@ -151,14 +129,14 @@ impl<'s> Grouping<'s> {
         }
     }
 
-    fn group(mut self, lines: Vec<Line>) -> Result<Vec<Item>, Error> {
+    fn group(mut self, lines: Vec<Line>) -> Result<Vec<Item>, SyntaxError> {
         for line in lines {
             self.line(line)?;
         }
         Ok(self.items)
     }
 
-    fn line(&mut self, line: Line) -> Result<(), Error> {
+    fn line(&mut self, line: Line) -> Result<(), SyntaxError> {
         match line {
             Line::Header(header) => self.item(header.span, Item::Header(header)),
             Line::Import(import) => self.item(import.span, Item::Import(import)),
@@ -197,7 +175,7 @@ impl<'s> Grouping<'s> {
     }
 
     /// A clause: its head's name and patterns, its guard, and its body.
-    fn clause(&mut self, head: Expr, guard: Option<Expr>, value: Expr) -> Result<(), Error> {
+    fn clause(&mut self, head: Expr, guard: Option<Expr>, value: Expr) -> Result<(), SyntaxError> {
         let (name, arguments) = self.clause_head(head)?;
         if arguments.is_empty() {
             let text = name.text(self.source);
@@ -206,7 +184,7 @@ impl<'s> Grouping<'s> {
             } else {
                 format!("a definition of no parameters is a value: `{text} = ...`")
             };
-            return Err(error(name.0, message));
+            return Err(SyntaxError::new(name.0, message));
         }
         let body = body_of(value);
         self.item(
@@ -222,14 +200,20 @@ impl<'s> Grouping<'s> {
     }
 
     /// A value, `name = value`: a definition of no parameters.
-    fn value(&mut self, head: &Expr, value: Expr) -> Result<(), Error> {
+    fn value(&mut self, head: &Expr, value: Expr) -> Result<(), SyntaxError> {
         let span = head.span;
         let ExprKind::Name(name) = head.kind else {
-            return Err(error(span, "a value is named by one name: `name = ...`"));
+            return Err(SyntaxError::new(
+                span,
+                "a value is named by one name: `name = ...`",
+            ));
         };
         let text = name.text(self.source);
         if text.ends_with('!') {
-            return Err(error(span, "a value is no effect: its name takes no `!`"));
+            return Err(SyntaxError::new(
+                span,
+                "a value is no effect: its name takes no `!`",
+            ));
         }
         let body = body_of(value);
         self.item(
@@ -248,10 +232,10 @@ impl<'s> Grouping<'s> {
         &mut self,
         head: Expr,
         (constraints, end): (Vec<Constraint>, Span),
-    ) -> Result<(), Error> {
+    ) -> Result<(), SyntaxError> {
         let span = head.span;
         let (name, Some(parameters)) = self.type_head(head)? else {
-            return Err(error(
+            return Err(SyntaxError::new(
                 span,
                 "a constraint alias takes parameters: `Name(a) = where ...`",
             ));
@@ -269,16 +253,19 @@ impl<'s> Grouping<'s> {
 
     /// Add `item`, which a method block may not hold unless it is a
     /// signature or a clause.
-    fn item(&mut self, span: Span, item: Item) -> Result<(), Error> {
+    fn item(&mut self, span: Span, item: Item) -> Result<(), SyntaxError> {
         if self.methods && !matches!(item, Item::Signature(_) | Item::Clause(_)) {
-            return Err(error(span, "a method block holds signatures and clauses"));
+            return Err(SyntaxError::new(
+                span,
+                "a method block holds signatures and clauses",
+            ));
         }
         self.items.push(item);
         Ok(())
     }
 
     /// A clause's name and what it is applied to: `name(patterns)`.
-    fn clause_head(&self, head: Expr) -> Result<(Name, Vec<Expr>), Error> {
+    fn clause_head(&self, head: Expr) -> Result<(Name, Vec<Expr>), SyntaxError> {
         let span = head.span;
         if let ExprKind::Call(callee, arguments) = head.kind
             && let ExprKind::Name(name) = callee.kind
@@ -286,7 +273,7 @@ impl<'s> Grouping<'s> {
         {
             return Ok((name, arguments));
         }
-        Err(error(
+        Err(SyntaxError::new(
             span,
             "a clause begins with its name and its patterns: `name(patterns) -> ...`",
         ))
@@ -294,7 +281,7 @@ impl<'s> Grouping<'s> {
 
     /// A type's name and its parameters, if it is written with any:
     /// `Name`, or `Name(a, b)`.
-    fn type_head(&self, head: Expr) -> Result<(Name, Option<Vec<Name>>), Error> {
+    fn type_head(&self, head: Expr) -> Result<(Name, Option<Vec<Name>>), SyntaxError> {
         let span = head.span;
         match head.kind {
             ExprKind::Name(name) if is_type_name(name, self.source) => Ok((name, None)),
@@ -312,7 +299,7 @@ impl<'s> Grouping<'s> {
                         {
                             Ok(parameter)
                         }
-                        _ => Err(error(
+                        _ => Err(SyntaxError::new(
                             argument.span,
                             "a type's parameter is a lowercase name",
                         )),
@@ -320,7 +307,7 @@ impl<'s> Grouping<'s> {
                     .collect::<Result<_, _>>()?;
                 Ok((name, Some(parameters)))
             }
-            _ => Err(error(
+            _ => Err(SyntaxError::new(
                 span,
                 "a type's name, and its parameters if it has any",
             )),
@@ -329,12 +316,12 @@ impl<'s> Grouping<'s> {
 
     /// A signature or a data declaration, as its head is a term's name or
     /// a type's.
-    fn typed(&mut self, head: Expr, typed: Typed) -> Result<(), Error> {
+    fn typed(&mut self, head: Expr, typed: Typed) -> Result<(), SyntaxError> {
         let span = head.span;
         match head.kind {
             ExprKind::Name(name) if !is_type_name(name, self.source) => {
                 if let Some((_, block)) = typed.methods {
-                    return Err(error(block, "only a type has a method block"));
+                    return Err(SyntaxError::new(block, "only a type has a method block"));
                 }
                 let span = span.through(typed.end());
                 let constraints = typed
@@ -357,17 +344,20 @@ impl<'s> Grouping<'s> {
 
     /// `Name(a) : type .(methods)`: a data declaration, whose type in
     /// brackets is its constructors.
-    fn data(&mut self, head: Expr, typed: Typed) -> Result<(), Error> {
+    fn data(&mut self, head: Expr, typed: Typed) -> Result<(), SyntaxError> {
         let span = head.span.through(typed.end());
         let (name, params) = self.type_head(head)?;
         if let Some(parameter) = typed.parameters.first() {
-            return Err(error(
+            return Err(SyntaxError::new(
                 type_span(parameter),
                 "a type is represented by one type, not a function of some",
             ));
         }
         if let Some((_, constraints)) = typed.constraints {
-            return Err(error(constraints, "a type takes no `where` constraints"));
+            return Err(SyntaxError::new(
+                constraints,
+                "a type takes no `where` constraints",
+            ));
         }
         let methods = match typed.methods {
             Some((lines, _)) => Grouping::new(self.source, true)
@@ -418,7 +408,7 @@ fn body_of(value: Expr) -> Body {
 /// # Errors
 ///
 /// A block that ends in a binding, or a binding whose head is no pattern.
-pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
+pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, SyntaxError> {
     block(lines, source, Ends::Answer)
 }
 
@@ -431,7 +421,7 @@ enum Ends {
 }
 
 /// [`body`], or a loop's body, its lines ending as `ends` says.
-fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, Error> {
+fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, SyntaxError> {
     let (mut lines, held) = held(lines, source, ends)?;
     let result = match (held, ends) {
         (Some(held), _) => held,
@@ -464,17 +454,17 @@ fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, Error>
                 unreachable!("a leaving line and a loop hold the lines after them")
             }
         })
-        .collect::<Result<_, Error>>()?;
+        .collect::<Result<_, SyntaxError>>()?;
     Ok(Body { bindings, result })
 }
 
 /// Why a block whose last line binds `bound` to `value` has no answer.
-fn ends_bound(bound: &Expr, value: &Expr) -> Error {
+fn ends_bound(bound: &Expr, value: &Expr) -> SyntaxError {
     let span = Span {
         start: bound.span.start,
         end: value.span.end,
     };
-    error(
+    SyntaxError::new(
         span,
         "a block ends with its answer, a line after its last binding",
     )
@@ -514,7 +504,7 @@ fn held(
     mut lines: Vec<Statement>,
     source: &str,
     ends: Ends,
-) -> Result<(Vec<Statement>, Option<Expr>), Error> {
+) -> Result<(Vec<Statement>, Option<Expr>), SyntaxError> {
     let Some(at) = lines.iter().position(|line| {
         matches!(
             line,
@@ -530,7 +520,7 @@ fn held(
     let line = lines.pop().expect("the line found");
     let span = statement_span(&line);
     if rest.is_empty() && ends == Ends::Answer {
-        return Err(error(span, not_last(&line)));
+        return Err(SyntaxError::new(span, not_last(&line)));
     }
     let empty = rest.is_empty();
     let mut rest = Box::new(block(rest, source, ends)?);
@@ -562,7 +552,7 @@ fn held(
 
 /// Refuse a line of a body whose value nothing keeps, unless it is a call
 /// written as an effect, its failure passed on with `?` or not.
-fn thrown_away(body: &Body, source: &str) -> Result<(), Error> {
+fn thrown_away(body: &Body, source: &str) -> Result<(), SyntaxError> {
     for binding in body.bindings.iter().filter(|binding| binding.discarded) {
         let value = &binding.value;
         let mut called = value;
@@ -577,11 +567,12 @@ fn thrown_away(body: &Body, source: &str) -> Result<(), Error> {
             _ => false,
         };
         if !effect {
-            return Err(
-                error(value.span, "this value is worked out and then thrown away")
-                    .label("unused")
-                    .help("remove the line, or bind the value to a name if you need it"),
-            );
+            return Err(SyntaxError::new(
+                value.span,
+                "this value is worked out and then thrown away",
+            )
+            .label("unused")
+            .help("remove the line, or bind the value to a name if you need it"));
         }
     }
     Ok(())
@@ -599,7 +590,7 @@ const fn type_span(ty: &Type) -> Span {
 }
 
 /// The patterns `exprs` spell.
-fn patterns(exprs: Vec<Expr>, source: &str) -> Result<Vec<Pattern>, Error> {
+fn patterns(exprs: Vec<Expr>, source: &str) -> Result<Vec<Pattern>, SyntaxError> {
     exprs
         .into_iter()
         .map(|expr| pattern(expr, source))
@@ -616,10 +607,10 @@ fn patterns(exprs: Vec<Expr>, source: &str) -> Result<Vec<Pattern>, Error> {
     clippy::too_many_lines,
     reason = "one arm for each expression a pattern is spelled as"
 )]
-pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
+pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, SyntaxError> {
     let span = expr.span;
     let not_a_pattern = || {
-        error(
+        SyntaxError::new(
             span,
             format!(
                 "`{}` is not a pattern: a pattern is a name, `_`, a constructor, a literal, \
@@ -664,9 +655,10 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
             }
             _ => Err(not_a_pattern()),
         },
-        ExprKind::Range(None, None) => {
-            Err(error(span, "`_.._` bounds nothing: it is the wildcard `_`"))
-        }
+        ExprKind::Range(None, None) => Err(SyntaxError::new(
+            span,
+            "`_.._` bounds nothing: it is the wildcard `_`",
+        )),
         ExprKind::Range(start, end) => {
             if start.zip(end).is_some_and(|(start, end)| {
                 // A malformed end is told when literals are validated.
@@ -675,7 +667,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                     .is_some_and(|(start, end)| start > end)
             }) {
                 let message = format!("the range `{}` is reversed", span.text(source));
-                return Err(error(span, message)
+                return Err(SyntaxError::new(span, message)
                     .label("matches nothing")
                     .note("a range runs up, from its start to its end"));
             }
@@ -687,7 +679,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                 .into_iter()
                 .map(|part| match part {
                     StringPart::Text(text) => Ok(text),
-                    StringPart::Splice(splice, _) => Err(error(
+                    StringPart::Splice(splice, _) => Err(SyntaxError::new(
                         splice.span,
                         "a string pattern is text alone, with no `${...}`",
                     )),
@@ -709,7 +701,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
         ExprKind::Record(fields) => record(span, fields, false, source),
         ExprKind::Update(fields, base) => {
             if !matches!(base.kind, ExprKind::Wild) {
-                return Err(error(
+                return Err(SyntaxError::new(
                     base.span,
                     "a record pattern names no rest: `{x, *}` matches any other fields",
                 ));
@@ -746,7 +738,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                 name,
                 pattern: Box::new(inner),
             }),
-            _ => Err(error(
+            _ => Err(SyntaxError::new(
                 value.span,
                 "in a pattern, `is` names the whole value: a name stands on its left",
             )),
@@ -772,27 +764,27 @@ fn record(
     fields: Vec<(Name, Expr)>,
     open: bool,
     source: &str,
-) -> Result<Pattern, Error> {
+) -> Result<Pattern, SyntaxError> {
     Ok(Pattern::Record {
         span,
         fields: fields
             .into_iter()
             .map(|(field, value)| Ok((field, pattern(value, source)?)))
-            .collect::<Result<_, Error>>()?,
+            .collect::<Result<_, SyntaxError>>()?,
         open,
     })
 }
 
 /// Refuse a pattern-only form left in a clause's expressions, and a value
 /// a body throws away.
-fn clause_expressions(clause: &Clause, source: &str) -> Result<(), Error> {
+fn clause_expressions(clause: &Clause, source: &str) -> Result<(), SyntaxError> {
     if let Some(guard) = &clause.guard {
         expression(guard, source, false)?;
     }
     body_expressions(&clause.body, source, true)
 }
 
-fn body_expressions(body: &Body, source: &str, answering: bool) -> Result<(), Error> {
+fn body_expressions(body: &Body, source: &str, answering: bool) -> Result<(), SyntaxError> {
     thrown_away(body, source)?;
     for binding in &body.bindings {
         expression(&binding.value, source, false)?;
@@ -809,10 +801,10 @@ fn body_expressions(body: &Body, source: &str, answering: bool) -> Result<(), Er
     clippy::too_many_lines,
     reason = "one arm for each kind of expression, to reach every one it holds"
 )]
-fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
+fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), SyntaxError> {
     match &expr.kind {
-        ExprKind::Wild => Err(error(expr.span, "`_` stands only in a pattern")),
-        ExprKind::Equal(_) => Err(error(
+        ExprKind::Wild => Err(SyntaxError::new(expr.span, "`_` stands only in a pattern")),
+        ExprKind::Equal(_) => Err(SyntaxError::new(
             expr.span,
             format!(
                 "`{}` stands only in a pattern, where it matches a value equal to the name",
@@ -820,65 +812,28 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             ),
         )
         .help("to compare two values, write `==` between them")),
-        ExprKind::Range(..) => Err(error(expr.span, "a range stands only in a pattern")),
-        ExprKind::Ending(..) => Err(error(
+        ExprKind::Range(..) => Err(SyntaxError::new(
+            expr.span,
+            "a range stands only in a pattern",
+        )),
+        ExprKind::Ending(..) => Err(SyntaxError::new(
             expr.span,
             "a list's rest stands last where the list is built",
         )
         .note("`[*front, last]` only takes a list apart")
         .help("build it with `front.append(last)`")),
-        ExprKind::Name(_) | ExprKind::Number(_) => Ok(()),
-        ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
-            StringPart::Text(_) => Ok(()),
-            StringPart::Splice(splice, _) => expression(splice, source, false),
-        }),
-        ExprKind::List(elements, rest) => {
-            if let Some(rest) = rest
-                && matches!(rest.kind, ExprKind::Wild)
-            {
-                return Err(error(
-                    rest.span,
-                    "a list's rest names what follows: `[a, *rest]`",
-                ));
-            }
-            elements
-                .iter()
-                .chain(rest.as_deref())
-                .try_for_each(|each| expression(each, source, false))
-        }
-        ExprKind::Record(fields) => fields
-            .iter()
-            .try_for_each(|(_, value)| expression(value, source, false)),
-        ExprKind::Update(fields, base) => {
-            if matches!(base.kind, ExprKind::Wild) {
-                return Err(error(
-                    base.span,
-                    "a record's rest names the record it updates: `{x: 1, *base}`",
-                ));
-            }
-            fields
-                .iter()
-                .map(|(_, value)| value)
-                .chain(std::iter::once(&**base))
-                .try_for_each(|each| expression(each, source, false))
-        }
-        ExprKind::Tuple(members) => members
-            .iter()
-            .try_for_each(|each| expression(each, source, false)),
+        ExprKind::List(_, Some(rest)) if matches!(rest.kind, ExprKind::Wild) => Err(
+            SyntaxError::new(rest.span, "a list's rest names what follows: `[a, *rest]`"),
+        ),
+        ExprKind::Update(_, base) if matches!(base.kind, ExprKind::Wild) => Err(SyntaxError::new(
+            base.span,
+            "a record's rest names the record it updates: `{x: 1, *base}`",
+        )),
         ExprKind::Lambda(_, body) => expression(body, source, true),
-        ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
-            expression(head, source, false)?;
-            arguments
-                .iter()
-                .try_for_each(|each| expression(each, source, false))
-        }
-        ExprKind::Member(value, _) | ExprKind::Unary(_, value) | ExprKind::Try(value) => {
-            expression(value, source, false)
-        }
         ExprKind::Block(body) => body_expressions(body, source, answering),
         ExprKind::Binary(operator @ (BinaryOp::And | BinaryOp::Or), left, right) => {
             if *operator == BinaryOp::Or && is_test(left) && is_constructor(right, source) {
-                return Err(error(
+                return Err(SyntaxError::new(
                     right.span,
                     "alternatives after `is` are grouped, or `|` reads as an or of a test",
                 )
@@ -886,22 +841,16 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
                 .help("write the alternatives in parentheses: `x is (A | B)`"));
             }
             if let Some(span) = passed_on(right) {
-                return Err(error(
+                return Err(SyntaxError::new(
                     span,
                     "the right of `&` or `|` may not be worked out, so `?` does not leave from it",
                 )
                 .label("would leave here")
                 .help("bind it with `?` on a line before, and use the name here"));
             }
-            expression(left, source, false)?;
-            expression(right, source, false)
+            expr.try_for_each_child(|inner| expression(inner, source, false))
         }
-        ExprKind::Binary(_, left, right) => {
-            expression(left, source, false)?;
-            expression(right, source, false)
-        }
-        ExprKind::Is(value, _) => expression(value, source, false),
-        ExprKind::Arms(arms) => Err(error(
+        ExprKind::Arms(arms) => Err(SyntaxError::new(
             arms.first().map_or(expr.span, |arm| arm.pattern.span()),
             "arms stand after an `is`, which says what they match: `value is (P -> a` … `)`",
         )),
@@ -941,7 +890,7 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             body_expressions(body, source, true)?;
             body_expressions(rest, source, answering)
         }
-        ExprKind::Continue | ExprKind::Break => Err(error(
+        ExprKind::Continue | ExprKind::Break => Err(SyntaxError::new(
             expr.span,
             format!(
                 "`{}` stands only in a leaving line: `if c {0}`, or `c else {0}`",
@@ -959,19 +908,20 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             left_by(out, source)?;
             body_expressions(rest, source, true)
         }
-        ExprKind::Return(_) => Err(error(
+        ExprKind::Return(_) => Err(SyntaxError::new(
             expr.span,
             "`return` stands only in a leaving line: `c else return x`, or `if c return x`",
         )),
+        _ => expr.try_for_each_child(|inner| expression(inner, source, false)),
     }
 }
 
 /// Refuse a pattern-only form in what `leave` leaves with.
-fn left_by(leave: &Expr, source: &str) -> Result<(), Error> {
+fn left_by(leave: &Expr, source: &str) -> Result<(), SyntaxError> {
     match &leave.kind {
         ExprKind::Return(value) => expression(value, source, true),
         ExprKind::Continue | ExprKind::Break => Ok(()),
-        _ => Err(error(
+        _ => Err(SyntaxError::new(
             leave.span,
             "a leaving line leaves by `return` a value, `continue` or `break`",
         )),
@@ -999,91 +949,13 @@ fn is_constructor(expr: &Expr, source: &str) -> bool {
 
 /// Where `expr` passes a failure on with `?` from the clause it stands in:
 /// a `?` in a lambda answers the lambda, so one there is not.
-/// Where a `?` in `arms`, in a guard or a value, would leave from.
-fn arms_passed_on(arms: &[Arm]) -> Option<Span> {
-    arms.iter()
-        .find_map(|arm| arm.guard.iter().chain([&arm.body]).find_map(passed_on))
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm for each kind of expression, to reach every one it holds"
-)]
 fn passed_on(expr: &Expr) -> Option<Span> {
-    fn each<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Option<Span> {
-        exprs.into_iter().find_map(passed_on)
-    }
     match &expr.kind {
         ExprKind::Try(_) => Some(expr.span),
-        ExprKind::Lambda(..)
-        | ExprKind::Name(_)
-        | ExprKind::Number(_)
-        | ExprKind::Wild
-        | ExprKind::Equal(_)
-        | ExprKind::Continue
-        | ExprKind::Break
-        | ExprKind::Range(..) => None,
-        ExprKind::String(parts) => parts.iter().find_map(|part| match part {
-            StringPart::Text(_) => None,
-            StringPart::Splice(splice, _) => passed_on(splice),
-        }),
-        ExprKind::List(elements, rest) => each(elements.iter().chain(rest.as_deref())),
-        ExprKind::Ending(front, last) => each(std::iter::once(&**front).chain(last)),
-        ExprKind::Record(fields) => each(fields.iter().map(|(_, value)| value)),
-        ExprKind::Update(fields, base) => {
-            each(fields.iter().map(|(_, value)| value).chain([&**base]))
-        }
-        ExprKind::Tuple(members) => each(members.iter()),
-        ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
-            each(std::iter::once(&**head).chain(arguments))
-        }
-        ExprKind::Member(value, _) | ExprKind::Unary(_, value) | ExprKind::Is(value, _) => {
-            passed_on(value)
-        }
-        ExprKind::Binary(_, left, right) => each([&**left, &**right]),
-        ExprKind::If(condition, yes, no) => each([&**condition, &**yes, &**no]),
-        ExprKind::Match(value, arms) => passed_on(value).or_else(|| arms_passed_on(arms)),
-        ExprKind::Arms(arms) => arms_passed_on(arms),
-        ExprKind::Return(value) => passed_on(value),
-        ExprKind::Loop { head, body, rest } => {
-            let head = match head {
-                LoopHead::While(condition) => condition,
-                LoopHead::For(_, list) => list,
-            };
-            each(
-                std::iter::once(&**head)
-                    .chain(body.bindings.iter().map(|binding| &binding.value))
-                    .chain([&body.result])
-                    .chain(rest.bindings.iter().map(|binding| &binding.value))
-                    .chain([&rest.result]),
-            )
-        }
-        ExprKind::Leave {
-            condition,
-            out,
-            rest,
-        } => each(
-            [&**condition, &**out]
-                .into_iter()
-                .chain(rest.bindings.iter().map(|binding| &binding.value))
-                .chain([&rest.result]),
-        ),
-        ExprKind::Else {
-            condition,
-            otherwise,
-            rest,
-        } => each(
-            [&**condition, &**otherwise]
-                .into_iter()
-                .chain(rest.bindings.iter().map(|binding| &binding.value))
-                .chain([&rest.result]),
-        ),
-        ExprKind::Block(body) => each(
-            body.bindings
-                .iter()
-                .map(|binding| &binding.value)
-                .chain([&body.result]),
-        ),
+        ExprKind::Lambda(..) => None,
+        _ => expr
+            .try_for_each_child(|inner| passed_on(inner).map_or(Ok(()), Err))
+            .err(),
     }
 }
 

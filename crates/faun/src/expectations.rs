@@ -49,14 +49,9 @@ pub(crate) fn enter(resolved: &mut ResolvedProgram, host: &HostIds, main: &Main)
         .iter_mut()
         .find(|module| module.source == main.module)
         .expect("the entry module was resolved");
-    module.items.push(h::Item::Signature(h::SignatureDecl {
-        span: clause.span,
-        name: main.symbol,
-        spelling,
-        parameters: vec![h::Type::Named(host.host, Vec::new())],
-        result: h::Type::Variants(Vec::new()),
-        constraints: Vec::new(),
-    }));
+    module
+        .items
+        .push(host.entry_signature(clause.span, main.symbol, spelling));
     module.items.push(h::Item::Clause(clause));
     locations
 }

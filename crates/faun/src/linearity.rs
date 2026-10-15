@@ -538,10 +538,7 @@ impl<'a> Facts<'a> {
 
     /// A name as its program spells it, without its module's identity.
     fn spelled(&self, name: Symbol) -> &str {
-        let canonical = self.resolved.symbols.text(name);
-        canonical
-            .rsplit_once("$$")
-            .map_or(canonical, |(_, spelled)| spelled)
+        self.resolved.symbols.spelling(name)
     }
 
     /// A resource type named as a program spells it, or `otherwise`.
