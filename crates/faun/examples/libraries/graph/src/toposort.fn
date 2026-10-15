@@ -6,7 +6,6 @@
 
 import edge {Walkable}
 import table {put}
-import walk {drain_stack}
 
 export {toposort}
 
@@ -17,28 +16,19 @@ toposort : g -> Result(List(Nat), [Cycle]) where
   Walkable(g, e),
   g.in_degree : (g, Nat) -> Nat
 toposort(graph) -> (
-  count = graph.node_count()
-  nodes = List.range(count)
+  nodes = List.range(graph.node_count())
   degrees = nodes.map(|node| graph.in_degree(node))
   ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
-  taken = drain_stack(ready, {degrees, order: []}, |kahn, node| take(graph, kahn, node))
+  order = []
+  while ready is [node, *ready] do (
+    order = order.append(node)
+    for edge in graph.edges_from(node) do (
+      degree = degrees.get_or(edge.target, 0) - 1
+      degrees = put(degrees, edge.target, degree)
+      if degree > 0 continue
+      ready = ready.prepend(edge.target)
+    )
+  )
   # A node never ready was on a cycle.
-  if taken.order.len() == count then Ok(taken.order) else Err(Cycle)
+  if order.len() == nodes.len() then Ok(order) else Err(Cycle)
 )
-
-Kahn = {degrees: List(Nat), order: List(Nat)}
-
-# `node` taken, and the targets its edges make ready.
-take : (g, Kahn, Nat) -> (Kahn, List(Nat)) where Walkable(g, e)
-take(graph, {degrees, order}, node) -> (
-  edges = graph.edges_from(node)
-  freed = edges.fold({ready: [], degrees}, |state, edge| release(edge.target, state))
-  ({degrees: freed.degrees, order: order.append(node)}, freed.ready)
-)
-
-# One edge into `target` taken: it is ready where that was its last.
-release : (Nat, {ready: List(Nat), degrees: List(Nat)}) -> {ready: List(Nat), degrees: List(Nat)}
-release(target, {ready, degrees}) if degrees.get_or(target, 0) == 1 ->
-  {ready: [target, *ready], degrees: put(degrees, target, 0)}
-release(target, {ready, degrees}) ->
-  {ready, degrees: put(degrees, target, degrees.get_or(target, 0) - 1)}

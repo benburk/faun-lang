@@ -99,3 +99,7 @@ expect toposort(diamond) == Ok([0, 1, 2, 3])
 # is ready from the start.
 expect toposort(DiGraph.from_edges(3, [(0, 1), (0, 1)])) == Ok([0, 1, 2])
 expect toposort(DiGraph.from_edges(3, [(0, 1), (1, 2), (2, 1)])) == Err(Cycle)
+# The Python cookbook's graph, its nodes 2, 3, 5, 7, 8, 9, 10 and 11 numbered
+# in that order: 3, 5, 7, 8, 11, 10, 9, 2. The cookbook takes the nodes ready
+# from the start last first, and answers 7, 5, 11, 2, 3, 8, 10, 9.
+expect toposort(DiGraph.from_edges(8, [(1, 4), (1, 6), (2, 7), (3, 7), (3, 4), (4, 5), (4, 6), (7, 0), (7, 5), (7, 6)])) == Ok([1, 2, 3, 4, 7, 6, 5, 0])
