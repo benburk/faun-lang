@@ -118,6 +118,28 @@ pub(crate) fn run_among(entry: &std::path::Path, files: Directory) -> (u32, Stri
     )
 }
 
+/// What a program did with the files it opened.
+pub(crate) struct Handled {
+    /// How many it left open when it ended.
+    pub(crate) left_open: usize,
+    /// How many times it read, wrote or closed one it had closed.
+    pub(crate) misused: usize,
+}
+
+/// Run the program at `entry` as [`run_among`] does, among no files: the
+/// status it exits with, and what it did with the files it opened.
+pub(crate) fn run_handling(entry: &std::path::Path) -> (u32, Handled) {
+    let mut barb = faun::lower_to_barb(entry, &X86_64Linux)
+        .unwrap_or_else(|error| panic!("{}", error.message));
+    let mut streams = Streams::default();
+    let status = run_on(&mut barb, &mut streams, 100_000_000);
+    let handled = Handled {
+        left_open: streams.open.iter().flatten().count(),
+        misused: streams.misused,
+    };
+    (status, handled)
+}
+
 /// Build the package at `entry` as `faun test` does and run it: the lines,
 /// `path:line`, of the expectations that do not hold, and how many there are.
 pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
@@ -232,6 +254,9 @@ struct Streams {
     /// Each descriptor past the standard three: the name it opened, where
     /// it reads or writes next, and whether it writes after the end.
     open: Vec<Option<Opened>>,
+    /// How many times a descriptor past the standard three was read,
+    /// written or closed when it was not open.
+    misused: usize,
 }
 
 struct Opened {
@@ -249,7 +274,11 @@ const O_APPEND: u64 = 0o2000;
 impl Streams {
     fn opened(&mut self, fd: u64) -> Option<&mut Opened> {
         let at = usize::try_from(fd.checked_sub(3)?).ok()?;
-        self.open.get_mut(at)?.as_mut()
+        let found = self.open.get_mut(at)?.as_mut();
+        if found.is_none() {
+            self.misused += 1;
+        }
+        found
     }
 
     /// A name opened as `flags` say: its descriptor, or the error.
@@ -313,13 +342,12 @@ impl Streams {
     /// `fd` given up.
     fn close(&mut self, fd: u64) -> Result<u64, u64> {
         let at = usize::try_from(fd.checked_sub(3).ok_or(9u64)?).map_err(|_| 9u64)?;
-        match self.open.get_mut(at) {
-            Some(opened @ Some(_)) => {
-                *opened = None;
-                Ok(0)
-            }
-            _ => Err(9),
+        if let Some(opened @ Some(_)) = self.open.get_mut(at) {
+            *opened = None;
+            return Ok(0);
         }
+        self.misused += 1;
+        Err(9)
     }
 }
 
