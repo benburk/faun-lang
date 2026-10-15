@@ -8,6 +8,21 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "numerals past what is taken apart beside a successor are each tested once",
+        "f : Nat -> Nat
+         f(0) -> 3
+         f(2000) -> 1
+         f(70) -> 5
+         f(Succ(n)) -> if n > 100 then 7 else n % 50
+         
+         main! : Host -> []
+         main!(host) -> (
+           k = host.args.len()
+           host.exit!(U8.of_nat(f(k - 1) + f(k + 1999) * 10 + f(k + 69) * 20 + f(k + 9) + f(k + 300)))
+         )",
+        129,
+    ),
+    (
         "a bound asking its own method again at the same types is met where it is asked",
         "Box(a) : [B(a)].(
            foo : (Box(a), b) -> Nat where b.foo : (b, b) -> Nat

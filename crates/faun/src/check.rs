@@ -1806,11 +1806,14 @@ impl<'a> Checker<'a> {
                     ..bound
                 })
                 .collect();
+            // This component's clauses were checked last, so they are
+            // found at the end, however many came before.
             for name in &component {
                 for clause in &definitions[name].clauses {
                     if let Some(site) = self
                         .clause_types
                         .iter_mut()
+                        .rev()
                         .find(|(_, _, site, _, _)| *site == clause.site)
                     {
                         site.4.clone_from(&bounds);

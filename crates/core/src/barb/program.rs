@@ -1,5 +1,7 @@
 //! Program storage, queries, and construction entry points.
 
+use std::collections::HashMap;
+
 use super::budget::Budget;
 use super::builder::Builder;
 use super::constant::{self, Constant, ConstantPool, ConstructionError, Held, Shape, Value};
@@ -32,6 +34,9 @@ pub struct Program {
     /// so naming something allocates nothing.
     pub(super) names: Vec<u8>,
     pub(super) symbols: Pool<Symbol, Range>,
+    /// Each name's symbol, by its characters, so that naming something
+    /// again finds it without reading every name before it.
+    spelled: Derived<HashMap<Box<str>, Symbol>>,
     pub(super) entry: Option<FnId>,
     /// Which functions are recognised equations, one entry per function once
     /// worked out. Rewriting a body keeps what it means, so this outlives
@@ -305,12 +310,13 @@ impl Program {
     ///
     /// If the program outgrew the names it may have.
     pub fn symbol(&mut self, name: &str) -> Symbol {
-        let held = |at: &Range| &self.names[at.range()] == name.as_bytes();
-        if let Some(id) = self.symbols.position(held) {
+        if let Some(&id) = self.spelled.0.get(name) {
             return id;
         }
-        let name = append_range(&mut self.names, name.as_bytes());
-        self.symbols.push(name)
+        let at = append_range(&mut self.names, name.as_bytes());
+        let id = self.symbols.push(at);
+        self.spelled.0.insert(name.into(), id);
+        id
     }
 
     /// Reserve a nominal type. Its constructors follow, so that a field may

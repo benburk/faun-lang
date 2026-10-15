@@ -287,6 +287,13 @@ impl Loader {
         }
         let text = match built_in {
             Some(text) => text.to_owned(),
+            // Only a file is a module: a device or a pipe may never end.
+            None if !path.is_file() => {
+                return Err(Diagnostic::new(format!(
+                    "cannot read {}: not a file",
+                    path.display()
+                )));
+            }
             None => fs::read_to_string(&path).map_err(|error| {
                 Diagnostic::new(format!("cannot read {}: {error}", path.display()))
             })?,

@@ -255,6 +255,10 @@ pub(crate) struct DecisionArm {
 /// tested against. See [`Compiler::numeral_column`].
 const PEELED_NUMERALS: u8 = 8;
 
+/// The largest numeral a column also taking successors apart is taken apart
+/// for. See [`Compiler::numeral_column`].
+const PEELED_SUCCESSORS: u8 = 64;
+
 #[derive(Clone)]
 struct Compiler<'a> {
     data: &'a HashMap<Symbol, Data>,
@@ -1137,11 +1141,26 @@ impl Compiler<'_> {
                     }
                 }
             }
+            // Where rows below take successors apart, what a test found is
+            // not known to them: a way taking `0` apart, past a test that
+            // it is not `0`, is one no value goes, as the clauses were found
+            // to cover every value.
+            let taken_apart = rows
+                .iter()
+                .any(|row| matches!(row.patterns[column], Pattern::Constructor(..)));
+            let below = if taken_apart {
+                Self {
+                    run_out: RunOut::Unreachable(subject.clone()),
+                    ..self.clone()
+                }
+            } else {
+                self.clone()
+            };
             return Ok(Decision::Numeral {
                 subject: subject.value,
                 number,
-                equal: Box::new(self.plan(&equal, subjects, next)?),
-                otherwise: Box::new(self.plan(&otherwise, subjects, next)?),
+                equal: Box::new(below.plan(&equal, subjects, next)?),
+                otherwise: Box::new(below.plan(&otherwise, subjects, next)?),
             });
         }
         let constructors = subject.ty.constructors(self.data)?;
@@ -1440,7 +1459,10 @@ impl Compiler<'_> {
     /// number is a successor, which a definition counting down takes apart.
     /// A column also taking successors apart is taken apart,
     /// numerals and all, since a test says nothing about what a successor
-    /// holds.
+    /// holds; up to [`PEELED_SUCCESSORS`]. Past that, taking a numeral
+    /// apart is a match for each successor in it, for each row, so its
+    /// numerals are tested first, and the rows taking successors apart are
+    /// tried on each way as rows taking anything are.
     fn numeral_column(
         &self,
         rows: &[Row],
@@ -1452,6 +1474,7 @@ impl Compiler<'_> {
         }
         let mut first = None;
         let mut largest = num_bigint::BigUint::ZERO;
+        let mut peeled = PEELED_NUMERALS;
         for row in rows {
             match &row.patterns[column] {
                 Pattern::Number {
@@ -1462,10 +1485,11 @@ impl Compiler<'_> {
                     largest = largest.max(magnitude.clone());
                 }
                 Pattern::Wild | Pattern::Bind(_) => {}
+                Pattern::Constructor(..) => peeled = PEELED_SUCCESSORS,
                 _ => return None,
             }
         }
-        first.filter(|_| largest > num_bigint::BigUint::from(PEELED_NUMERALS))
+        first.filter(|_| largest > num_bigint::BigUint::from(peeled))
     }
 
     fn normalize_pattern(&self, pattern: Pattern, expected: &Type) -> Result<Pattern, LowerError> {

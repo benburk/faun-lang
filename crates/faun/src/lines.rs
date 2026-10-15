@@ -524,6 +524,9 @@ fn held(
         return Ok((lines, None));
     };
     let rest = lines.split_off(at + 1);
+    // What is left keeps what it held for every line; the rest are held
+    // again further in, each line once.
+    lines.shrink_to_fit();
     let line = lines.pop().expect("the line found");
     let span = statement_span(&line);
     if rest.is_empty() && ends == Ends::Answer {

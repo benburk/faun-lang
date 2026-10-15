@@ -504,7 +504,10 @@ fn expand_aliases(
     // Every constraint alias is expanded once over its own parameters, so
     // one applying itself, or applied wrongly, is refused where it is
     // declared whether or not anything applies it.
-    for (&name, alias) in constraint_aliases {
+    // In the order written, so that of several refused, the first is told.
+    let mut written: Vec<_> = constraint_aliases.iter().collect();
+    written.sort_by_key(|(_, alias)| (alias.module, alias.span));
+    for (&name, alias) in written {
         let applied = h::Constraint::Alias {
             name,
             arguments: alias
@@ -519,7 +522,9 @@ fn expand_aliases(
     // Each alias is expanded over its own parameters, so one naming
     // itself is refused where it is declared.
     let mut expanded = Aliases::new();
-    for (&name, alias) in aliases {
+    let mut written: Vec<_> = aliases.iter().collect();
+    written.sort_by_key(|(_, alias)| (alias.module, alias.span));
+    for (&name, alias) in written {
         let own = alias
             .parameters
             .iter()
@@ -658,6 +663,7 @@ fn expand_constraints(
     let mut expansion = Expansion {
         aliases,
         applications: Vec::new(),
+        applied: HashSet::new(),
         expanding: Vec::new(),
         through: None,
         members: Vec::new(),
@@ -673,6 +679,9 @@ struct Expansion<'a> {
     /// Each application met, by alias and arguments: where it stands here
     /// names the variables of its own.
     applications: Vec<(Symbol, String)>,
+    /// The applications expanded whole: one met again adds nothing it did
+    /// not, its variables named as they were.
+    applied: HashSet<usize>,
     /// The aliases being expanded, innermost last.
     expanding: Vec<Symbol>,
     /// The outermost application being expanded, where it is of an alias of
@@ -757,6 +766,16 @@ impl Expansion<'_> {
                 self.applications.push(application);
                 self.applications.len() - 1
             });
+        if self.applied.contains(&index) {
+            return Ok(());
+        }
+        if self.applications.len() > ALIAS_PARTS {
+            let outermost = self.expanding.first().copied().unwrap_or(name);
+            return Err(format!(
+                "constraint alias `{}` applies more than {ALIAS_PARTS} aliases",
+                self::spelled(outermost, symbols)
+            ));
+        }
         let mut substitution: HashMap<Symbol, h::Type> = alias
             .parameters
             .iter()
@@ -822,6 +841,7 @@ impl Expansion<'_> {
             self.add(constraint, symbols)?;
         }
         self.expanding.pop();
+        self.applied.insert(index);
         if outermost {
             self.through = None;
         }
@@ -903,6 +923,51 @@ fn substitute(ty: &h::Type, substitution: &HashMap<Symbol, h::Type>) -> h::Type 
     }
 }
 
+/// The most an alias may name, in parts of types, and the most aliases one
+/// constraint alias may apply: far past what any is written to, and short
+/// of what one naming another twice over at each step would take to build.
+const ALIAS_PARTS: usize = 10_000;
+
+/// How many types `ty` is made of, itself among them.
+fn parts(ty: &h::Type) -> usize {
+    1 + match ty {
+        h::Type::Variable(_) | h::Type::Hole => 0,
+        h::Type::Named(_, members) | h::Type::Tuple(members) => members.iter().map(parts).sum(),
+        h::Type::Function(parameters, result) => {
+            parameters.iter().map(parts).sum::<usize>() + parts(result)
+        }
+        h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).map(parts).sum(),
+        h::Type::Record(fields, _) => fields.iter().map(|(_, field)| parts(field)).sum(),
+    }
+}
+
+/// How many times `ty` names the type variable `variable`.
+fn occurrences(ty: &h::Type, variable: Symbol) -> usize {
+    match ty {
+        h::Type::Variable(name) => usize::from(*name == variable),
+        h::Type::Hole => 0,
+        h::Type::Named(_, parts) | h::Type::Tuple(parts) => {
+            parts.iter().map(|part| occurrences(part, variable)).sum()
+        }
+        h::Type::Function(parameters, result) => {
+            parameters
+                .iter()
+                .map(|part| occurrences(part, variable))
+                .sum::<usize>()
+                + occurrences(result, variable)
+        }
+        h::Type::Variants(tags) => tags
+            .iter()
+            .flat_map(|tag| &tag.fields)
+            .map(|field| occurrences(field, variable))
+            .sum(),
+        h::Type::Record(fields, _) => fields
+            .iter()
+            .map(|(_, field)| occurrences(field, variable))
+            .sum(),
+    }
+}
+
 /// `ty` with every alias replaced by its definition, refusing an alias
 /// given arguments or one reached again while it is being expanded.
 fn expand(
@@ -943,6 +1008,22 @@ fn expand(
             expanding.push(*name);
             let definition = expand(&alias.ty, aliases, symbols, expanding)?;
             expanding.pop();
+            // Said before it is built: a type made of aliases each naming the
+            // last twice is a type twice as large for each.
+            let made = alias.parameters.iter().zip(&arguments).fold(
+                parts(&definition),
+                |made, (&parameter, argument)| {
+                    made.saturating_add(
+                        occurrences(&definition, parameter).saturating_mul(parts(argument)),
+                    )
+                },
+            );
+            if made > ALIAS_PARTS {
+                return Err(Unplaced::from(format!(
+                    "alias `{}` names a type of more than {ALIAS_PARTS} parts",
+                    spelled(*name)
+                )));
+            }
             let replacements = alias.parameters.iter().copied().zip(arguments).collect();
             substituted(&definition, &replacements)
         }

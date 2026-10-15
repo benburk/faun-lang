@@ -70,7 +70,9 @@ pub fn parse(source: &str) -> Result<Module, ParseError> {
 /// offset; such a target cannot hold a maximum-size accepted source.
 pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError> {
     let tokens = lex::lex(source).map_err(|error| error_at(source, 0, error.to_string()))?;
-    let (lines, errors) = grammar::file(&tokens, source);
+    let (lines, mut errors) = grammar::file(&tokens, source);
+    let more = errors.len() >= grammar::ERRORS_SHOWN;
+    errors.truncate(grammar::ERRORS_SHOWN);
     let mut errors = errors.into_iter().map(|error| {
         let mut spanned = spanned(source, error.span, error.message);
         spanned.advice = Box::new(error.advice);
@@ -78,6 +80,12 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
     });
     if let Some(mut first) = errors.next() {
         first.also = errors.collect();
+        if more {
+            first.advice.notes.push(format!(
+                "the file is read no further than its first {} errors",
+                grammar::ERRORS_SHOWN
+            ));
+        }
         return Err(first);
     }
     let items = lines::items(lines, source).map_err(|error| {

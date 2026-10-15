@@ -287,6 +287,24 @@ fn every_line_that_cannot_be_read_is_told_at_once() {
     assert!(told[2].1.contains("found `)`"), "{told:?}");
 }
 
+/// A file that is not Faun is read for its first twenty errors and no
+/// further, each of which would otherwise cost as much as the text before it.
+#[test]
+fn a_file_is_read_no_further_than_its_first_twenty_errors() {
+    let error = parse(&"x = )\n".repeat(25)).unwrap_err();
+    assert_eq!(error.also.len() + 1, 20);
+    assert_eq!(error.also.last().map(|last| last.line), Some(20));
+    assert!(
+        error
+            .advice
+            .notes
+            .iter()
+            .any(|note| note.contains("first 20 errors")),
+        "{:?}",
+        error.advice.notes
+    );
+}
+
 /// An error inside a block passes over the rest of the line holding it,
 /// so the block's later lines are not read as lines of the file.
 #[test]

@@ -1,0 +1,5 @@
+error: constraint alias `C13` applies more than 10000 aliases
+  --> a_constraint_alias_applies_no_more_aliases_than_can_be_worked_out.fn:18:1
+   |
+18 | C13(a) = where C12(a), C12(b), a.m13 : b
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

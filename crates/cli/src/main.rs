@@ -29,8 +29,24 @@ const NATIVE: Option<&dyn Target> = if cfg!(all(target_arch = "x86_64", target_o
     None
 };
 
+/// How deep the compiler may recurse. Its passes walk a program as written,
+/// so a program nested thousands deep is walked as deep; the main thread's
+/// few megabytes would end that in a crash. The space is only reserved:
+/// what recursion never reaches is never used.
+const STACK: usize = 512 << 20;
+
 fn main() -> ExitCode {
-    let command = args::parse();
+    std::thread::Builder::new()
+        .name("faun".to_owned())
+        .stack_size(STACK)
+        .spawn(|| answer(args::parse()))
+        .expect("the compiler's thread starts")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+/// Do what `command` says, and say what went wrong where anything did.
+fn answer(command: Command) -> ExitCode {
     let outcome = match command {
         Command::Check { target, source } => check(&source, target).map(|()| ExitCode::SUCCESS),
         Command::Build {

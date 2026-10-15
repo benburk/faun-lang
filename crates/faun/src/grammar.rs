@@ -58,6 +58,10 @@ type Parsed<T> = Result<T, SyntaxError>;
 
 /// The lines of the file `tokens` lex, and the error of each line that
 /// could not be read.
+/// How many syntax errors a file is read for: the rest of it is passed over
+/// once there are this many.
+pub(crate) const ERRORS_SHOWN: usize = 20;
+
 pub(crate) fn file(tokens: &[Token], source: &str) -> (Vec<Line>, Vec<SyntaxError>) {
     let mut parser = Parser {
         tokens,
@@ -309,6 +313,13 @@ impl Parser<'_> {
                 Ok(line) => lines.push(line),
                 Err(error) => {
                     self.errors.push(error);
+                    // Past so many, what is read is no longer what was
+                    // meant, and each error costs as much as the text
+                    // before it: the rest goes unread.
+                    if self.errors.len() >= ERRORS_SHOWN {
+                        self.at = self.tokens.len() - 1;
+                        return lines;
+                    }
                     // The whole line is passed over, from its start, so
                     // the rest of a block the error is in is passed too.
                     self.at = start;

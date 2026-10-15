@@ -1,0 +1,5 @@
+error: alias `A13` names a type of more than 10000 parts
+  --> an_alias_names_no_type_too_large_to_build.fn:17:1
+   |
+17 | A13 = (A12, A12)
+   | ^^^^^^^^^^^^^^^^

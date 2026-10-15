@@ -62,6 +62,9 @@ struct Lowerer<'a> {
     routines: Option<&'a faun_core::platform::Routines>,
     program: p::Program,
     types: BTreeSet<Type>,
+    /// The declared types found and not yet taken apart for the types
+    /// their fields hold.
+    unexpanded: Vec<Type>,
     type_ids: HashMap<Type, TypeId>,
     constructor_ids: HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: HashMap<Type, CtorId>,
@@ -94,6 +97,7 @@ impl<'a> Lowerer<'a> {
             routines,
             program,
             types: BTreeSet::new(),
+            unexpanded: Vec::new(),
             type_ids: HashMap::new(),
             constructor_ids: HashMap::new(),
             record_constructor_ids: HashMap::new(),
@@ -168,29 +172,26 @@ impl<'a> Lowerer<'a> {
                 self.collect_decision(decision, result)?;
             }
         }
-        loop {
-            let before = self.types.len();
-            let types: Vec<_> = self.types.iter().cloned().collect();
-            for ty in types {
-                if let Type::Named(name, _) = &ty {
-                    let constructors = ty.constructors(&self.program.data)?;
-                    for (_, fields) in &constructors {
-                        for field in fields {
-                            self.collect_type(field)?;
-                        }
-                    }
-                    if self.program.data[name].wrapper.is_some()
-                        && let [(_, fields)] = constructors.as_slice()
-                        && let [field @ Type::Record(_)] = fields.as_slice()
-                    {
-                        self.record_wrappers.insert(ty, field.clone());
-                    }
+        // Each declared type found is taken apart once, for what its
+        // fields hold, which may be more declared types.
+        while let Some(ty) = self.unexpanded.pop() {
+            let Type::Named(name, _) = &ty else {
+                continue;
+            };
+            let constructors = ty.constructors(&self.program.data)?;
+            for (_, fields) in &constructors {
+                for field in fields {
+                    self.collect_type(field)?;
                 }
             }
-            if self.types.len() == before {
-                return Ok(());
+            if self.program.data[name].wrapper.is_some()
+                && let [(_, fields)] = constructors.as_slice()
+                && let [field @ Type::Record(_)] = fields.as_slice()
+            {
+                self.record_wrappers.insert(ty, field.clone());
             }
         }
+        Ok(())
     }
 
     fn collect_decision(&mut self, decision: &Decision, answer: &Type) -> Result<(), LowerError> {
@@ -370,6 +371,7 @@ impl<'a> Lowerer<'a> {
                         self.resolved.symbols.text(*name)
                     )));
                 }
+                self.unexpanded.push(ty.clone());
             }
             Type::Function(..) => {
                 return Err(error(

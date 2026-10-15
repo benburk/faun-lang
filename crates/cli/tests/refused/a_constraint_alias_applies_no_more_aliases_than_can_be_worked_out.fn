@@ -1,0 +1,24 @@
+import std.host {Host}
+
+# Each alias asks its last twice over, at two variables, so it would
+# require a member for each of 2^16 of them.
+C0(a) = where a.zero : a
+C1(a) = where C0(a), C0(b), a.m1 : b
+C2(a) = where C1(a), C1(b), a.m2 : b
+C3(a) = where C2(a), C2(b), a.m3 : b
+C4(a) = where C3(a), C3(b), a.m4 : b
+C5(a) = where C4(a), C4(b), a.m5 : b
+C6(a) = where C5(a), C5(b), a.m6 : b
+C7(a) = where C6(a), C6(b), a.m7 : b
+C8(a) = where C7(a), C7(b), a.m8 : b
+C9(a) = where C8(a), C8(b), a.m9 : b
+C10(a) = where C9(a), C9(b), a.m10 : b
+C11(a) = where C10(a), C10(b), a.m11 : b
+C12(a) = where C11(a), C11(b), a.m12 : b
+C13(a) = where C12(a), C12(b), a.m13 : b
+C14(a) = where C13(a), C13(b), a.m14 : b
+C15(a) = where C14(a), C14(b), a.m15 : b
+C16(a) = where C15(a), C15(b), a.m16 : b
+
+main! : Host -> []
+main!(host) -> host.exit!(0)
