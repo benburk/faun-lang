@@ -1,0 +1,15 @@
+import std.host {Host, File}
+
+# An `A` holds a file and a `B`, which may hold an `A`: dropping the `B`
+# made of one drops its file.
+A : [MkA(B, File)]
+B : [MkB(A), NoB]
+
+leak : A -> Nat
+leak(a) -> (
+  b = MkB(a)
+  0
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

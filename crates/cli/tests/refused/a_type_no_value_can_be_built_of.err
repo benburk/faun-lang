@@ -1,0 +1,7 @@
+error: `Node` has no values: building one needs another
+ --> a_type_no_value_can_be_built_of.fn:4:1
+  |
+4 | Node : {file: File, next: Node}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: give it a way of being built that holds none of it, as a list's empty one does

@@ -1,0 +1,10 @@
+import std.host {Host, File}
+
+# Every node holds another, so none can be made.
+Node : {file: File, next: Node}
+
+count : Node -> Nat
+count(_) -> 0
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

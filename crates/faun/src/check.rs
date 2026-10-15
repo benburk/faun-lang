@@ -20,11 +20,14 @@
 //! Only the host leaves a definition without clauses, for its target to
 //! answer. A declared type holds itself, through whatever it holds, only
 //! at its own parameters or at types not made of them: one holding itself
-//! at a larger type would be a type of its own at every size.
+//! at a larger type would be a type of its own at every size, and each has
+//! a value some way of building needs none of itself for.
 //!
 //! `where` bounds are structural. A signed body meets its written bounds at
 //! its rigid variables; a use of a bounded definition owes its bounds, met
-//! where the use's types are known or owed in turn. An unsigned component's
+//! where the use's types are known or owed in turn: a bound owed again
+//! while it is being met is met there, and one owed again at a larger type
+//! is refused, as it would owe another each time. An unsigned component's
 //! methods still open on a variable it generalizes become its bounds, as do
 //! its field reads off one, met by a record or a declared type having the
 //! field, and its numerals of a generic type, through `of_nat`.
@@ -177,6 +180,7 @@ pub fn type_check(
     crate::derive::requested(&mut resolved, &prelude)?;
     let facts = validate_externals(&resolved.program, resolved.host, &resolved.symbols)
         .and_then(|()| validate_regular(&resolved.program.data, &resolved.symbols))
+        .and_then(|()| validate_built(&resolved.program.data, &resolved.symbols))
         .and_then(|()| validate_effects(&resolved.program, &resolved.symbols))
         .and_then(|()| {
             Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
@@ -528,6 +532,8 @@ struct PendingMethod {
     /// The definition whose bound this is, and the alias that wrote it,
     /// where it is owed by a use rather than written.
     owed: Option<(Symbol, Option<Symbol>)>,
+    /// The pending method whose implementation owes this, where one does.
+    owing: Option<usize>,
 }
 
 /// How a member is reached.
@@ -1137,6 +1143,9 @@ struct Checker<'a> {
     fields: HashMap<Symbol, Vec<FieldImpl>>,
     visible_methods: &'a HashMap<ModuleId, HashSet<Symbol>>,
     pending_methods: Vec<PendingMethod>,
+    /// The pending method whose implementation is being applied, which
+    /// owes the bounds that implementation has.
+    obliging: Option<usize>,
     pending_numerals: Vec<PendingNumeral>,
     pending_tags: Vec<PendingTag>,
     pending_bare: Vec<PendingBare>,
@@ -1194,6 +1203,7 @@ impl<'a> Checker<'a> {
             fields: HashMap::new(),
             visible_methods: &program.visible_methods,
             pending_methods: Vec::new(),
+            obliging: None,
             pending_numerals: Vec::new(),
             pending_tags: Vec::new(),
             pending_bare: Vec::new(),
@@ -2412,7 +2422,7 @@ impl<'a> Checker<'a> {
                 };
                 // A use owes the bounds the definition has.
                 let (ty, replacements) = self.infer.instantiated(&scheme);
-                self.oblige(module, expression.span, *global, &replacements);
+                self.oblige(module, expression.span, *global, &replacements)?;
                 Ok(ty)
             }
             h::ExprKind::Associated(..) => self.associated_call(
@@ -3207,6 +3217,7 @@ impl<'a> Checker<'a> {
             reach: if member { Reach::Bare } else { Reach::Called },
             resolved: false,
             owed: None,
+            owing: None,
         });
         result
     }
@@ -3219,9 +3230,9 @@ impl<'a> Checker<'a> {
         span: super::ast::Span,
         definition: Symbol,
         replacements: &HashMap<u32, Ty>,
-    ) {
+    ) -> Result<(), CheckError> {
         let Some(bounds) = self.bounds.get(&definition).cloned() else {
-            return;
+            return Ok(());
         };
         for bound in bounds {
             let bound = bound.substituted(replacements);
@@ -3229,6 +3240,15 @@ impl<'a> Checker<'a> {
                 continue;
             };
             let skipped = usize::from(!bound.associated);
+            let asked = self.infer.resolve(&Ty::Function(
+                std::iter::once(bound.owner.clone())
+                    .chain(parameters.iter().skip(skipped).cloned())
+                    .collect(),
+                result.clone(),
+            ));
+            if self.owed_again(bound.member, definition, &asked, (module, span))? {
+                continue;
+            }
             self.pending_methods.push(PendingMethod {
                 site: None,
                 module,
@@ -3246,8 +3266,52 @@ impl<'a> Checker<'a> {
                 },
                 resolved: false,
                 owed: Some((definition, bound.through)),
+                owing: self.obliging,
             });
         }
+        Ok(())
+    }
+
+    /// Whether `definition`'s bound asking `member` at `asked` is owed
+    /// already, by the pending method whose implementation owes it or one
+    /// owing that: then it is met where that one is, as a call of itself
+    /// is. One asked again at a larger type would owe another larger still
+    /// each time it is met, and is refused.
+    fn owed_again(
+        &self,
+        member: Symbol,
+        definition: Symbol,
+        asked: &Ty,
+        (module, span): (ModuleId, super::ast::Span),
+    ) -> Result<bool, CheckError> {
+        let mut owing = self.obliging;
+        while let Some(index) = owing {
+            let pending = &self.pending_methods[index];
+            if pending.name == member && pending.owed.is_some_and(|(owner, _)| owner == definition)
+            {
+                let earlier = self.infer.resolve(&Ty::Function(
+                    std::iter::once(pending.receiver.clone())
+                        .chain(pending.arguments.iter().cloned())
+                        .collect(),
+                    Rc::new(pending.result.clone()),
+                ));
+                if earlier == *asked {
+                    return Ok(true);
+                }
+                if ty_embeds(&earlier, asked) {
+                    let name = spelled(member, self.symbols);
+                    return Err(failure(
+                        module,
+                        span,
+                        format!("this asks for `{name}` through its bound again, at a larger type"),
+                    )
+                    .note("each time the bound is met it would owe another, without end")
+                    .help("bound the method by types no larger than its own"));
+                }
+            }
+            owing = pending.owing;
+        }
+        Ok(false)
     }
 
     const fn marks(&self) -> Marks {
@@ -3577,6 +3641,7 @@ impl<'a> Checker<'a> {
             reach: Reach::Type,
             resolved: false,
             owed: None,
+            owing: None,
         });
         if numeral.negative {
             let neg = self.method_symbol(numeral.module, numeral.span, "neg")?;
@@ -3591,6 +3656,7 @@ impl<'a> Checker<'a> {
                 reach: Reach::Called,
                 resolved: false,
                 owed: None,
+                owing: None,
             });
         }
         if let Some(site) = numeral.site {
@@ -3999,7 +4065,10 @@ impl<'a> Checker<'a> {
                         return Err(refused);
                     }
                     [candidate] => {
-                        self.apply_method(&pending, candidate)?;
+                        self.obliging = Some(index);
+                        let applied = self.apply_method(&pending, candidate);
+                        self.obliging = None;
+                        applied?;
                         self.pending_methods[index].resolved = true;
                         progress = true;
                     }
@@ -4277,6 +4346,7 @@ impl<'a> Checker<'a> {
                 reach: Reach::Called,
                 resolved: false,
                 owed: None,
+                owing: None,
             });
         }
         if let Some(site) = pending.site {
@@ -4386,7 +4456,7 @@ impl<'a> Checker<'a> {
                 pending.span,
                 implementation.target,
                 &replacements,
-            );
+            )?;
         }
         Ok(())
     }
@@ -4710,6 +4780,70 @@ fn validate_regular(data: &HashMap<Symbol, n::Data>, symbols: &Symbols) -> Resul
         }
     }
     Ok(())
+}
+
+/// Refuse a declared type no value can be built of: each way of building
+/// one holds another of it, or of another such type, as
+/// `Node : {file: File, next: Node}` does. Built up from the types some way
+/// of building needs nothing of that kind for. A declared type is taken to
+/// be buildable at any arguments where it is at its own.
+fn validate_built(data: &HashMap<Symbol, n::Data>, symbols: &Symbols) -> Result<(), CheckError> {
+    let mut built: HashSet<Symbol> = HashSet::new();
+    loop {
+        let before = built.len();
+        for declared in data.values() {
+            let mut ways = declared
+                .constructors
+                .iter()
+                .map(|constructor| constructor.fields.iter().collect::<Vec<_>>())
+                .chain(declared.wrapper.iter().map(|wrapper| vec![&wrapper.field]))
+                .peekable();
+            let any_way = ways.peek().is_none();
+            if any_way
+                || ways.any(|fields| fields.iter().all(|field| buildable(field, data, &built)))
+            {
+                built.insert(declared.name);
+            }
+        }
+        if built.len() == before {
+            break;
+        }
+    }
+    let mut unbuilt: Vec<_> = data
+        .values()
+        .filter(|declared| !built.contains(&declared.name))
+        .collect();
+    unbuilt.sort_by_key(|declared| (declared.module, declared.span));
+    let Some(declared) = unbuilt.first() else {
+        return Ok(());
+    };
+    let name = spelled(declared.name, symbols);
+    Err(failure(
+        declared.module,
+        declared.span,
+        format!("`{name}` has no values: building one needs another"),
+    )
+    .help("give it a way of being built that holds none of it, as a list's empty one does"))
+}
+
+/// Whether a value of `ty` can be built, where the declared types in
+/// `built` can. A type variable, a function and the empty row are taken
+/// to be.
+fn buildable(ty: &h::Type, data: &HashMap<Symbol, n::Data>, built: &HashSet<Symbol>) -> bool {
+    match ty {
+        h::Type::Named(name, _) => !data.contains_key(name) || built.contains(name),
+        h::Type::Variable(_) | h::Type::Hole | h::Type::Function(..) => true,
+        h::Type::Variants(tags) => {
+            tags.is_empty()
+                || tags
+                    .iter()
+                    .any(|tag| tag.fields.iter().all(|field| buildable(field, data, built)))
+        }
+        h::Type::Record(fields, _) => fields
+            .iter()
+            .all(|(_, field)| buildable(field, data, built)),
+        h::Type::Tuple(members) => members.iter().all(|member| buildable(member, data, built)),
+    }
 }
 
 /// Each declared type's parameter, by position, and the parameters of the
@@ -5351,6 +5485,93 @@ fn test_in(pattern: &h::Pattern) -> Option<&'static str> {
 
 fn component_name_set(monotypes: &HashMap<Symbol, Ty>) -> HashSet<Symbol> {
     monotypes.keys().copied().collect()
+}
+
+/// Whether `small` is `large` with parts left out, as specialization asks
+/// of its keys: each part of `small` found in `large`, in its place. Each
+/// pair of parts is compared once.
+fn ty_embeds(small: &Ty, large: &Ty) -> bool {
+    TyEmbedding::default().embeds(small, large)
+}
+
+#[derive(Default)]
+struct TyEmbedding {
+    known: HashMap<(*const Ty, *const Ty), bool>,
+}
+
+impl TyEmbedding {
+    fn embeds(&mut self, small: &Ty, large: &Ty) -> bool {
+        let pair = (std::ptr::from_ref(small), std::ptr::from_ref(large));
+        if let Some(&found) = self.known.get(&pair) {
+            return found;
+        }
+        let found = self.couples(small, large)
+            || Self::parts(large)
+                .into_iter()
+                .any(|part| self.embeds(small, part));
+        self.known.insert(pair, found);
+        found
+    }
+
+    fn all(&mut self, small: &[Ty], large: &[Ty]) -> bool {
+        small.len() == large.len() && small.iter().zip(large).all(|(a, b)| self.embeds(a, b))
+    }
+
+    fn tails(&mut self, small: Option<&Rc<Ty>>, large: Option<&Rc<Ty>>) -> bool {
+        match (small, large) {
+            (None, None) => true,
+            (Some(a), Some(b)) => self.embeds(a, b),
+            _ => false,
+        }
+    }
+
+    fn couples(&mut self, small: &Ty, large: &Ty) -> bool {
+        match (small, large) {
+            (Ty::Var(a), Ty::Var(b)) | (Ty::Rigid(a), Ty::Rigid(b)) => a == b,
+            (Ty::Named(a, xs), Ty::Named(b, ys)) => a == b && self.all(xs, ys),
+            (Ty::Function(xs, x), Ty::Function(ys, y)) => self.all(xs, ys) && self.embeds(x, y),
+            (Ty::Tuple(xs), Ty::Tuple(ys)) => self.all(xs, ys),
+            (Ty::Variants(xs, x), Ty::Variants(ys, y)) => {
+                xs.len() == ys.len()
+                    && xs
+                        .iter()
+                        .zip(ys.iter())
+                        .all(|((a, xs), (b, ys))| a == b && self.all(xs, ys))
+                    && self.tails(x.as_ref(), y.as_ref())
+            }
+            (Ty::Record(xs, x), Ty::Record(ys, y)) => {
+                xs.len() == ys.len()
+                    && xs
+                        .iter()
+                        .zip(ys.iter())
+                        .all(|((a, x), (b, y))| a == b && self.embeds(x, y))
+                    && self.tails(x.as_ref(), y.as_ref())
+            }
+            _ => false,
+        }
+    }
+
+    /// The types directly inside `ty`, where they lie in it, so that each
+    /// keeps its place as a key while `ty` is borrowed.
+    fn parts(ty: &Ty) -> Vec<&Ty> {
+        match ty {
+            Ty::Var(_) | Ty::Rigid(_) => Vec::new(),
+            Ty::Named(_, parts) | Ty::Tuple(parts) => parts.iter().collect(),
+            Ty::Function(parameters, result) => {
+                parameters.iter().chain([result.as_ref()]).collect()
+            }
+            Ty::Variants(tags, tail) => tags
+                .iter()
+                .flat_map(|(_, fields)| fields.iter())
+                .chain(tail.as_deref())
+                .collect(),
+            Ty::Record(fields, tail) => fields
+                .iter()
+                .map(|(_, field)| field)
+                .chain(tail.as_deref())
+                .collect(),
+        }
+    }
 }
 
 /// A name as the program wrote it: resolution prefixes a global with the

@@ -365,27 +365,50 @@ impl<'a> Facts<'a> {
         matches!(ty, Type::Named(name, _) if self.resources.contains(name))
     }
 
-    /// Whether a value of `ty` holds a resource anywhere in it.
+    /// Whether a value of `ty` holds a resource anywhere in it: whether any
+    /// type its values are built of is one. Asked as a search over those
+    /// types, so a type reaching itself is answered by what else it reaches,
+    /// whichever is asked first. A search finding none has seen everything
+    /// each type it passed reaches, so each of those holds none either.
     fn carries(&self, ty: &Type) -> bool {
         if let Some(&known) = self.carries.borrow().get(ty) {
             return known;
         }
-        // A type reaching itself holds a resource only where something
-        // else in it does, so it is taken to hold none while it is asked.
-        self.carries.borrow_mut().insert(ty.clone(), false);
-        let carries = match ty {
-            Type::Named(name, _) if self.resources.contains(name) => true,
-            Type::Named(..) => self
-                .fields_of_every(ty)
-                .iter()
-                .any(|field| self.carries(field)),
-            Type::Function(..) => false,
-            Type::Variants(tags) => tags.iter().flat_map(|(_, f)| f).any(|f| self.carries(f)),
-            Type::Record(fields) => fields.iter().any(|(_, field)| self.carries(field)),
-            Type::Tuple(members) => members.iter().any(|member| self.carries(member)),
-        };
-        self.carries.borrow_mut().insert(ty.clone(), carries);
-        carries
+        let mut waiting = vec![ty.clone()];
+        let mut seen = HashSet::new();
+        let mut found = false;
+        while let Some(next) = waiting.pop() {
+            if let Some(&known) = self.carries.borrow().get(&next) {
+                found |= known;
+                if found {
+                    break;
+                }
+                continue;
+            }
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            match &next {
+                Type::Named(name, _) if self.resources.contains(name) => {
+                    found = true;
+                    break;
+                }
+                Type::Named(..) => waiting.extend(self.fields_of_every(&next)),
+                Type::Function(..) => {}
+                Type::Variants(tags) => {
+                    waiting.extend(tags.iter().flat_map(|(_, fields)| fields.iter().cloned()));
+                }
+                Type::Record(fields) => waiting.extend(fields.iter().map(|(_, f)| f.clone())),
+                Type::Tuple(members) => waiting.extend(members.iter().cloned()),
+            }
+        }
+        let mut known = self.carries.borrow_mut();
+        if found {
+            known.insert(ty.clone(), true);
+        } else {
+            known.extend(seen.into_iter().map(|each| (each, false)));
+        }
+        found
     }
 
     /// Every field of every constructor of a named type, at its arguments.
@@ -887,11 +910,20 @@ impl<'f, 'a> Walk<'f, 'a> {
     /// fields holding a resource each held on its own, and anything else
     /// whole.
     fn named(&mut self, origins: &[Origin], ty: &Type) -> usize {
+        self.named_within(origins, ty, &mut Vec::new())
+    }
+
+    /// [`Self::named`], within the records `within` holds: a record found
+    /// inside itself, which no value is, is held whole there.
+    fn named_within(&mut self, origins: &[Origin], ty: &Type, within: &mut Vec<Type>) -> usize {
         self.held.push(Held {
             origins: origins.to_vec(),
             state: State::Held,
         });
         let held = self.held.len() - 1;
+        if within.contains(ty) {
+            return held;
+        }
         let Some(fields) = self.facts.record_fields(ty) else {
             return held;
         };
@@ -903,10 +935,12 @@ impl<'f, 'a> Walk<'f, 'a> {
             return held;
         }
         self.held[held].state = State::Empty;
+        within.push(ty.clone());
         let parts = fields
             .into_iter()
-            .map(|(name, field)| (name, self.named(origins, &field)))
+            .map(|(name, field)| (name, self.named_within(origins, &field, within)))
             .collect();
+        within.pop();
         self.fields.insert(held, parts);
         held
     }

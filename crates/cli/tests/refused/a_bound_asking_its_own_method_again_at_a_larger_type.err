@@ -1,0 +1,8 @@
+error: this asks for `foo` through its bound again, at a larger type
+  --> a_bound_asking_its_own_method_again_at_a_larger_type.fn:11:37
+   |
+11 | main!(host) -> host.exit!(U8.of_nat(B(1).foo(B(2))))
+   |                                     ^^^^^^^^^^^^^^
+   |
+   = note: each time the bound is met it would owe another, without end
+   = help: bound the method by types no larger than its own

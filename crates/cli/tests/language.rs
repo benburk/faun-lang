@@ -8,6 +8,31 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "a bound asking its own method again at the same types is met where it is asked",
+        "Box(a) : [B(a)].(
+           foo : (Box(a), b) -> Nat where b.foo : (b, b) -> Nat
+           foo(_, _) -> 6
+         )
+         
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(B(1).foo(B(2))))",
+        6,
+    ),
+    (
+        "a record holding itself through another record is held whole there",
+        "import std.host {Host, File}
+         
+         Wrap(a) : {x: a}
+         Node : {file: File, next: Wrap(Node)}
+         
+         count : Node -> Nat
+         count(_) -> 0
+         
+         main! : Host -> []
+         main!(host) -> host.exit!(9)",
+        9,
+    ),
+    (
         "clauses ending a list in fewer elements each try the next once, not once for each way the last fails",
         "f : List(Nat) -> Nat
          f([*_, a0, a1, a2, a3, a4, a5, a6, a7]) -> 8 * 10 + a0

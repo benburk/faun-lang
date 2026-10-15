@@ -1,0 +1,9 @@
+error: `leak` uses up the `File` in its first parameter on some ways it goes on and not others
+  --> a_file_held_through_types_reaching_each_other_is_still_held.fn:10:11
+   |
+10 |   b = MkB(a)
+   |           ^ used up here
+11 |   0
+   |   - still held where `leak` answers
+   |
+   = help: use it up on every way the function goes on, or on none, where the caller does

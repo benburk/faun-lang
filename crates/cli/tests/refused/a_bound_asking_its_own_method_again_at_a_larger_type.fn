@@ -1,0 +1,11 @@
+import std.host {Host}
+
+# Meeting the bound asks `foo` of a box holding a box, which asks it of a
+# box holding that, and so on.
+Box(a) : [B(a)].(
+  foo : (Box(a), b) -> Nat where b.foo : (b, Box(b)) -> Nat
+  foo(_, _) -> 0
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(B(1).foo(B(2))))
