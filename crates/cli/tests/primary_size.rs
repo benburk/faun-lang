@@ -39,9 +39,9 @@ const RUNGS: [(&str, &str); 5] = [
 
 /// Each target, what it appends to an output name, and each rung's size.
 const SIZES: [(&dyn Target, &str, [u64; 5]); 3] = [
-    (&X86_64Linux, "", [127, 129, 132, 131, 182]),
+    (&X86_64Linux, "", [127, 129, 132, 131, 178]),
     (&Mos6502Sim65, ".bin", [17, 31, 34, 32, 51]),
-    (&Wasm32Wasi, ".wasm", [36, 166, 181, 181, 164]),
+    (&Wasm32Wasi, ".wasm", [36, 152, 159, 159, 140]),
 ];
 
 #[test]

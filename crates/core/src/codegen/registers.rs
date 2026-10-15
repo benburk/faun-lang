@@ -1858,16 +1858,17 @@ fn tie_hazards<R: Register>(code: &Code<R>, liveness: &Liveness, hazards: &mut [
     }
 }
 
-/// An operand an instruction overwrites with its result, read nowhere else,
-/// is best held where that result is, so nothing moves between them. Back
-/// along a run of such instructions until nothing more is learned.
+/// An operand an instruction overwrites with its result is best held where
+/// that result is, so nothing moves between them; and so is what a block is
+/// handed, where its parameter is. Back along a run of such instructions and
+/// jumps until nothing more is learned.
+///
+/// Even an operand read elsewhere too: what it is read by first is read
+/// where it is, and only a preference is learned, which liveness overrides
+/// where the two would meet.
 fn tie_back<R: Register>(code: &Code<R>, preferred: &mut [Option<R>]) {
-    let mut reads = vec![0u32; preferred.len()];
-    for &operand in &code.operands {
-        reads[operand.index()] += 1;
-    }
     loop {
-        let mut learned = false;
+        let mut learned = hand_back(code, preferred);
         for inst in code.instructions.iter().rev() {
             let Some(result) = inst.result else {
                 continue;
@@ -1876,7 +1877,6 @@ fn tie_back<R: Register>(code: &Code<R>, preferred: &mut [Option<R>]) {
                 continue;
             };
             if code.spec(inst, 1).map(|spec| spec.constraint) != Some(Constraint::Tied(0))
-                || reads[tied.index()] != 1
                 || preferred[tied.index()].is_some()
             {
                 continue;
@@ -1890,6 +1890,40 @@ fn tie_back<R: Register>(code: &Code<R>, preferred: &mut [Option<R>]) {
             return;
         }
     }
+}
+
+/// What a jump hands a block is best held where the block's parameter is,
+/// so the jump moves nothing. Answers whether anything was learned.
+fn hand_back<R: Register>(code: &Code<R>, preferred: &mut [Option<R>]) -> bool {
+    let mut learned = false;
+    for block in &code.blocks {
+        let edges = match block.terminator {
+            Terminator::Jump { target, args } => [Some((target, args)), None],
+            Terminator::Branch {
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+                ..
+            } => [
+                Some((then_target, then_args)),
+                Some((else_target, else_args)),
+            ],
+            Terminator::Return { .. } | Terminator::Halt => [None, None],
+        };
+        for (target, args) in edges.into_iter().flatten() {
+            let params = &code.block_params[code.blocks[target].params.range()];
+            for (&arg, &param) in code.operands[args.range()].iter().zip(params) {
+                if preferred[arg.index()].is_none()
+                    && let Some(reg) = preferred[param.index()]
+                {
+                    preferred[arg.index()] = Some(reg);
+                    learned = true;
+                }
+            }
+        }
+    }
+    learned
 }
 
 /// The frame slots each function needs: past the last slot any of its

@@ -65,6 +65,19 @@ pub(crate) fn encode(program: &Allocated) -> Code {
             } => asm.shift(direction, dst, by, bits),
             Inst::ShiftByCount { direction, dst } => asm.shift_by_count(direction, dst),
             Inst::Multiply { dst, src } => asm.multiply(dst, src),
+            Inst::MultiplyImmediate {
+                dst,
+                src,
+                immediate,
+                bits,
+            } => asm.multiply_immediate(dst, src, immediate, bits),
+            Inst::Scale {
+                dst,
+                src,
+                times,
+                plus,
+                bits,
+            } => asm.scale(dst, src, times, plus, bits),
             Inst::Float {
                 float,
                 dst,
@@ -581,6 +594,47 @@ impl RawEncoder {
         self.emit(&[0x0F, 0xAF, 0xC0 | (dst.low() << 3) | src.low()]);
     }
 
+    /// The low bits of `src * immediate` in `dst`, at a word's width where
+    /// `bits` needs one and at thirty-two otherwise.
+    fn multiply_immediate(&mut self, dst: Reg, src: Reg, immediate: i32, bits: u16) {
+        self.step();
+        self.rex(bits > 32, Some(dst), src);
+        if let Ok(immediate) = i8::try_from(immediate) {
+            self.emit(&[0x6B, modrm(dst, src), immediate.cast_unsigned()]);
+        } else {
+            self.emit(&[0x69, modrm(dst, src)]);
+            self.emit(&immediate.to_le_bytes());
+        }
+    }
+
+    /// `lea dst, [src + src * (times - 1) + plus]`.
+    fn scale(&mut self, dst: Reg, src: Reg, times: u8, plus: i32, bits: u16) {
+        self.step();
+        let factor = match times {
+            3 => 1,
+            5 => 2,
+            9 => 3,
+            _ => panic!("no scaled index multiplies by {times}"),
+        };
+        let extended = u8::from(src.extended());
+        let rex = (u8::from(bits > 32) << 3)
+            | (u8::from(dst.extended()) << 2)
+            | (extended << 1)
+            | extended;
+        if rex != 0 {
+            self.emit(&[0x40 | rex]);
+        }
+        // A base of `rbp` or `r13` has no form without a displacement.
+        let (mode, displacement) = match i8::try_from(plus) {
+            Ok(0) if src.low() != 5 => (0b00, Vec::new()),
+            Ok(small) => (0b01, vec![small.cast_unsigned()]),
+            Err(_) => (0b10, plus.to_le_bytes().to_vec()),
+        };
+        let sib = (factor << 6) | (src.low() << 3) | src.low();
+        self.emit(&[0x8D, (mode << 6) | (dst.low() << 3) | 0b100, sib]);
+        self.emit(&displacement);
+    }
+
     /// Compute a scalar result in its allocated XMM register. Every value
     /// has a canonical low 64-bit word, including zero above binary32 bits.
     fn float(&mut self, float: faun_core::float::Float, dst: Reg, left: Reg, right: Option<Reg>) {
@@ -932,6 +986,48 @@ mod tests {
                 assert!(a.fold_alu_immediate(Alu::Add, Reg::Rax, Reg::Rcx, 9));
             }),
             [0x83, 0xC0, 0x04]
+        );
+    }
+
+    #[test]
+    fn a_known_multiplier_is_taken_into_the_instruction() {
+        // Three, five and nine are an address worked out, and a number
+        // added next is its displacement.
+        assert_eq!(
+            encoded(|a| {
+                a.push_imm8(9);
+                a.pop(Reg::Rax);
+                assert!(a.fold_multiply_immediate(Reg::Rcx, Reg::Rax, 32));
+                a.push_imm8(100);
+                a.pop(Reg::Rax);
+                assert!(a.fold_alu_immediate(Alu::Add, Reg::Rcx, Reg::Rax, 32));
+            }),
+            [0x8D, 0x4C, 0xC9, 0x64]
+        );
+        // A base of `r13` has no form without a displacement.
+        assert_eq!(
+            encoded(|a| {
+                a.push_imm8(3);
+                a.pop(Reg::Rax);
+                assert!(a.fold_multiply_immediate(Reg::R13, Reg::Rax, 64));
+            }),
+            [0x4F, 0x8D, 0x6C, 0x6D, 0x00]
+        );
+        // Anything else is a three-operand product.
+        assert_eq!(
+            encoded(|a| {
+                a.push_imm8(7);
+                a.pop(Reg::Rax);
+                assert!(a.fold_multiply_immediate(Reg::Rdi, Reg::Rax, 8));
+            }),
+            [0x6B, 0xFF, 0x07]
+        );
+        assert_eq!(
+            encoded(|a| {
+                a.mov_sext_imm32(Reg::Rax, 1000);
+                assert!(a.fold_multiply_immediate(Reg::R9, Reg::Rax, 64));
+            }),
+            [0x4D, 0x69, 0xC9, 0xE8, 0x03, 0x00, 0x00]
         );
     }
 

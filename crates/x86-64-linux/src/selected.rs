@@ -1327,7 +1327,9 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
                     | Opcode::Grow
                     | Opcode::ArgumentCount
                     | Opcode::ArgumentVector
-                    | Opcode::ReadByte,
+                    | Opcode::ReadByte
+                    // A conversion that takes nothing off.
+                    | Opcode::Convert,
                 Immediate::None
             )
     );
@@ -1360,6 +1362,8 @@ struct Flow {
 struct Selector<'a> {
     source: &'a Program,
     widths: Vec<u16>,
+    /// Conversions an enclosing comparison has already bounded.
+    whole: Vec<bool>,
     operands: Vec<VReg>,
     instructions: Pool<InstId, Inst>,
     blocks: Pool<BlockId, BlockDraft>,
@@ -1387,6 +1391,7 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
     let mut selector = Selector {
         source,
         widths,
+        whole: faun_core::ir::conversions_taking_nothing(source),
         operands: Vec::new(),
         instructions: Pool::default(),
         blocks: Pool::default(),
@@ -1677,13 +1682,23 @@ impl Selector<'_> {
                     &[address, value],
                     Immediate::Memory { width, offset },
                 ),
-                SourceOp::Convert { value } => self.emit(
-                    block,
-                    Opcode::Convert,
-                    results.first().copied(),
-                    &[value],
-                    Immediate::Bits(source.class(results[0]).bits(WORD_BITS)),
-                ),
+                SourceOp::Convert { value } => {
+                    // A value an enclosing comparison has already put below
+                    // what the conversion keeps loses nothing to it, so the
+                    // conversion says no width to take it to.
+                    let kept = if self.whole[results[0].index()] {
+                        Immediate::None
+                    } else {
+                        Immediate::Bits(source.class(results[0]).bits(WORD_BITS))
+                    };
+                    self.emit(
+                        block,
+                        Opcode::Convert,
+                        results.first().copied(),
+                        &[value],
+                        kept,
+                    );
+                }
                 SourceOp::Shift {
                     direction,
                     value,

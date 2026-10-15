@@ -206,12 +206,14 @@ impl<'a> Lowering<'a> {
 
     /// Whether the program writes to a descriptor, which may be a pipe.
     fn writes(&self) -> bool {
+        self.uses_any(&[Opcode::Write, Opcode::WriteFd])
+    }
+
+    /// Whether any instruction is one of `opcodes`.
+    fn uses_any(&self, opcodes: &[Opcode]) -> bool {
         self.liveness.blocks.iter().any(|layout| {
             layout.instructions.iter().any(|points| {
-                matches!(
-                    self.selected.instructions[points.instruction].opcode,
-                    Opcode::Write | Opcode::WriteFd
-                )
+                opcodes.contains(&self.selected.instructions[points.instruction].opcode)
             })
         })
     }
@@ -223,8 +225,11 @@ impl<'a> Lowering<'a> {
     /// `rt_sigaction` reads the kernel's `struct sigaction` from the stack:
     /// the handler, `SIG_IGN`, then flags, restorer and mask, all nought.
     /// Nothing is live yet, and the stack is as the kernel left it once the
-    /// four words are popped. A program that starts another must restore the
-    /// default in the child, which inherits the disposition.
+    /// four words are popped, which matters only to a program reading what
+    /// the kernel left there: the arguments. One that does not leaves the
+    /// words where they are, still sixteen-byte aligned. A program that
+    /// starts another must restore the default in the child, which inherits
+    /// the disposition.
     fn ignore_broken_pipes(&mut self) {
         if !self.writes() {
             return;
@@ -240,8 +245,12 @@ impl<'a> Lowering<'a> {
         self.materialize(Reg::R10, SIGSET_BYTES);
         self.materialize(Reg::Rax, SYS_RT_SIGACTION);
         self.asm.syscall();
-        for _ in 0..4 {
-            self.asm.pop(Reg::Rcx);
+        if self.argument_count_in_rbx
+            || self.uses_any(&[Opcode::ArgumentCount, Opcode::ArgumentVector])
+        {
+            for _ in 0..4 {
+                self.asm.pop(Reg::Rcx);
+            }
         }
         self.known.fill(None);
     }
@@ -631,8 +640,18 @@ impl<'a> Lowering<'a> {
                 };
                 self.asm.shift_by_count(direction, result()?);
             }
-            (Opcode::Multiply, Immediate::Bits(_)) => {
-                self.asm.multiply(result()?, reg(1)?);
+            (Opcode::Multiply, Immediate::Bits(bits)) => {
+                let source = self.selected.operands[inst.operands.range()][1];
+                let source_reg = reg(1)?;
+                if self.is_unique_constant(source)
+                    && self
+                        .asm
+                        .fold_multiply_immediate(result()?, source_reg, bits)
+                {
+                    self.forget(source_reg);
+                } else {
+                    self.asm.multiply(result()?, source_reg);
+                }
             }
             (Opcode::Float, Immediate::Float(float)) => {
                 let right = if float.operation.arity() == 2 {
@@ -698,6 +717,7 @@ impl<'a> Lowering<'a> {
                     self.asm.store_slot(reg(0)?, slot);
                 }
             }
+            (Opcode::Convert, Immediate::None) => {}
             (Opcode::Convert, Immediate::Bits(bits)) => {
                 let input = self.selected.operands[inst.operands.range()][0];
                 if bits < self.held_width(input) {

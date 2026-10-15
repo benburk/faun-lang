@@ -43,6 +43,7 @@ const BR: u8 = 0x0C;
 const RETURN: u8 = 0x0F;
 const LOCAL_GET: u8 = 0x20;
 const LOCAL_SET: u8 = 0x21;
+const LOCAL_TEE: u8 = 0x22;
 const I32_LOAD: u8 = 0x28;
 const I32_LOAD8_U: u8 = 0x2D;
 const I32_STORE: u8 = 0x36;
@@ -143,6 +144,15 @@ pub(crate) fn lower(program: &Program) -> Code {
         ifs: Vec::new(),
         loops: Vec::new(),
         imports: Vec::new(),
+        whole: faun_core::ir::conversions_taking_nothing(program),
+        last_set: None,
+        kept: Vec::new(),
+        reads: Vec::new(),
+        sets: Vec::new(),
+        returned: None,
+        asked: read_anywhere(program),
+        low: low_bits_read(program),
+        held: held_bits(program),
     };
 
     // Which imports exist decides their indices, so it has to be settled
@@ -176,11 +186,142 @@ pub(crate) fn lower(program: &Program) -> Code {
     }
 }
 
+/// One more for `local`, counted from nought.
+fn tally(counts: &mut Vec<u32>, local: u32) {
+    let at = usize::try_from(local).expect("a local index fits");
+    if counts.len() <= at {
+        counts.resize(at + 1, 0);
+    }
+    counts[at] += 1;
+}
+
+/// How many low bits each value's class holds it in.
+fn held_bits(program: &Program) -> Vec<u16> {
+    let mut held = Vec::with_capacity(program.values_count());
+    for at in 0..program.values_count() {
+        let class = program.class(ValueId::at(at));
+        let bits = if class == Class::Natural {
+            WORD_BITS
+        } else {
+            bits(class)
+        };
+        held.push(bits);
+    }
+    held
+}
+
+/// How many of each value's low bits anything reads.
+///
+/// A sum, difference or product, and the bitwise operations, work out
+/// their low bits from their operands' low bits alone, and a conversion
+/// reads no more than it keeps. Anything else reads the whole word, as
+/// does every transfer: a comparison sees bits a conversion would have
+/// taken off. Every reader comes after what it reads, so one pass back
+/// over the instructions sees all of them, save what a loop carries
+/// round, which is a transfer.
+fn low_bits_read(program: &Program) -> Vec<u16> {
+    let mut low = vec![0u16; program.values_count()];
+    let mut ops = Vec::new();
+    for function in program.functions() {
+        let Some(body) = function.body() else {
+            continue;
+        };
+        for region in regions_within(program, body) {
+            if let Some(terminator) = program.region(region).terminator {
+                for &value in program.values(terminator.values) {
+                    low[value.index()] = WORD_BITS;
+                }
+            }
+        }
+        ops.extend(program.walk_within(body));
+    }
+    for (op, results) in ops.into_iter().rev() {
+        let wanted = results
+            .first()
+            .map_or(WORD_BITS, |result| low[result.index()]);
+        for (value, bits) in low_bits_of_operands(program, op, results, wanted) {
+            let held = &mut low[value.index()];
+            *held = (*held).max(bits);
+        }
+    }
+    low
+}
+
+/// How many low bits of each operand an instruction reads, where `wanted`
+/// of what it writes are read.
+fn low_bits_of_operands(
+    program: &Program,
+    op: &Op,
+    results: &[ValueId],
+    wanted: u16,
+) -> Vec<(ValueId, u16)> {
+    match *op {
+        Op::Convert { value } => vec![(value, wanted.min(bits(program.class(results[0]))))],
+        Op::Binary {
+            op: Binary::Add | Binary::Sub | Binary::Mul | Binary::And | Binary::Or | Binary::Xor,
+            left,
+            right,
+        } => vec![(left, wanted), (right, wanted)],
+        Op::Shift {
+            direction: Direction::Up,
+            value,
+            ..
+        } => vec![(value, wanted)],
+        _ => program
+            .operands(op)
+            .map(|value| (value, WORD_BITS))
+            .collect(),
+    }
+}
+
+/// Whether any instruction or transfer reads each value.
+fn read_anywhere(program: &Program) -> Vec<bool> {
+    let mut read = vec![false; program.values_count()];
+    for function in program.functions() {
+        let Some(body) = function.body() else {
+            continue;
+        };
+        for region in regions_within(program, body) {
+            if let Some(terminator) = program.region(region).terminator {
+                for &value in program.values(terminator.values) {
+                    read[value.index()] = true;
+                }
+            }
+            for op in program.ops(region) {
+                for value in program.operands(op) {
+                    read[value.index()] = true;
+                }
+            }
+        }
+    }
+    read
+}
+
+/// A region and every region within it.
+fn regions_within(program: &Program, region: RegionId) -> Vec<RegionId> {
+    let mut found = vec![region];
+    let mut at = 0;
+    while let Some(&region) = found.get(at) {
+        at += 1;
+        for op in program.ops(region) {
+            match *op {
+                Op::If {
+                    then_region,
+                    else_region,
+                    ..
+                } => found.extend([then_region, else_region]),
+                Op::Loop { body, .. } => found.push(body),
+                _ => {}
+            }
+        }
+    }
+    found
+}
+
 #[derive(Clone, Copy)]
 struct Frame {
     /// Dense emitted index; external function IDs do not occupy wasm bodies.
     index: u32,
-    locals: u32,
 }
 
 struct Plan {
@@ -212,10 +353,7 @@ impl Plan {
             let frame = function.body().map(|body| {
                 plan.locals = 0;
                 plan.walk(program, body);
-                let frame = Frame {
-                    index,
-                    locals: plan.locals,
-                };
+                let frame = Frame { index };
                 index += 1;
                 frame
             });
@@ -350,6 +488,26 @@ struct Lowering<'a> {
     ifs: Vec<Vec<ValueId>>,
     loops: Vec<LoopFrame>,
     imports: Vec<&'static str>,
+    /// Conversions an enclosing comparison has already bounded.
+    whole: Vec<bool>,
+    /// Where the body's last instruction set a local, and which: the span
+    /// of the instruction, so a read straight after it can keep what it set.
+    last_set: Option<(usize, usize, u32)>,
+    /// Each set read straight after it, which keeps its value on the stack.
+    kept: Vec<(usize, usize, u32)>,
+    /// How many times the body reads, and sets, each local.
+    reads: Vec<u32>,
+    sets: Vec<u32>,
+    /// Where the body was when it last returned, after which nothing is
+    /// reached.
+    returned: Option<usize>,
+    /// Whether anything reads each value.
+    asked: Vec<bool>,
+    /// How many of each value's low bits anything reads.
+    low: Vec<u16>,
+    /// How many low bits each value is held in, past which it is nought:
+    /// its class's, unless it was loaded narrower.
+    held: Vec<u16>,
 }
 
 impl Lowering<'_> {
@@ -443,21 +601,18 @@ impl Lowering<'_> {
                 self.body.byte(UNREACHABLE);
             }
 
-            let declared = len32(function.params.len());
-            let params = if self.role == FunctionRole::Entry {
-                0
+            let (params, returns) = if self.role == FunctionRole::Entry {
+                (0, 0)
             } else {
-                declared
+                let params = len32(function.params.len());
+                (params, len32(function.returns.classes().len()))
             };
+            let (code, named) = self.finish_body();
             bodies.push(Body {
                 params,
-                locals: self.plan.functions[id].expect("a body has a frame").locals - params,
-                returns: if self.role == FunctionRole::Entry {
-                    0
-                } else {
-                    len32(function.returns.classes().len())
-                },
-                code: std::mem::take(&mut self.body).finish(),
+                locals: named.max(params) - params,
+                returns,
+                code,
             });
         }
         bodies
@@ -523,7 +678,7 @@ impl Lowering<'_> {
         }
         if let Some(terminator) = terminator {
             self.terminator(terminator);
-        } else if self.depth > 0 {
+        } else if self.depth > 0 && self.returned != Some(self.body.len()) {
             self.body.byte(UNREACHABLE);
         }
     }
@@ -620,7 +775,12 @@ impl Lowering<'_> {
             Op::Convert { value } => {
                 self.push(*value);
                 let kept = bits(self.program.class(results[0]));
-                if kept < bits(self.program.class(*value)) {
+                // Nothing above what it keeps is taken off where nothing
+                // reads above it either.
+                if kept < self.held[value.index()]
+                    && !self.whole[results[0].index()]
+                    && self.low[results[0].index()] > kept
+                {
                     self.narrow(kept);
                 }
                 self.set(results[0]);
@@ -806,13 +966,13 @@ impl Lowering<'_> {
                         }
                         self.call(index);
                     } else if self.depth > 0 {
-                        self.body.byte(RETURN);
+                        self.ret();
                     }
                 } else {
                     for &value in values {
                         self.push(value);
                     }
-                    self.body.byte(RETURN);
+                    self.ret();
                 }
             }
         }
@@ -824,7 +984,7 @@ impl Lowering<'_> {
     fn leave(&mut self, status: ValueId, position: Position) {
         if self.role == FunctionRole::Entry && self.constant(status) == Some(0) {
             if position != Position::EntryEnd {
-                self.body.byte(RETURN);
+                self.ret();
             }
         } else if let Some(index) = self.import("proc_exit") {
             self.push(status);
@@ -848,7 +1008,24 @@ impl Lowering<'_> {
         self.call(sizes);
         self.body.byte(DROP);
         self.constant_i32(ARGC);
-        self.access(Width::Word, Offset::Bytes(0), LOADS);
+        // Only as much of the count as anything reads, where nothing but
+        // the program does: the vector reads all of it.
+        let read = if entry_argv(self.program).is_some() {
+            WORD_BITS
+        } else {
+            self.low[result.index()]
+        };
+        let width = match read {
+            0..=8 => Width::Byte,
+            9..=16 => Width::Bits16,
+            _ => Width::Word,
+        };
+        self.access(width, Offset::Bytes(0), LOADS);
+        self.held[result.index()] = match width {
+            Width::Byte => 8,
+            Width::Bits16 => 16,
+            Width::Bits32 | Width::Word => WORD_BITS,
+        };
         self.set(result);
     }
 
@@ -979,7 +1156,11 @@ impl Lowering<'_> {
         self.constant_i32(NWRITTEN);
         let call = self.import(import).expect("a transfer imports its call");
         self.call(call);
-        self.answered(result);
+        if self.asked[result.index()] {
+            self.answered(result);
+        } else {
+            self.body.byte(DROP); // The errno, which nobody asks after.
+        }
     }
 
     /// Open a name, ended by a nought byte, beneath the directory the
@@ -1100,6 +1281,17 @@ impl Lowering<'_> {
                 self.constant_i32(address.cast_signed());
             }
             Source::Local(index) => {
+                // What was set by the instruction just written is still on
+                // the stack, had the set left it there.
+                if let Some(set @ (_, end, local)) = self.last_set
+                    && end == self.body.len()
+                    && local == index
+                {
+                    self.last_set = None;
+                    self.kept.push(set);
+                    return;
+                }
+                tally(&mut self.reads, index);
                 self.body.byte(LOCAL_GET);
                 self.body.uleb(index);
             }
@@ -1110,8 +1302,50 @@ impl Lowering<'_> {
         let Source::Local(index) = self.plan.source[value.index()] else {
             panic!("a computed value needs a local");
         };
+        let start = self.body.len();
+        tally(&mut self.sets, index);
         self.body.byte(LOCAL_SET);
         self.body.uleb(index);
+        self.last_set = Some((start, self.body.len(), index));
+    }
+
+    fn ret(&mut self) {
+        self.body.byte(RETURN);
+        self.returned = Some(self.body.len());
+    }
+
+    /// The body's code, each set read straight after it made a tee, or
+    /// left out where nothing else reads what it set.
+    ///
+    /// Wasm branches name enclosing blocks rather than offsets, so taking
+    /// bytes out moves nothing any instruction points at.
+    ///
+    /// Also how many locals the code still names, counting from the first:
+    /// one set and never read is still named, and one only ever kept on
+    /// the stack is not.
+    fn finish_body(&mut self) -> (Vec<u8>, u32) {
+        let mut code = std::mem::take(&mut self.body).finish();
+        for (start, end, local) in self.kept.drain(..).rev() {
+            let at = usize::try_from(local).expect("a local index fits");
+            if self.reads.get(at).copied().unwrap_or(0) == 0 {
+                code.drain(start..end);
+                self.sets[at] -= 1;
+            } else {
+                code[start] = LOCAL_TEE;
+            }
+        }
+        let named = (0..self.reads.len().max(self.sets.len()))
+            .rev()
+            .find(|&at| {
+                self.reads.get(at).copied().unwrap_or(0) > 0
+                    || self.sets.get(at).copied().unwrap_or(0) > 0
+            })
+            .map_or(0, |at| len32(at + 1));
+        self.reads.clear();
+        self.sets.clear();
+        self.last_set = None;
+        self.returned = None;
+        (code, named)
     }
 
     fn store(&mut self, address: u32, value: ValueId) {

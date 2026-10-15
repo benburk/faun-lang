@@ -20,6 +20,17 @@ impl Bytes {
         self.0
     }
 
+    /// How many bytes were written so far.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn byte(&mut self, value: u8) {
         self.0.push(value);
     }

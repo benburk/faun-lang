@@ -240,6 +240,23 @@ pub(crate) enum Inst {
         dst: Reg,
         src: Reg,
     },
+    /// `src` times a number known before the program runs, in `dst`.
+    MultiplyImmediate {
+        dst: Reg,
+        src: Reg,
+        immediate: i32,
+        bits: u16,
+    },
+    /// `src` times three, five or nine, plus a number known before the
+    /// program runs, in `dst`: one address worked out and never read, and
+    /// the flags left as they were.
+    Scale {
+        dst: Reg,
+        src: Reg,
+        times: u8,
+        plus: i32,
+        bits: u16,
+    },
     Divide,
     /// Scalar SSE2 over allocated XMM registers. Binary operations tie
     /// their result to the left input; sqrt has independent operands.
@@ -349,9 +366,11 @@ impl Inst {
             | Self::SetIf { dst, .. }
             | Self::LoadDataAddress { dst, .. } => !dst.is_xmm(),
             Self::PushRegister { src } => !src.is_xmm(),
-            Self::Multiply { dst, src } | Self::Alu { dst, src, .. } => {
-                !dst.is_xmm() && !src.is_xmm()
-            }
+            Self::Multiply { dst, src }
+            | Self::MultiplyImmediate { dst, src, .. }
+            | Self::Alu { dst, src, .. } => !dst.is_xmm() && !src.is_xmm(),
+            // `rsp` names no scaled index.
+            Self::Scale { dst, src, .. } => !dst.is_xmm() && !src.is_xmm() && src != Reg::Rsp,
             Self::Move { .. }
             | Self::LoadStack { .. }
             | Self::LoadFrame { .. }
@@ -558,6 +577,37 @@ impl AllocatedBuilder {
         self.push(Inst::Multiply { dst, src });
     }
 
+    /// `dst` times what was just written into `src` as a constant, taking
+    /// the constant back into the instruction. Answers whether it could.
+    pub(crate) fn fold_multiply_immediate(&mut self, dst: Reg, src: Reg, bits: u16) -> bool {
+        let len = self.code.insts().len();
+        if self.code.labelled_from(len.saturating_sub(1)) {
+            return false;
+        }
+        let Some((written, immediate)) = written_constant(self.code.insts(), src, bits) else {
+            return false;
+        };
+        for at in (len - written..len).rev() {
+            self.code.remove(at);
+        }
+        self.push(match immediate {
+            3 | 5 | 9 => Inst::Scale {
+                dst,
+                src: dst,
+                times: u8::try_from(immediate).expect("a small multiplier"),
+                plus: 0,
+                bits,
+            },
+            _ => Inst::MultiplyImmediate {
+                dst,
+                src: dst,
+                immediate,
+                bits,
+            },
+        });
+        true
+    }
+
     pub(crate) fn divide(&mut self) {
         self.push(Inst::Divide);
     }
@@ -672,12 +722,42 @@ impl AllocatedBuilder {
         for at in (len - written..len).rev() {
             self.code.remove(at);
         }
+        if op == Alu::Add && self.displace_scale(dst, immediate, bits) {
+            return true;
+        }
         self.push(Inst::AluImmediate {
             op,
             dst,
             immediate,
             bits,
         });
+        true
+    }
+
+    /// A number added to a scaled value just written is the scaling's
+    /// displacement, where nothing jumps in between the two. Answers whether
+    /// it was.
+    fn displace_scale(&mut self, dst: Reg, immediate: i32, bits: u16) -> bool {
+        let len = self.code.insts().len();
+        if len == 0 || self.code.labelled_from(len) {
+            return false;
+        }
+        let Some(Inst::Scale {
+            dst: held,
+            plus,
+            bits: scaled,
+            ..
+        }) = self.code.insts_mut().last_mut()
+        else {
+            return false;
+        };
+        let Some(sum) = plus.checked_add(immediate) else {
+            return false;
+        };
+        if *held != dst || *scaled != bits {
+            return false;
+        }
+        *plus = sum;
         true
     }
 
