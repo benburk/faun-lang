@@ -11,11 +11,16 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ModuleId;
-use crate::diagnostic::{Advised, Refusal};
+use crate::context::Context;
+use crate::diagnostic::{Advised, Diagnostic, Refusal};
 use crate::specialize::{Clause, Definition, Expr, ExprKind, FunctionKey, Program, Type};
 
 /// Refuse the first function value held anywhere but a call's argument.
-pub(crate) fn check(program: &Program, package: &[ModuleId]) -> Result<(), Refusal> {
+pub(crate) fn check(program: &Program, cx: &Context) -> Result<(), Diagnostic> {
+    first_held(program, &cx.package).map_err(|refusal| cx.told(refusal))
+}
+
+fn first_held(program: &Program, package: &[ModuleId]) -> Result<(), Refusal> {
     for function in &program.functions {
         let Definition::Body(clauses) = &function.definition else {
             continue;

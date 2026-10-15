@@ -5,10 +5,12 @@
 //! infer authority or providers from coincidental spellings elsewhere.
 
 use crate::ast::Span;
-use crate::check::{CheckedProgram, InferredType};
+use crate::check::InferredType;
+use crate::context::Context;
 use crate::diagnostic::Diagnostic;
 use crate::hir as h;
 use crate::modules::LoadedProgram;
+use crate::typed;
 use crate::{ModuleId, Symbol};
 
 /// Source identities required by the initial host ABI.
@@ -75,43 +77,37 @@ impl HostIds {
     }
 }
 
-/// Give a `main!` written without a signature the ABI's, `Host -> []`.
+/// `program` with a `main!` written without a signature given the ABI's,
+/// `Host -> []`, where it is an application's.
 ///
 /// Its `host` is then a `Host` from the start, and what it asks of it is
 /// found on `Host`, whatever the entry imports.
-pub fn sign_main(resolved: &mut crate::resolve::ResolvedProgram, host: &HostIds, main: &Main) {
-    let items = || {
-        resolved
-            .program
-            .modules
-            .iter()
-            .flat_map(|module| &module.items)
+pub(crate) fn sign_main(mut program: h::Program, cx: &Context, main: Option<&Main>) -> h::Program {
+    let Some(main) = main else {
+        return program;
     };
-    if items()
-        .any(|item| matches!(item, h::Item::Signature(signature) if signature.name == main.symbol))
-    {
-        return;
+    let items = program.modules.iter().flat_map(|module| &module.items);
+    let mut signed = false;
+    let mut written = None;
+    for item in items {
+        match item {
+            h::Item::Signature(signature) if signature.name == main.symbol => signed = true,
+            h::Item::Clause(clause) if clause.name == main.symbol => {
+                written.get_or_insert(clause.span);
+            }
+            _ => {}
+        }
     }
-    let Some(span) = items().find_map(|item| match item {
-        h::Item::Clause(clause) if clause.name == main.symbol => Some(clause.span),
-        _ => None,
-    }) else {
-        return;
-    };
-    let Some(spelling) = resolved.symbols.find("main!") else {
-        return;
-    };
-    let Some(module) = resolved
-        .program
+    let spelling = cx.symbols.find("main!");
+    let module = program
         .modules
         .iter_mut()
-        .find(|module| module.source == main.module)
-    else {
-        return;
-    };
-    module
-        .items
-        .push(host.entry_signature(span, main.symbol, spelling));
+        .find(|module| module.source == main.module);
+    if let (false, Some(span), Some(spelling), Some(module)) = (signed, written, spelling, module) {
+        let signature = cx.host.entry_signature(span, main.symbol, spelling);
+        module.items.push(signature);
+    }
+    program
 }
 
 /// Validate the selected host ABI and the application's `main!` signature.
@@ -120,21 +116,20 @@ pub fn sign_main(resolved: &mut crate::resolve::ResolvedProgram, host: &HostIds,
 ///
 /// Rejects host declarations or an entry whose checked type differs from the
 /// canonical `Host` and `U8` identities or the structural empty variant type.
-pub fn check_application_abi(
-    checked: &CheckedProgram,
-    host: &HostIds,
+pub(crate) fn check_application_abi(
+    program: &typed::Program,
+    cx: &Context,
     main: &Main,
 ) -> Result<(), Diagnostic> {
-    let resolved = &checked.resolved;
-    let functions = &resolved.program.functions;
+    let host = &cx.host;
+    let functions = &program.functions;
     let span = functions
         .iter()
         .find(|function| function.name == main.symbol)
         .map_or_else(Span::default, |function| function.span);
-    let refused = |message: String| resolved.diagnostic(main.module, span, message);
+    let refused = |message: String| cx.diagnostic(main.module, span, message);
     // `Host` wraps the record of startup values its target produces.
-    let wrapper = resolved
-        .program
+    let wrapper = program
         .data
         .get(&host.host)
         .and_then(|data| data.wrapper.as_ref());
@@ -151,7 +146,7 @@ pub fn check_application_abi(
         ),
         (
             host.exit,
-            effect(vec![named(host.host), named(checked.prelude.u8_)]),
+            effect(vec![named(host.host), named(cx.prelude.u8_)]),
             "exit! : (Host, U8) -> []",
         ),
     ];

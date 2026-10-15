@@ -14,16 +14,18 @@
 use std::collections::HashSet;
 
 use crate::Symbol;
+use crate::context::Context;
 use crate::hir as h;
 
-/// Rewrite every record builder in `modules`, whose signatures have had their
-/// aliases expanded.
-pub(crate) fn desugar(modules: &mut [h::Module], sites: &mut h::Sites) {
-    let pairings = pairings(modules);
+/// `program` with every record builder rewritten, its signatures' aliases
+/// already expanded.
+pub(crate) fn desugar(mut program: h::Program, cx: &mut Context) -> h::Program {
+    let pairings = pairings(&program.modules);
     if pairings.is_empty() {
-        return;
+        return program;
     }
-    for module in modules {
+    let sites = &mut cx.sites;
+    for module in &mut program.modules {
         for item in &mut module.items {
             match item {
                 h::Item::Clause(clause) => clause_builders(clause, &pairings, sites),
@@ -38,6 +40,7 @@ pub(crate) fn desugar(modules: &mut [h::Module], sites: &mut h::Sites) {
             }
         }
     }
+    program
 }
 
 /// The functions whose signatures pair two values of one shape.

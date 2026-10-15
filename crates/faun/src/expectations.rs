@@ -20,11 +20,11 @@
 
 use crate::Symbol;
 use crate::ast::Span;
+use crate::context::Context;
 use crate::diagnostic::Location;
 use crate::hir as h;
-use crate::host::{HostIds, Main};
+use crate::host::Main;
 use crate::modules::LoadedProgram;
-use crate::resolve::ResolvedProgram;
 
 /// The entry a test build enters by: a definition of the entry module that
 /// no source can name, since its name holds a space.
@@ -37,32 +37,35 @@ pub(crate) fn main(loaded: &mut LoadedProgram) -> Main {
     }
 }
 
-/// Make `main` the test entry, answering where each expectation it asks was
-/// written, in the order it numbers them.
-pub(crate) fn enter(resolved: &mut ResolvedProgram, host: &HostIds, main: &Main) -> Vec<Location> {
-    let (asked, locations) = asked(resolved);
-    let clause = entry(resolved, main, &asked);
-    let spelling = resolved.symbols.intern("expect main!");
-    let module = resolved
-        .program
+/// `program` with `main` the test entry, and where each expectation it asks
+/// was written, in the order it numbers them.
+pub(crate) fn enter(
+    mut program: h::Program,
+    cx: &mut Context,
+    main: &Main,
+) -> (h::Program, Vec<Location>) {
+    let (asked, locations) = asked(&program, cx);
+    let clause = entry(cx, main, &asked);
+    let spelling = cx.symbols.intern("expect main!");
+    let module = program
         .modules
         .iter_mut()
         .find(|module| module.source == main.module)
         .expect("the entry module was resolved");
     module
         .items
-        .push(host.entry_signature(clause.span, main.symbol, spelling));
+        .push(cx.host.entry_signature(clause.span, main.symbol, spelling));
     module.items.push(h::Item::Clause(clause));
-    locations
+    (program, locations)
 }
 
 /// Every expectation in the package, in the order the test entry numbers
 /// them, and where each was written.
-fn asked(resolved: &ResolvedProgram) -> (Vec<Symbol>, Vec<Location>) {
+fn asked(program: &h::Program, cx: &Context) -> (Vec<Symbol>, Vec<Location>) {
     let mut asked = Vec::new();
     let mut locations = Vec::new();
-    for module in &resolved.program.modules {
-        if !resolved.package.contains(&module.source) {
+    for module in &program.modules {
+        if !cx.package.contains(&module.source) {
             continue;
         }
         for &expectation in &module.expectations {
@@ -74,7 +77,7 @@ fn asked(resolved: &ResolvedProgram) -> (Vec<Symbol>, Vec<Location>) {
                     _ => None,
                 })
                 .expect("an expectation is a clause of its module");
-            locations.push(resolved.location(module.source, span));
+            locations.push(cx.location(module.source, span));
             asked.push(expectation);
         }
     }
@@ -82,11 +85,11 @@ fn asked(resolved: &ResolvedProgram) -> (Vec<Symbol>, Vec<Location>) {
 }
 
 /// The test entry's one clause, asking each of `asked`.
-fn entry(resolved: &mut ResolvedProgram, main: &Main, asked: &[Symbol]) -> h::Clause {
-    let written = resolved.source(main.module).text().len();
+fn entry(cx: &mut Context, main: &Main, asked: &[Symbol]) -> h::Clause {
+    let written = cx.source(main.module).text().len();
     let span = Span::new(written, written);
-    let sites = &mut resolved.sites;
-    let symbols = &mut resolved.symbols;
+    let sites = &mut cx.sites;
+    let symbols = &mut cx.symbols;
     let (print, exit, select, to_str) = (
         symbols.intern("print!"),
         symbols.intern("exit!"),

@@ -22,6 +22,9 @@ pub(crate) struct Program {
     pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
     pub(crate) data: HashMap<Symbol, crate::declarations::Data>,
+    /// Where each definition is written, which a refusal naming one by
+    /// name points at.
+    pub(crate) written: HashMap<Symbol, (ModuleId, crate::ast::Span)>,
 }
 
 #[derive(Clone, Debug)]

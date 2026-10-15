@@ -10,24 +10,27 @@ use std::collections::{BTreeSet, HashMap};
 use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 
 use crate::blessed::PreludeIds;
-use crate::check::CheckedProgram;
+use crate::context::Context;
 use crate::diagnostic::{Diagnostic, Refusal};
 use crate::first_order::{Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::pattern_compile::{self as p, Decision, Unpack, Value};
-use crate::resolve::ResolvedProgram;
 use crate::specialize::{self, FunctionKey, Type};
 use crate::{ModuleId, Symbol};
 
 /// Specialize what `entry`, a monomorphic parameterless function, reaches
 /// and emit Barb, for a test to read one definition's lowering.
 #[cfg(test)]
-fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, Refusal> {
-    let specialized = specialize::monomorphize_from_entry(checked, entry)?;
-    crate::second_class::check(&specialized, &checked.resolved.package)?;
-    let program = crate::callbacks::lower(specialized)?;
-    let program = p::compile(program, &checked.prelude, &checked.resolved.symbols)?;
-    Lowerer::new(checked, None, program)?.lower()
+fn program(checked: &crate::Checked, entry: Symbol) -> Result<barb::Program, Diagnostic> {
+    let cx = &checked.cx;
+    let specialized = specialize::monomorphize_from_entry(&checked.program, cx, entry)
+        .map_err(|refusal| cx.told(refusal))?;
+    crate::second_class::check(&specialized, cx)?;
+    let program = crate::callbacks::lower(specialized, cx)?;
+    let program = p::compile(program, cx)?;
+    Lowerer::new(program, cx, None)
+        .and_then(Lowerer::lower)
+        .map_err(|refusal| cx.told(refusal))
 }
 
 /// Emit a pattern-compiled package as Barb, starting at its `main! : Host -> []`
@@ -43,20 +46,20 @@ fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, Ref
 ///
 /// Reports Barb construction failures and a target without `exit!`.
 pub(crate) fn lower_package_to_barb(
-    checked: &CheckedProgram,
     program: p::Program,
+    cx: &Context,
     routines: &faun_core::platform::Routines,
 ) -> Result<barb::Program, Diagnostic> {
-    Lowerer::new(checked, Some(routines), program)
+    Lowerer::new(program, cx, Some(routines))
         .and_then(Lowerer::lower)
-        .map_err(|error| checked.resolved.told(error))
+        .map_err(|error| cx.told(error))
 }
 
 /// How a widening rebuilds each constructor, or a product's fields.
 type Widening = Vec<(Option<Symbol>, Vec<(Type, Type)>)>;
 
 struct Lowerer<'a> {
-    resolved: &'a ResolvedProgram<crate::typed::Program>,
+    cx: &'a Context,
     prelude: &'a PreludeIds,
     /// The target's routines, present when lowering an application.
     routines: Option<&'a faun_core::platform::Routines>,
@@ -87,13 +90,13 @@ struct Lowerer<'a> {
 
 impl<'a> Lowerer<'a> {
     fn new(
-        checked: &'a CheckedProgram,
-        routines: Option<&'a faun_core::platform::Routines>,
         program: p::Program,
+        cx: &'a Context,
+        routines: Option<&'a faun_core::platform::Routines>,
     ) -> Result<Self, Refusal> {
         let mut lowerer = Self {
-            resolved: &checked.resolved,
-            prelude: &checked.prelude,
+            cx,
+            prelude: &cx.prelude,
             routines,
             program,
             types: BTreeSet::new(),
@@ -147,12 +150,7 @@ impl<'a> Lowerer<'a> {
 
     /// Where the first clause defining `name` is written.
     fn definition_site(&self, name: Symbol) -> Option<(ModuleId, crate::ast::Span)> {
-        self.resolved
-            .program
-            .functions
-            .iter()
-            .find(|function| function.name == name)
-            .map(|function| (function.module, function.span))
+        self.program.written.get(&name).copied()
     }
 
     /// Find every type the program holds, each of which Barb declares.
@@ -371,7 +369,7 @@ impl<'a> Lowerer<'a> {
                 if !self.program.data.contains_key(name) {
                     return Err(error(format!(
                         "type `{}` has no data declaration",
-                        self.resolved.symbols.text(*name)
+                        self.cx.symbols.text(*name)
                     )));
                 }
                 self.unexpanded.push(ty.clone());
@@ -402,7 +400,7 @@ impl<'a> Lowerer<'a> {
 
     fn declare_types(&mut self) {
         for ty in &self.types {
-            let name = type_name(ty, &self.resolved.symbols);
+            let name = type_name(ty, &self.cx.symbols);
             let id = if matches!(ty, Type::Variants(_) | Type::Record(_) | Type::Tuple(_)) {
                 self.output.declare_inline_type(&name)
             } else {
@@ -426,7 +424,7 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .map(|(name, fields)| {
                             (
-                                self.resolved.symbols.spelling(*name).to_string(),
+                                self.cx.symbols.spelling(*name).to_string(),
                                 fields
                                     .iter()
                                     .map(|field| self.type_ids[field])
@@ -476,9 +474,7 @@ impl<'a> Lowerer<'a> {
     fn named_fields(&self, fields: &[(Symbol, Type)]) -> Vec<barb::Field<'a>> {
         fields
             .iter()
-            .map(|(name, ty)| {
-                barb::Field::of(self.type_ids[ty]).named(self.resolved.symbols.text(*name))
-            })
+            .map(|(name, ty)| barb::Field::of(self.type_ids[ty]).named(self.cx.symbols.text(*name)))
             .collect()
     }
 
@@ -498,7 +494,7 @@ impl<'a> Lowerer<'a> {
             .as_ref()
             .expect("a record wrapper")
             .constructor;
-        let spelled = self.resolved.symbols.spelling(wrapper).to_owned();
+        let spelled = self.cx.symbols.spelling(wrapper).to_owned();
         self.output
             .define_fields(id, &[(spelled.as_str(), held.as_slice())]);
         self.constructor_ids
@@ -539,10 +535,10 @@ impl<'a> Lowerer<'a> {
                 .map(|(name, ty)| (name.as_str(), *ty))
                 .collect();
             let result = self.type_ids[result];
-            let name = function_name(&function.key, &self.resolved.symbols);
+            let name = function_name(&function.key, &self.cx.symbols);
             let id = self.output.declare_named(&name, &borrowed, result);
             if let p::Definition::External(provider) = function.definition {
-                let provider = self.resolved.symbols.text(provider);
+                let provider = self.cx.symbols.text(provider);
                 self.output.answered_by(id, provider);
             }
             if let Some(float) = self.float(&function.key) {
@@ -1304,28 +1300,23 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn checked_example(name: &str) -> CheckedProgram {
-        let root = crate::standard_path();
+    fn checked_example(name: &str) -> crate::Checked {
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples")
             .join(name);
-        let loaded = crate::modules::load_program(&entry, root, &crate::test_host()).unwrap();
-        let prelude = PreludeIds::find_in(&loaded).unwrap();
-        let resolved = crate::resolve::resolve_names(loaded).unwrap();
-        crate::check::type_check(crate::declarations::normalize(resolved), prelude).unwrap()
+        crate::checked_for_test(&entry)
     }
 
     /// The example's own definition spelled `suffix`, not the standard
     /// library's.
-    fn named(checked: &CheckedProgram, suffix: &str) -> Symbol {
+    fn named(checked: &crate::Checked, suffix: &str) -> Symbol {
         checked
-            .resolved
             .program
             .functions
             .iter()
             .map(|function| function.name)
             .find(|symbol| {
-                let text = checked.resolved.symbols.text(*symbol);
+                let text = checked.cx.symbols.text(*symbol);
                 text.ends_with(suffix) && !text.starts_with("Mstd_")
             })
             .unwrap()
@@ -1343,24 +1334,20 @@ mod tests {
 
     #[test]
     fn lowers_the_host_entry_through_the_machine_boundary() {
-        let root = crate::standard_path();
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
-        let loaded = crate::modules::load_program(&entry, root, &crate::test_host()).unwrap();
-        let prelude = PreludeIds::find_in(&loaded).unwrap();
-        let host = crate::host::HostIds::find_in(&loaded).unwrap();
+        let loaded =
+            crate::modules::load_program(&entry, crate::standard_path(), &crate::test_host())
+                .unwrap();
         let main = crate::host::Main::find_in(&loaded).unwrap().unwrap();
-        let resolved = crate::resolve::resolve_names(loaded).unwrap();
-        let checked =
-            crate::check::type_check(crate::declarations::normalize(resolved), prelude).unwrap();
-        crate::host::check_application_abi(&checked, &host, &main).unwrap();
+        let crate::Checked { program: typed, cx } = crate::checked_for_test(&entry);
+        crate::host::check_application_abi(&typed, &cx, &main).unwrap();
         for bits in [16, 32, 64] {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
-            let specialized =
-                specialize::monomorphize_package(&checked, &host, Some(&main)).unwrap();
-            crate::second_class::check(&specialized, &checked.resolved.package).unwrap();
-            let program = crate::callbacks::lower(specialized).unwrap();
-            let program = p::compile(program, &checked.prelude, &checked.resolved.symbols).unwrap();
-            let mut program = lower_package_to_barb(&checked, program, &routines).unwrap();
+            let specialized = specialize::monomorphize_package(&typed, &cx, Some(&main)).unwrap();
+            crate::second_class::check(&specialized, &cx).unwrap();
+            let program = crate::callbacks::lower(specialized, &cx).unwrap();
+            let program = p::compile(program, &cx).unwrap();
+            let mut program = lower_package_to_barb(program, &cx, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
             // `Host` holds what its target hands the program; `main!` is the

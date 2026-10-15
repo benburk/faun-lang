@@ -13,8 +13,9 @@ use std::rc::Rc;
 use num_traits::ToPrimitive;
 
 use crate::blessed::PreludeIds;
+use crate::context::Context;
 use crate::declarations::Data;
-use crate::diagnostic::Refusal;
+use crate::diagnostic::{Diagnostic, Refusal};
 use crate::first_order::{self as d, Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::specialize::{FunctionKey, Instance, Pattern, Signature, Split, Type};
@@ -25,6 +26,9 @@ pub(crate) struct Program {
     pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
     pub(crate) data: HashMap<Symbol, Data>,
+    /// Where each definition is written, which a refusal naming one by
+    /// name points at.
+    pub(crate) written: HashMap<Symbol, (ModuleId, crate::ast::Span)>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,7 +85,11 @@ pub(crate) enum Unpack {
 }
 
 /// Compile every function, including ones an entry does not reach.
-pub(crate) fn compile(
+pub(crate) fn compile(program: d::Program, cx: &Context) -> Result<Program, Diagnostic> {
+    compiled(program, &cx.prelude, &cx.symbols).map_err(|refusal| cx.told(refusal))
+}
+
+fn compiled(
     program: d::Program,
     prelude: &PreludeIds,
     symbols: &Symbols,
@@ -146,6 +154,7 @@ pub(crate) fn compile(
         entry: program.entry,
         functions,
         data: program.data,
+        written: program.written,
     })
 }
 
@@ -2455,18 +2464,14 @@ fn error(message: impl Into<String>) -> Refusal {
 mod tests {
     use super::*;
 
-    fn checked() -> crate::check::CheckedProgram {
-        let root = crate::standard_path();
+    fn checked() -> crate::Checked {
         let entry =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/lowering.fn");
-        let loaded = crate::modules::load_program(&entry, root, &crate::test_host()).unwrap();
-        let prelude = PreludeIds::find_in(&loaded).unwrap();
-        let resolved = crate::resolve::resolve_names(loaded).unwrap();
-        crate::check::type_check(crate::declarations::normalize(resolved), prelude).unwrap()
+        crate::checked_for_test(&entry)
     }
 
-    fn row(pattern: Pattern, checked: &crate::check::CheckedProgram) -> Row {
-        let prelude = &checked.prelude;
+    fn row(pattern: Pattern, checked: &crate::Checked) -> Row {
+        let prelude = &checked.cx.prelude;
         Row {
             patterns: vec![pattern],
             guard: Vec::new(),
@@ -2474,7 +2479,7 @@ mod tests {
             body: Body {
                 bindings: Vec::new(),
                 result: Expr {
-                    module: checked.resolved.program.functions[0].module,
+                    module: checked.program.functions[0].module,
                     span: crate::ast::Span::default(),
                     ty: Type::Named(prelude.nat, Vec::new()),
                     kind: ExprKind::Natural(0u32.into()),
@@ -2486,11 +2491,11 @@ mod tests {
     #[test]
     fn numeral_threshold_and_guard_fallthrough_survive_planning() {
         let checked = checked();
-        let prelude = &checked.prelude;
+        let prelude = &checked.cx.prelude;
         let compiler = Compiler {
-            data: &checked.resolved.program.data,
+            data: &checked.program.data,
             prelude,
-            symbols: &checked.resolved.symbols,
+            symbols: &checked.cx.symbols,
             run_out: RunOut::Refused,
             joins: &Joins::default(),
             clauses: None,
@@ -2536,13 +2541,13 @@ mod tests {
     #[test]
     fn unpacks_are_ordered_and_refutable_bindings_keep_their_source() {
         let mut checked = checked();
-        let a = checked.resolved.symbols.intern("a");
-        let b = checked.resolved.symbols.intern("b");
-        let prelude = &checked.prelude;
+        let a = checked.cx.symbols.intern("a");
+        let b = checked.cx.symbols.intern("b");
+        let prelude = &checked.cx.prelude;
         let compiler = Compiler {
-            data: &checked.resolved.program.data,
+            data: &checked.program.data,
             prelude,
-            symbols: &checked.resolved.symbols,
+            symbols: &checked.cx.symbols,
             run_out: RunOut::Refused,
             joins: &Joins::default(),
             clauses: None,

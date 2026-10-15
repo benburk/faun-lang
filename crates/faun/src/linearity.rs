@@ -40,13 +40,12 @@ use std::collections::{HashMap, HashSet};
 
 use faun_core::platform::Routines;
 
-use crate::blessed::PreludeIds;
+use crate::context::Context;
 use crate::diagnostic::Diagnostic;
 use crate::first_order::{self as d, ExprKind};
 use crate::hir::LocalId;
-use crate::resolve::ResolvedProgram;
 use crate::specialize::{FunctionKey, Pattern, Type, surface_type};
-use crate::{ModuleId, Symbol};
+use crate::{ModuleId, Symbol, Symbols};
 
 mod shapes;
 
@@ -57,11 +56,11 @@ mod shapes;
 /// The first such use, where it was written.
 pub(crate) fn check(
     program: &d::Program,
+    declared: &crate::typed::Program,
+    cx: &Context,
     routines: &Routines,
-    resolved: &ResolvedProgram<crate::typed::Program>,
-    prelude: &PreludeIds,
 ) -> Result<(), Diagnostic> {
-    let facts = Facts::of(program, routines, resolved, prelude);
+    let facts = Facts::of(program, declared, cx, routines);
     if facts.resources.is_empty() {
         return Ok(());
     }
@@ -118,18 +117,18 @@ fn settle(facts: &Facts<'_>) -> Vec<Vec<Contract>> {
 /// anything reaches the declaration: a resource is one wherever a program
 /// holds it, closed or not.
 fn resources(
-    resolved: &ResolvedProgram<crate::typed::Program>,
+    declared: &crate::typed::Program,
+    symbols: &Symbols,
     routines: &Routines,
 ) -> HashSet<Symbol> {
-    resolved
-        .program
+    declared
         .functions
         .iter()
         .filter_map(|function| {
             let crate::typed::Definition::External(provider) = function.definition else {
                 return None;
             };
-            let routine = routines.get(resolved.symbols.text(provider))?;
+            let routine = routines.get(symbols.text(provider))?;
             let crate::check::InferredType::Function(parameters, _) = &function.scheme.ty else {
                 unreachable!("every definition has a function scheme")
             };
@@ -171,7 +170,7 @@ impl Contract {
 /// function is, and how to read the source back for a diagnostic.
 struct Facts<'a> {
     program: &'a d::Program,
-    resolved: &'a ResolvedProgram<crate::typed::Program>,
+    cx: &'a Context,
     resources: HashSet<Symbol>,
     /// Which function each key is.
     functions: HashMap<&'a FunctionKey, usize>,
@@ -191,10 +190,11 @@ struct Facts<'a> {
 impl<'a> Facts<'a> {
     fn of(
         program: &'a d::Program,
+        declared: &crate::typed::Program,
+        cx: &'a Context,
         routines: &Routines,
-        resolved: &'a ResolvedProgram<crate::typed::Program>,
-        prelude: &PreludeIds,
     ) -> Self {
+        let prelude = &cx.prelude;
         let uses_up = program
             .functions
             .iter()
@@ -202,7 +202,7 @@ impl<'a> Facts<'a> {
                 let d::Definition::External(provider) = function.definition else {
                     return None;
                 };
-                let routine = routines.get(resolved.symbols.text(provider))?;
+                let routine = routines.get(cx.symbols.text(provider))?;
                 routine.consumes.then_some(0)
             })
             .collect();
@@ -217,8 +217,8 @@ impl<'a> Facts<'a> {
         }
         Self {
             program,
-            resolved,
-            resources: resources(resolved, routines),
+            cx,
+            resources: resources(declared, &cx.symbols, routines),
             functions: program
                 .functions
                 .iter()
@@ -538,7 +538,7 @@ impl<'a> Facts<'a> {
 
     /// A name as its program spells it, without its module's identity.
     fn spelled(&self, name: Symbol) -> &str {
-        self.resolved.symbols.spelling(name)
+        self.cx.symbols.spelling(name)
     }
 
     /// A resource type named as a program spells it, or `otherwise`.
@@ -571,12 +571,12 @@ impl<'a> Facts<'a> {
 
     fn diagnostic(&self, refusal: Refusal) -> Diagnostic {
         let mut diagnostic = match refusal.at {
-            Some((module, span)) => self.resolved.diagnostic(module, span, refusal.message),
+            Some((module, span)) => self.cx.diagnostic(module, span, refusal.message),
             None => Diagnostic::new(refusal.message),
         };
         diagnostic = diagnostic.label(refusal.label);
         if let Some(((module, span), text)) = refusal.also {
-            let location = self.resolved.location(module, span);
+            let location = self.cx.location(module, span);
             diagnostic = diagnostic.secondary_at(location, text);
         }
         if let Some(help) = refusal.help {

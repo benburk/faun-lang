@@ -29,8 +29,9 @@ use num_bigint::BigUint;
 
 use crate::blessed::PreludeIds;
 use crate::check::{InferredType, failure};
+use crate::context::Context;
 use crate::diagnostic::Advised;
-use crate::diagnostic::Refusal;
+use crate::diagnostic::{Diagnostic, Refusal};
 use crate::hir as h;
 use crate::typed as t;
 use crate::{Symbol, Symbols};
@@ -38,12 +39,13 @@ use crate::{Symbol, Symbols};
 /// A column's type, where checking knew one.
 type Column = Option<InferredType>;
 
-/// Refuse the first definition whose clauses leave some value unmatched.
-pub(crate) fn exhaustive(
-    program: &t::Program,
-    symbols: &Symbols,
-    prelude: &PreludeIds,
-) -> Result<(), Refusal> {
+/// Refuse the first definition whose clauses leave some value unmatched,
+/// and the first `is` whose arms do.
+pub(crate) fn check(program: &t::Program, cx: &Context) -> Result<(), Diagnostic> {
+    covered(program, &cx.symbols, &cx.prelude).map_err(|refusal| cx.told(refusal))
+}
+
+fn covered(program: &t::Program, symbols: &Symbols, prelude: &PreludeIds) -> Result<(), Refusal> {
     let checker = Coverage::new(program, prelude);
     for function in &program.functions {
         let t::Definition::Body(clauses) = &function.definition else {

@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::Span;
 use crate::hir as h;
-use crate::resolve::ResolvedProgram;
 use crate::{ModuleId, Symbol};
 
 #[derive(Clone, Debug)]
@@ -40,48 +39,44 @@ pub struct Data {
 /// Consume module item lists into one declaration per function and type.
 #[must_use]
 #[allow(clippy::too_many_lines)] // Keep the declaration walk exhaustive in one place.
-pub fn normalize(resolved: ResolvedProgram) -> ResolvedProgram<Program> {
-    resolved.map(|program, _| {
-        let mut output = Program {
-            functions: Vec::new(),
-            data: HashMap::new(),
-            visible_methods: HashMap::new(),
-        };
-        let mut indices = HashMap::new();
-        for module in program.modules {
-            output
-                .visible_methods
-                .insert(module.source, module.visible_methods.into_iter().collect());
-            for item in module.items {
-                match item {
-                    h::Item::Data(data) => {
-                        for method in data.methods {
-                            let item = match method {
-                                h::MethodItem::Signature(signature) => {
-                                    h::Item::Signature(signature)
-                                }
-                                h::MethodItem::Clause(clause) => h::Item::Clause(clause),
-                            };
-                            output.function(module.source, Some(data.name), item, &mut indices);
-                        }
-                        output.data.insert(
-                            data.name,
-                            Data {
-                                module: module.source,
-                                span: data.span,
-                                name: data.name,
-                                parameters: data.parameters,
-                                constructors: data.constructors,
-                                wrapper: data.wrapper,
-                            },
-                        );
+pub fn normalize(program: h::Program) -> Program {
+    let mut output = Program {
+        functions: Vec::new(),
+        data: HashMap::new(),
+        visible_methods: HashMap::new(),
+    };
+    let mut indices = HashMap::new();
+    for module in program.modules {
+        output
+            .visible_methods
+            .insert(module.source, module.visible_methods.into_iter().collect());
+        for item in module.items {
+            match item {
+                h::Item::Data(data) => {
+                    for method in data.methods {
+                        let item = match method {
+                            h::MethodItem::Signature(signature) => h::Item::Signature(signature),
+                            h::MethodItem::Clause(clause) => h::Item::Clause(clause),
+                        };
+                        output.function(module.source, Some(data.name), item, &mut indices);
                     }
-                    item => output.function(module.source, None, item, &mut indices),
+                    output.data.insert(
+                        data.name,
+                        Data {
+                            module: module.source,
+                            span: data.span,
+                            name: data.name,
+                            parameters: data.parameters,
+                            constructors: data.constructors,
+                            wrapper: data.wrapper,
+                        },
+                    );
                 }
+                item => output.function(module.source, None, item, &mut indices),
             }
         }
-        output
-    })
+    }
+    output
 }
 
 impl Program {

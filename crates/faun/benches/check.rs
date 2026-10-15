@@ -12,8 +12,7 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use faun::blessed::PreludeIds;
-use faun::{check, declarations, modules, resolve};
+use faun::modules;
 
 const RUNS: usize = 5;
 
@@ -193,9 +192,8 @@ fn benchmark(name: &str, entry: &Path) {
     if let Err(diagnostic) = load()
         .map_err(|error| error.to_string())
         .and_then(|loaded| {
-            let prelude = PreludeIds::find_in(&loaded).map_err(|error| error.message)?;
-            let resolved = resolve::resolve_names(loaded).map_err(|error| error.to_string())?;
-            check::type_check(declarations::normalize(resolved), prelude)
+            let (program, mut cx) = faun::resolve(loaded).map_err(|error| error.to_string())?;
+            faun::checked(program, &mut cx)
                 .map(drop)
                 .map_err(|error| error.to_string())
         })
@@ -207,10 +205,9 @@ fn benchmark(name: &str, entry: &Path) {
         let started = Instant::now();
         let loaded = load().expect("loaded before");
         let loaded_at = Instant::now();
-        let prelude = PreludeIds::find_in(&loaded).expect("found before");
-        let resolved = resolve::resolve_names(loaded).expect("resolved before");
+        let (program, mut cx) = faun::resolve(loaded).expect("resolved before");
         let resolved_at = Instant::now();
-        let checked = check::type_check(declarations::normalize(resolved), prelude);
+        let checked = faun::checked(program, &mut cx);
         let checked_at = Instant::now();
         black_box(checked.expect("checked before"));
         loading = loading.min(loaded_at - started);

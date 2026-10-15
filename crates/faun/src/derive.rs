@@ -10,10 +10,10 @@
 
 use crate::ast::{BinaryOp, Span};
 use crate::blessed::PreludeIds;
+use crate::context::Context;
 use crate::declarations as n;
 use crate::diagnostic::Diagnostic;
 use crate::hir as h;
-use crate::resolve::ResolvedProgram;
 use std::collections::HashMap;
 
 use crate::{Symbol, Symbols};
@@ -25,13 +25,13 @@ use crate::{Symbol, Symbols};
 /// Refuses one whose signature is not the member's over its own type, and an
 /// `equals` written beside a `cmp`.
 pub(crate) fn requested(
-    resolved: &mut ResolvedProgram<n::Program>,
-    prelude: &PreludeIds,
-) -> Result<(), Diagnostic> {
-    ordered(resolved, prelude)?;
+    mut program: n::Program,
+    cx: &mut Context,
+) -> Result<n::Program, Diagnostic> {
+    ordered(&mut program, cx)?;
     let n::Program {
         functions, data, ..
-    } = &mut resolved.program;
+    } = &mut program;
     for function in functions {
         let (Some(owner), Some(signature)) = (function.owner, &function.signature) else {
             continue;
@@ -39,7 +39,7 @@ pub(crate) fn requested(
         if !function.clauses.is_empty() {
             continue;
         }
-        let Some(member) = Member::of(signature.spelling, prelude) else {
+        let Some(member) = Member::of(signature.spelling, &cx.prelude) else {
             continue;
         };
         let data = &data[&owner];
@@ -47,31 +47,28 @@ pub(crate) fn requested(
             data,
             member,
             signature,
-            prelude,
-            &resolved.symbols,
-            &mut resolved.sites,
+            &cx.prelude,
+            &cx.symbols,
+            &mut cx.sites,
         ) {
             Ok(clauses) => function.clauses = clauses,
             Err(message) => {
                 let at = (function.module, signature.span);
-                return Err(resolved.diagnostic(at.0, at.1, message));
+                return Err(cx.diagnostic(at.0, at.1, message));
             }
         }
     }
-    Ok(())
+    Ok(program)
 }
 
 /// Give each type with `cmp` its `equals`, `cmp(a, b).eq()`, under the
 /// canonical name its binding already holds; one the type declares itself
 /// is refused.
-fn ordered(
-    resolved: &mut ResolvedProgram<n::Program>,
-    prelude: &PreludeIds,
-) -> Result<(), Diagnostic> {
-    let (Some(cmp), Some(equals)) = (prelude.cmp, prelude.equals) else {
+fn ordered(program: &mut n::Program, cx: &mut Context) -> Result<(), Diagnostic> {
+    let (Some(cmp), Some(equals)) = (cx.prelude.cmp, cx.prelude.equals) else {
         return Ok(());
     };
-    let members = owned_members(resolved);
+    let members = owned_members(program, &cx.symbols);
     let mut ordered: Vec<(Symbol, usize)> = members
         .iter()
         .filter(|((_, spelling), _)| *spelling == cmp)
@@ -80,31 +77,30 @@ fn ordered(
     ordered.sort_unstable_by_key(|&(_, index)| index);
     for (owner, at) in ordered {
         if let Some(&index) = members.get(&(owner, equals)) {
-            let declared = &resolved.program.functions[index];
-            let type_name = resolved.symbols.spelling(owner);
+            let declared = &program.functions[index];
+            let type_name = cx.symbols.spelling(owner);
             let message = format!("`{type_name}` declares both `equals` and `cmp`");
-            return Err(resolved
+            return Err(cx
                 .diagnostic(declared.module, declared_at(declared), message)
                 .help("leave `equals` out: an ordered type's `equals` is its `cmp`'s `Eq`"));
         }
-        let implied = equals_of(resolved, at, equals, prelude);
-        resolved.program.functions.push(implied);
+        let implied = equals_of(program, cx, at, equals);
+        program.functions.push(implied);
     }
     Ok(())
 }
 
 /// Each method a type's block holds, by its owner and spelling.
-fn owned_members(resolved: &ResolvedProgram<n::Program>) -> HashMap<(Symbol, Symbol), usize> {
+fn owned_members(program: &n::Program, symbols: &Symbols) -> HashMap<(Symbol, Symbol), usize> {
     let mut members = HashMap::new();
-    for (index, function) in resolved.program.functions.iter().enumerate() {
+    for (index, function) in program.functions.iter().enumerate() {
         let Some(owner) = function.owner else {
             continue;
         };
-        let spelling = resolved
-            .symbols
+        let spelling = symbols
             .text(function.name)
             .rsplit_once('.')
-            .and_then(|(_, spelled)| resolved.symbols.find(spelled));
+            .and_then(|(_, spelled)| symbols.find(spelled));
         if let Some(spelling) = spelling {
             members.insert((owner, spelling), index);
         }
@@ -114,28 +110,23 @@ fn owned_members(resolved: &ResolvedProgram<n::Program>) -> HashMap<(Symbol, Sym
 
 /// The `equals` of the type whose `cmp` is function `at`: signed as it is,
 /// answering a `Bool`, with its bounds.
-fn equals_of(
-    resolved: &mut ResolvedProgram<n::Program>,
-    at: usize,
-    equals: Symbol,
-    prelude: &PreludeIds,
-) -> n::Function {
-    let order = &resolved.program.functions[at];
+fn equals_of(program: &n::Program, cx: &mut Context, at: usize, equals: Symbol) -> n::Function {
+    let order = &program.functions[at];
     let (module, owner, order_name, span) =
         (order.module, order.owner, order.name, declared_at(order));
-    let text = resolved.symbols.text(order_name);
+    let text = cx.symbols.text(order_name);
     let type_path = text.strip_suffix("cmp").unwrap_or(text).to_owned();
-    let name = resolved.symbols.intern(&format!("{type_path}equals"));
-    let order = &resolved.program.functions[at];
+    let name = cx.symbols.intern(&format!("{type_path}equals"));
+    let order = &program.functions[at];
     let signature = order.signature.as_ref().map(|signature| h::SignatureDecl {
         span: signature.span,
         name,
         spelling: equals,
         parameters: signature.parameters.clone(),
-        result: h::Type::Named(prelude.bool_, Vec::new()),
+        result: h::Type::Named(cx.prelude.bool_, Vec::new()),
         constraints: signature.constraints.clone(),
     });
-    let clause = equal_order(order_name, name, span, prelude, &mut resolved.sites);
+    let clause = equal_order(order_name, name, span, &cx.prelude, &mut cx.sites);
     n::Function {
         module,
         name,

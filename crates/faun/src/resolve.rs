@@ -7,76 +7,16 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ast as s;
-use super::diagnostic::{Advised, Diagnostic, Location, Refusal, counted};
+use super::blessed::PreludeIds;
+use super::context::Context;
+use super::diagnostic::{Advised, Diagnostic, Refusal, counted};
 use super::hir as h;
+use super::host::HostIds;
 use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
-use super::{Source, SourceId, Sources, Symbol, Symbols};
+use super::{Symbol, Symbols};
 
 mod unread;
-
-#[derive(Clone, Debug)]
-pub struct ResolvedProgram<P = h::Program> {
-    pub(crate) sites: h::Sites,
-    pub sources: Sources,
-    pub symbols: Symbols,
-    pub program: P,
-    /// The entry's package, whose every definition is compiled, rather than
-    /// only what reaches into it.
-    pub package: Vec<ModuleId>,
-    /// The module mounted at `std.host`, the one place a definition may be
-    /// left for the target to answer.
-    pub host: ModuleId,
-    /// Each module's source, by module.
-    module_sources: Vec<SourceId>,
-}
-
-impl<P> ResolvedProgram<P> {
-    /// Replace the representation while retaining its source and symbol owners.
-    pub(crate) fn map<Q>(mut self, pass: impl FnOnce(P, &mut h::Sites) -> Q) -> ResolvedProgram<Q> {
-        ResolvedProgram {
-            program: pass(self.program, &mut self.sites),
-            sites: self.sites,
-            sources: self.sources,
-            symbols: self.symbols,
-            package: self.package,
-            host: self.host,
-            module_sources: self.module_sources,
-        }
-    }
-
-    /// A diagnostic at `span` in `module`.
-    ///
-    /// # Panics
-    /// If `module` is not one of this program's.
-    #[must_use]
-    pub fn diagnostic(&self, module: ModuleId, span: s::Span, message: String) -> Diagnostic {
-        Diagnostic::new(message).at(self.source(module), span)
-    }
-
-    /// A refusal as a diagnostic, at its places.
-    ///
-    /// # Panics
-    /// If it names a module not one of this program's.
-    pub(crate) fn told(&self, refusal: Refusal) -> Diagnostic {
-        refusal.told(|module| self.source(module))
-    }
-
-    /// Where `span` is in `module`.
-    ///
-    /// # Panics
-    /// If `module` is not one of this program's.
-    #[must_use]
-    pub fn location(&self, module: ModuleId, span: s::Span) -> Location {
-        Location::of(self.source(module), span)
-    }
-
-    pub(crate) fn source(&self, module: ModuleId) -> &Source {
-        self.sources
-            .get(self.module_sources[module.index()])
-            .expect("a resolved module has a source")
-    }
-}
 
 /// Resolve every loaded module without mutating or concatenating its surface AST.
 ///
@@ -89,7 +29,11 @@ impl<P> ResolvedProgram<P> {
 ///
 /// Panics only if a [`LoadedProgram`] was manually built with a module whose
 /// source identity is absent from its source collection.
-pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagnostic> {
+pub fn resolve_names(
+    mut loaded: LoadedProgram,
+    prelude_ids: PreludeIds,
+    host_ids: HostIds,
+) -> Result<(h::Program, Context), Diagnostic> {
     let prelude = loaded.module(loaded.prelude).public.clone();
     let mut modules = Vec::with_capacity(loaded.modules.len());
     let mut sites = h::Sites::default();
@@ -126,16 +70,17 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
         &mut loaded.symbols,
     )
     .map_err(|error| told(&loaded, error))?;
-    crate::builders::desugar(&mut modules, &mut sites);
-    Ok(ResolvedProgram {
+    let context = Context {
+        sources: loaded.sources,
+        symbols: loaded.symbols,
         sites,
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         package: loaded.package,
-        host: loaded.host,
-        sources: loaded.sources,
-        symbols: loaded.symbols,
-        program: h::Program { modules },
-    })
+        host_module: loaded.host,
+        prelude: prelude_ids,
+        host: host_ids,
+    };
+    Ok((h::Program { modules }, context))
 }
 
 /// The definitions written `name = value`, which take no parameters: a
@@ -3094,32 +3039,14 @@ mod tests {
     #[test]
     fn resolves_prelude_types_constructors_and_static_methods() {
         let fixture = Fixture::new();
-        fixture.write(
-            "nat.fn",
-            "export {Nat.*}\nNat : [Zero, Succ(Nat)].(of_nat : Nat -> Nat\nof_nat(n) -> n)\n",
-        );
-        fixture.write(
-            "int.fn",
-            "export {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
-        );
-        fixture.write("u8.fn", "export {U8.*}\nU8 : Nat\n");
-        fixture.write(
-            "list.fn",
-            "export {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
-        );
-        fixture.write("str.fn", "export {Str}\nStr : List(U8)\n");
-        let standard = fixture.write(
-            "standard.fn",
-            "package {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexport {Nat.*, Int.*, U8.*, List.*, Str}\n",
-        );
         let entry = fixture.write(
             "main.fn",
             "number : Int\nnumber = Int.of_nat(42)\ntext : Str\ntext = \"é\"\n",
         );
-        let host = fixture.write("host.fn", "export {Host}\nHost : {argc: Nat}\n");
-        let loaded = modules::load_program(&entry, &standard, &host).unwrap();
-        let resolved = resolve_names(loaded).unwrap();
-        let entry = &resolved.program.modules.last().unwrap().items;
+        let loaded =
+            modules::load_program(&entry, crate::standard_path(), &crate::test_host()).unwrap();
+        let (program, _) = crate::resolve(loaded).unwrap();
+        let entry = &program.modules.last().unwrap().items;
         let h::Item::Clause(number) = &entry[1] else {
             panic!("number clause")
         };
@@ -3140,11 +3067,10 @@ mod tests {
     #[test]
     fn rejects_an_unresolved_name_at_its_span() {
         let fixture = Fixture::new();
-        let prelude = fixture.write("standard.fn", "package {}\nexport {}\n");
         let entry = fixture.write("main.fn", "f = missing\n");
-        let host = fixture.write("host.fn", "export {Host}\nHost : {}\n");
-        let loaded = modules::load_program(&entry, &prelude, &host).unwrap();
-        let failure = resolve_names(loaded).unwrap_err();
+        let loaded =
+            modules::load_program(&entry, crate::standard_path(), &crate::test_host()).unwrap();
+        let failure = crate::resolve(loaded).unwrap_err();
         let at = failure.location().expect("a place in the source");
         assert_eq!((at.line, at.column, at.width), (1, 5, 7));
     }

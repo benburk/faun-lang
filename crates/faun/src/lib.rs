@@ -8,25 +8,36 @@
 //! a package whose entry asks its `expect`s instead. Any [`Target`] will do;
 //! which targets exist is the command line's to say.
 //!
-//! [`lower_to_barb`] runs the frontend passes in order. Parsing retains compact
-//! source spans. Module loading and qualification then produce symbol-based
-//! HIR without merging raw ASTs. Declaration normalization groups each function's
-//! signature and clauses and lifts methods out of data declarations. Checking
-//! performs Hindley–Milner inference, receiver-directed method resolution and literal
-//! elaboration, producing typed HIR with explicit calls, projections and
-//! widenings instead of syntax accompanied by inference tables.
-//! Monomorphization produces concrete functions with explicit function values.
-//! Second-class checking rejects stored or returned functions; callback lowering
-//! then emits first-order IR directly, making a definition for each set of
-//! callbacks. Resource checking precedes pattern compilation, which turns clauses
-//! into decision trees and bindings into ordered unpacks. Barb emission reads
-//! those decisions. [`compile_barb_to_image`] hands Barb to `faun_core` for the
-//! machine tier and to the target for its image.
+//! The frontend is a line of stages, each taking the program as one tree and
+//! answering the next, beside a [`Context`] holding what the trees point
+//! into: source text, symbols, and the standard and host identities.
+//! [`lower_to_barb`] and [`lower_tests_to_barb`] write the line out, and
+//! differ only in their entry:
+//!
+//! 1. Loading reads each module's syntax, with compact source spans.
+//! 2. [`resolve()`] names every global and local, as HIR.
+//! 3. [`checked()`] groups each function's signature and clauses, writes the
+//!    members a type asks for, infers types (Hindley–Milner, with
+//!    receiver-directed methods and literal elaboration) and checks that
+//!    patterns cover what they take apart, as typed HIR.
+//! 4. Specialization makes each definition concrete at the types it is used
+//!    at; functions are then checked to be second class.
+//! 5. Callback lowering makes a definition for each set of callbacks, so no
+//!    value is a function; resources are then checked to be used up once.
+//! 6. Pattern compilation turns clauses into decisions and bindings into
+//!    ordered unpacks, which Barb emission reads.
+//!
+//! [`compile_barb_to_image`] hands Barb to `faun_core` for the machine tier
+//! and to the target for its image.
 
 use std::path::{Path, PathBuf};
 
 use faun_core::barb;
 use faun_core::targets::Target;
+
+use context::Context;
+use host::Main;
+use modules::LoadedProgram;
 
 pub mod ast;
 mod barb_lower;
@@ -34,6 +45,7 @@ pub mod blessed;
 mod builders;
 mod callbacks;
 pub mod check;
+pub mod context;
 pub mod declarations;
 mod derive;
 pub mod diagnostic;
@@ -85,14 +97,11 @@ pub fn standard_path() -> &'static Path {
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
 pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
-    let loaded = modules::load_program(source, standard_path(), &host_path(target)?)?;
-    let (prelude, host) = identities(&loaded)?;
-    let main = host::Main::find_in(&loaded)?;
-    let mut resolved = resolve::resolve_names(loaded)?;
-    if let Some(main) = &main {
-        host::sign_main(&mut resolved, &host, main);
-    }
-    lower_resolved(resolved, prelude, &host, main.as_ref(), target)
+    let loaded = load(source, target)?;
+    let main = Main::find_in(&loaded)?;
+    let (program, cx) = resolve(loaded)?;
+    let program = host::sign_main(program, &cx, main.as_ref());
+    lower(program, cx, main.as_ref(), target)
 }
 
 /// A package's expectations, built to be run.
@@ -115,48 +124,69 @@ pub struct Tests {
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
 pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, Diagnostic> {
-    let mut loaded = modules::load_program(source, standard_path(), &host_path(target)?)?;
-    let (prelude, host) = identities(&loaded)?;
-    let application = host::Main::find_in(&loaded)?;
+    let mut loaded = load(source, target)?;
+    let application = Main::find_in(&loaded)?;
     let main = expectations::main(&mut loaded);
-    let mut resolved = resolve::resolve_names(loaded)?;
-    if let Some(application) = &application {
-        host::sign_main(&mut resolved, &host, application);
-    }
-    let expectations = expectations::enter(&mut resolved, &host, &main);
-    let barb = lower_resolved(resolved, prelude, &host, Some(&main), target)?;
+    let (program, mut cx) = resolve(loaded)?;
+    let program = host::sign_main(program, &cx, application.as_ref());
+    let (program, expectations) = expectations::enter(program, &mut cx, &main);
+    let barb = lower(program, cx, Some(&main), target)?;
     Ok(Tests { barb, expectations })
 }
 
-fn identities(
-    loaded: &modules::LoadedProgram,
-) -> Result<(blessed::PreludeIds, host::HostIds), Diagnostic> {
-    let prelude = blessed::PreludeIds::find_in(loaded)?;
-    Ok((prelude, host::HostIds::find_in(loaded)?))
+/// Read the package at `source`, beside the standard package and `target`'s
+/// host.
+fn load(source: &Path, target: &dyn Target) -> Result<LoadedProgram, Diagnostic> {
+    modules::load_program(source, standard_path(), &host_path(target)?)
 }
 
-/// Check a resolved package and lower it to Barb, entering by `main`.
-fn lower_resolved(
-    resolved: resolve::ResolvedProgram,
-    prelude: blessed::PreludeIds,
-    host: &host::HostIds,
-    main: Option<&host::Main>,
+/// Name every global and local `loaded` writes, and write its record
+/// builders out: the program as HIR, and the context every later stage
+/// reads.
+///
+/// # Errors
+/// Reports a standard package or host missing what literals and the entry
+/// are made of, and a name nothing declares or two declarations share.
+pub fn resolve(loaded: LoadedProgram) -> Result<(hir::Program, Context), Diagnostic> {
+    let prelude = blessed::PreludeIds::find_in(&loaded)?;
+    let host = host::HostIds::find_in(&loaded)?;
+    let (program, mut cx) = resolve::resolve_names(loaded, prelude, host)?;
+    let program = builders::desugar(program, &mut cx);
+    Ok((program, cx))
+}
+
+/// Check `program` and lower it to Barb, entering by `main`.
+fn lower(
+    program: hir::Program,
+    mut cx: Context,
+    main: Option<&Main>,
     target: &dyn Target,
 ) -> Result<barb::Program, Diagnostic> {
-    let program = declarations::normalize(resolved);
-    let checked = check::type_check(program, prelude)?;
+    let typed = checked(program, &mut cx)?;
     if let Some(main) = main {
-        host::check_application_abi(&checked, host, main)?;
+        host::check_application_abi(&typed, &cx, main)?;
     }
-    let located = |error| checked.resolved.told(error);
-    let program = specialize::monomorphize_package(&checked, host, main).map_err(located)?;
-    second_class::check(&program, &checked.resolved.package).map_err(located)?;
-    let program = callbacks::lower(program).map_err(located)?;
     let routines = target.routines();
-    linearity::check(&program, &routines, &checked.resolved, &checked.prelude)?;
-    let program = pattern_compile::compile(program, &checked.prelude, &checked.resolved.symbols)
-        .map_err(located)?;
-    barb_lower::lower_package_to_barb(&checked, program, &routines)
+    let program = specialize::monomorphize_package(&typed, &cx, main)?;
+    second_class::check(&program, &cx)?;
+    let program = callbacks::lower(program, &cx)?;
+    linearity::check(&program, &typed, &cx, &routines)?;
+    let program = pattern_compile::compile(program, &cx)?;
+    barb_lower::lower_package_to_barb(program, &cx, &routines)
+}
+
+/// `program` with each function's signature and clauses grouped, the
+/// members it asks for written, its types inferred, and its patterns
+/// known to cover what they take apart: typed HIR.
+///
+/// # Errors
+/// Reports what checking refuses, and clauses that leave a case unmatched.
+pub fn checked(program: hir::Program, cx: &mut Context) -> Result<typed::Program, Diagnostic> {
+    let program = declarations::normalize(program);
+    let program = derive::requested(program, cx)?;
+    let typed = check::type_check(program, cx)?;
+    exhaustive::check(&typed, cx)?;
+    Ok(typed)
 }
 
 /// Compile the Faun application at `source` to `target`'s image.
@@ -191,6 +221,24 @@ pub fn compile_barb_to_image(
 #[cfg(test)]
 fn test_host() -> PathBuf {
     standard_path().with_file_name("hosts/x86_64-linux.fn")
+}
+
+/// A package checked as [`lower_to_barb`] checks one, for a test to read a
+/// later stage of.
+#[cfg(test)]
+pub(crate) struct Checked {
+    pub(crate) program: typed::Program,
+    pub(crate) cx: Context,
+}
+
+/// The package at `entry`, beside the standard package and the x86-64 Linux
+/// host, checked.
+#[cfg(test)]
+pub(crate) fn checked_for_test(entry: &Path) -> Checked {
+    let loaded = modules::load_program(entry, standard_path(), &test_host()).unwrap();
+    let (program, mut cx) = resolve(loaded).unwrap();
+    let program = checked(program, &mut cx).unwrap();
+    Checked { program, cx }
 }
 
 /// The host module mounted at `std.host` for `target`.

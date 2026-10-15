@@ -21,8 +21,9 @@ use num_bigint::BigUint;
 
 use crate::blessed::NumeralType;
 use crate::blessed::{LiteralExpr, PreludeIds};
-use crate::check::{CheckedProgram, InferredBound, InferredScheme, InferredType, TypeVariable};
-use crate::diagnostic::{Advised, Refusal};
+use crate::check::{InferredBound, InferredScheme, InferredType, TypeVariable};
+use crate::context::Context;
+use crate::diagnostic::{Advised, Diagnostic, Refusal};
 use crate::hir as h;
 use crate::typed as t;
 use crate::{ModuleId, Symbol};
@@ -153,6 +154,9 @@ pub(crate) struct Program {
     pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
     pub(crate) data: HashMap<Symbol, crate::declarations::Data>,
+    /// Where each definition is written, which a refusal naming one by
+    /// name points at.
+    pub(crate) written: HashMap<Symbol, (ModuleId, crate::ast::Span)>,
 }
 
 #[derive(Clone, Debug)]
@@ -485,10 +489,11 @@ pub(crate) struct Arm {
 /// Specialize what one parameterless `entry` reaches, and nothing else.
 #[cfg(test)]
 pub(crate) fn monomorphize_from_entry(
-    checked: &CheckedProgram,
+    program: &t::Program,
+    cx: &Context,
     entry: Symbol,
 ) -> Result<Program, Refusal> {
-    let specializer = Specializer::new(checked);
+    let specializer = Specializer::new(program, cx);
     let entry = specializer.entry_key(entry, None)?;
     specializer.run(Some(entry), Vec::new())
 }
@@ -504,24 +509,26 @@ pub(crate) fn monomorphize_from_entry(
 /// all of them. Constraints would end that, as a bound's implementation can
 /// decide whether a definition stops.
 pub(crate) fn monomorphize_package(
-    checked: &CheckedProgram,
-    host: &crate::host::HostIds,
+    program: &t::Program,
+    cx: &Context,
     main: Option<&crate::host::Main>,
-) -> Result<Program, Refusal> {
-    let specializer = Specializer::new(checked);
-    let entry = main
-        .map(|main| specializer.entry_key(main.symbol, Some(host.host)))
-        .transpose()?;
-    specializer.run(entry, package_roots(checked)?)
+) -> Result<Program, Diagnostic> {
+    let specialized = || {
+        let specializer = Specializer::new(program, cx);
+        let entry = main
+            .map(|main| specializer.entry_key(main.symbol, Some(cx.host.host)))
+            .transpose()?;
+        specializer.run(entry, package_roots(program, cx)?)
+    };
+    specialized().map_err(|refusal| cx.told(refusal))
 }
 
 /// The package's definitions that stand on their own, in the order written,
 /// each generic one at the empty type.
-fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Refusal> {
-    let resolved = &checked.resolved;
+fn package_roots(program: &t::Program, cx: &Context) -> Result<Vec<FunctionKey>, Refusal> {
     let mut roots = Vec::new();
-    for function in &resolved.program.functions {
-        if !resolved.package.contains(&function.module)
+    for function in &program.functions {
+        if !cx.package.contains(&function.module)
             || matches!(function.definition, t::Definition::External(_))
         {
             continue;
@@ -605,8 +612,7 @@ struct Specializer<'a> {
 }
 
 impl<'a> Specializer<'a> {
-    fn new(checked: &'a CheckedProgram) -> Self {
-        let program = &checked.resolved.program;
+    fn new(program: &'a t::Program, cx: &'a Context) -> Self {
         let constructors = program
             .data
             .values()
@@ -625,8 +631,8 @@ impl<'a> Specializer<'a> {
             })
             .collect();
         Self {
-            symbols: &checked.resolved.symbols,
-            prelude: &checked.prelude,
+            symbols: &cx.symbols,
+            prelude: &cx.prelude,
             members: &program.members,
             definitions: program
                 .functions
@@ -703,6 +709,11 @@ impl<'a> Specializer<'a> {
                 .map(|function| function.expect("every requested function was specialized"))
                 .collect(),
             data: self.data,
+            written: self
+                .definitions
+                .values()
+                .map(|function| (function.name, (function.module, function.span)))
+                .collect(),
         };
         Ok(program)
     }

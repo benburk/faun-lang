@@ -26,7 +26,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::Symbol;
-use crate::diagnostic::{Advised, Refusal};
+use crate::context::Context;
+use crate::diagnostic::{Advised, Diagnostic, Refusal};
 use crate::first_order as d;
 use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
@@ -40,7 +41,11 @@ use crate::specialize::{
 /// Return first-order IR directly. The input must have passed
 /// [`crate::second_class::check`]; source sites identify lambdas even when
 /// generated lambdas share a diagnostic span. Failure exposes no partial output.
-pub(crate) fn lower(program: Program) -> Result<d::Program, Refusal> {
+pub(crate) fn lower(program: Program, cx: &Context) -> Result<d::Program, Diagnostic> {
+    first_order(program).map_err(|refusal| cx.told(refusal))
+}
+
+fn first_order(program: Program) -> Result<d::Program, Refusal> {
     let mut pass = Callbacks::new(&program);
     let mut functions = Vec::with_capacity(program.functions.len());
     for function in &program.functions {
@@ -57,6 +62,7 @@ pub(crate) fn lower(program: Program) -> Result<d::Program, Refusal> {
         entry: program.entry,
         functions,
         data: program.data,
+        written: program.written,
     })
 }
 
@@ -765,7 +771,7 @@ mod tests {
         let defined = key(symbols.intern("defined"));
         // No clause is needed for an uninhabited parameter. This is a body,
         // not a declaration that asks a provider to supply one.
-        let program = lower(Program {
+        let program = first_order(Program {
             entry: None,
             functions: vec![
                 Function {
@@ -778,6 +784,7 @@ mod tests {
                 },
             ],
             data: HashMap::new(),
+            written: HashMap::new(),
         })
         .unwrap();
         assert!(program.entry.is_none());

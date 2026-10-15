@@ -44,9 +44,9 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::blessed::{self, LiteralExpr, PreludeIds};
+use super::context::Context;
 use super::diagnostic::{Advised, Diagnostic, Refusal, counted, given};
 use super::hir as h;
-use super::resolve::ResolvedProgram;
 use super::{ModuleId, Symbol, Symbols};
 use crate::declarations as n;
 
@@ -94,14 +94,6 @@ pub struct InferredBound {
     pub bare: bool,
 }
 
-/// Typed HIR and its source owners; inference's temporary tables are gone.
-#[derive(Clone, Debug)]
-pub struct CheckedProgram {
-    pub resolved: ResolvedProgram<crate::typed::Program>,
-    /// The standard identities its literals and patterns were checked against.
-    pub prelude: PreludeIds,
-}
-
 /// Which reading a word some declaration claims took, by its site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reading {
@@ -145,34 +137,38 @@ use unify::{
 };
 
 /// Infer every definition, check declared signatures, resolve methods, and
-/// elaborate literals.
+/// elaborate literals: `program` as typed HIR.
 ///
 /// Type variables in signatures are universally quantified at each use.
 /// Unsigned recursive groups are inferred monomorphically and generalized only
-/// after the group closes. Consume resolved syntax into typed HIR, with each
-/// elaboration decision on its expression. `where` calls remain explicit until
-/// specialization selects their concrete implementations.
+/// after the group closes. Each elaboration decision is written on its
+/// expression. `where` calls remain explicit until specialization selects
+/// their concrete implementations.
 ///
 /// # Errors
 ///
-/// Reports type, arity, ambiguous-method, unsupported-constraint, and literal
-/// protocol failures, and clauses that leave a case unmatched.
+/// Reports declarations that cannot stand, misplaced effects, and type,
+/// arity, ambiguous-method, unsupported-constraint and literal protocol
+/// failures.
 pub fn type_check(
-    mut resolved: ResolvedProgram<n::Program>,
-    prelude: PreludeIds,
-) -> Result<CheckedProgram, Diagnostic> {
-    crate::derive::requested(&mut resolved, &prelude)?;
-    let facts = declared::check(&resolved.program, resolved.host, &resolved.symbols)
-        .and_then(|()| effects::check(&resolved.program, &resolved.symbols))
-        .and_then(|()| {
-            Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
-        })
-        .map_err(|refusal| resolved.told(refusal))?;
-    let resolved =
-        resolved.map(|program, sites| elaborate::finish(program, facts, &prelude, sites));
-    crate::exhaustive::exhaustive(&resolved.program, &resolved.symbols, &prelude)
-        .map_err(|refusal| resolved.told(refusal))?;
-    Ok(CheckedProgram { resolved, prelude })
+    program: n::Program,
+    cx: &mut Context,
+) -> Result<crate::typed::Program, Diagnostic> {
+    let facts = infer(&program, cx).map_err(|refusal| cx.told(refusal))?;
+    Ok(elaborate::finish(
+        program,
+        facts,
+        &cx.prelude,
+        &mut cx.sites,
+    ))
+}
+
+/// What inference finds of `program`, once its declarations and effects are
+/// known to stand.
+fn infer(program: &n::Program, cx: &Context) -> Result<Facts, Refusal> {
+    declared::check(program, cx.host_module, &cx.symbols)?;
+    effects::check(program, &cx.symbols)?;
+    Checker::new(program, &cx.symbols, &cx.prelude)?.check(program)
 }
 
 /// A method a type's block defines without a signature.
@@ -2061,7 +2057,7 @@ pub(crate) fn failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{blessed::PreludeIds, modules, resolve};
+    use crate::modules;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2085,7 +2081,7 @@ mod tests {
             path
         }
 
-        fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
+        fn load(&self, entry_source: &str) -> (h::Program, Context) {
             self.write("bool.fn", "export {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False\nor : (Bool, Bool) -> Bool\nor(False, False) -> False\nor(_, _) -> True)\n");
             self.write("nat.fn", "export {Nat.*}\nNat : [Zero, Succ(Nat)].(add : (Nat, Nat) -> Nat\nadd(0, y) -> y\nadd(Succ(n), y) -> Succ(n.add(y)))\n");
             self.write(
@@ -2114,11 +2110,12 @@ mod tests {
                 "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexport {Bool.*, Order.*, Nat.*, Int.*, U8, List.*, Result.*, Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
-            let host = self.write("host.fn", "export {Host}\nHost : {argc: Nat}\n");
+            let host = self.write(
+                "host.fn",
+                "export {Host}\nHost : {argc: Nat}.(\n  exit! : (Host, Nat) -> []\n)\n",
+            );
             let loaded = modules::load_program(&entry, &standard, &host).unwrap();
-            let prelude = PreludeIds::find_in(&loaded).unwrap();
-            let resolved = resolve::resolve_names(loaded).unwrap();
-            (prelude, resolved)
+            crate::resolve(loaded).unwrap()
         }
     }
 
@@ -2128,9 +2125,9 @@ mod tests {
         }
     }
 
-    fn expressions(checked: &CheckedProgram) -> Vec<&crate::typed::Expr> {
+    fn expressions(checked: &crate::typed::Program) -> Vec<&crate::typed::Expr> {
         let mut expressions = Vec::new();
-        for function in &checked.resolved.program.functions {
+        for function in &checked.functions {
             if let crate::typed::Definition::Body(clauses) = &function.definition {
                 for expression in clauses.iter().flat_map(crate::typed::Clause::exprs) {
                     expression.for_each_within(&mut |inner| expressions.push(inner));
@@ -2140,7 +2137,7 @@ mod tests {
         expressions
     }
 
-    fn methods(checked: &CheckedProgram) -> Vec<Symbol> {
+    fn methods(checked: &crate::typed::Program) -> Vec<Symbol> {
         expressions(checked)
             .into_iter()
             .filter_map(|expr| match expr.kind {
@@ -2155,18 +2152,17 @@ mod tests {
     #[test]
     fn declarations_group_clauses_and_lift_unsigned_methods() {
         let fixture = Fixture::new();
-        let (_, resolved) = fixture.load(
+        let (program, cx) = fixture.load(
             "pick : Nat -> Nat\npick(0) -> 1\npick(_) -> 2\n\
              external : Nat -> Nat\n\
              Switch : [Off, On].(flip(Off) -> On\nflip(On) -> Off)\n",
         );
-        let resolved = n::normalize(resolved);
+        let declared = n::normalize(program);
         let named = |suffix| {
-            resolved
-                .program
+            declared
                 .functions
                 .iter()
-                .find(|function| resolved.symbols.text(function.name).ends_with(suffix))
+                .find(|function| cx.symbols.text(function.name).ends_with(suffix))
                 .unwrap()
         };
         let pick = named("$$pick");
@@ -2183,20 +2179,18 @@ mod tests {
         let method = named("Switch.flip");
         assert!(method.signature.is_none());
         assert_eq!(method.clauses.len(), 2);
-        assert!(resolved.program.data.contains_key(&method.owner.unwrap()));
+        assert!(declared.data.contains_key(&method.owner.unwrap()));
     }
 
     #[test]
     fn context_selects_nat_int_and_str_elaboration() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
+        let (program, mut cx) = fixture.load(
             "natural : Nat\nnatural = 42\ninteger : Int\ninteger = -42\ntext : Str\ntext = \"é\"\n",
         );
-        let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
-        let entry = *checked.resolved.package.last().unwrap();
+        let checked = crate::checked(program, &mut cx).unwrap();
+        let entry = *cx.package.last().unwrap();
         let expressions: Vec<_> = checked
-            .resolved
-            .program
             .functions
             .iter()
             .filter(|function| function.module == entry)
@@ -2207,7 +2201,7 @@ mod tests {
             .map(|clause| &clause.body.result)
             .collect();
         assert_eq!(expressions.len(), 3);
-        for ty in [prelude.str_, prelude.nat, prelude.int] {
+        for ty in [cx.prelude.str_, cx.prelude.nat, cx.prelude.int] {
             assert!(
                 expressions
                     .iter()
@@ -2220,14 +2214,13 @@ mod tests {
     #[test]
     fn elaboration_preserves_unwrapped_expression_sites() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
+        let (program, mut cx) = fixture.load(
             "Label : [Label].(to_str : Label -> Str\nto_str(_) -> \"label\")\n\
              text : Label -> Str\ntext(value) -> \"${value}\"\n\
              rest : List(Nat) -> List(Nat)\nrest(values) -> [*values]\n",
         );
-        let resolved = n::normalize(resolved);
-        let expected: Vec<_> = resolved
-            .program
+        let declared = n::normalize(program);
+        let expected: Vec<_> = declared
             .functions
             .iter()
             .filter_map(|function| {
@@ -2244,11 +2237,9 @@ mod tests {
             })
             .collect();
         assert_eq!(expected.len(), 2);
-        let checked = type_check(resolved, prelude).unwrap();
+        let checked = type_check(declared, &mut cx).unwrap();
         for (name, site, span) in expected {
             let function = checked
-                .resolved
-                .program
                 .functions
                 .iter()
                 .find(|function| function.name == name)
@@ -2266,13 +2257,13 @@ mod tests {
     fn typed_hir_carries_projections_widenings_and_generic_operations() {
         use crate::typed::{ExprKind, Target};
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
+        let (program, mut cx) = fixture.load(
             "field : {value: Nat} -> Nat\nfield(record) -> record.value\n\
              wide : [A] -> [A, B]\nwide(x) -> x\n\
              Flip : [Off, On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\n\
              flip(x) -> x.not()\n",
         );
-        let checked = type_check(n::normalize(resolved), prelude).unwrap();
+        let checked = crate::checked(program, &mut cx).unwrap();
         let expressions = expressions(&checked);
         assert!(
             expressions
@@ -2294,19 +2285,17 @@ mod tests {
     #[test]
     fn never_is_an_ordinary_constructor_name() {
         let fixture = Fixture::new();
-        let (prelude, resolved) =
-            fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue = Never\n");
-        type_check(n::normalize(resolved), prelude).unwrap();
+        let (program, mut cx) = fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue = Never\n");
+        crate::checked(program, &mut cx).unwrap();
     }
 
     #[test]
     fn polymorphic_functions_are_instantiated_at_each_call() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
+        let (program, mut cx) = fixture.load(
             "id : a -> a\nid(x) -> x\nnatural : Nat\nnatural = id(1)\ninteger : Int\ninteger = id(-1)\n",
         );
-        let id = resolved
-            .program
+        let id = program
             .modules
             .last()
             .unwrap()
@@ -2320,10 +2309,8 @@ mod tests {
                 }
             })
             .unwrap();
-        let checked = type_check(n::normalize(resolved), prelude).unwrap();
+        let checked = crate::checked(program, &mut cx).unwrap();
         let scheme = &checked
-            .resolved
-            .program
             .functions
             .iter()
             .find(|function| function.name == id)
@@ -2339,17 +2326,17 @@ mod tests {
     #[test]
     fn a_polymorphic_signature_cannot_be_implemented_by_one_concrete_type() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load("constant : a -> a\nconstant(_) -> 1\n");
-        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
+        let (program, mut cx) = fixture.load("constant : a -> a\nconstant(_) -> 1\n");
+        let failure = crate::checked(program, &mut cx).unwrap_err();
         assert!(failure.message.contains("numeral") || failure.message.contains("mismatch"));
     }
 
     #[test]
     fn unsigned_definitions_are_generalized_between_components() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture
+        let (program, mut cx) = fixture
             .load("id(x) -> x\nnatural : Nat\nnatural = id(1)\ninteger : Int\ninteger = id(-1)\n");
-        type_check(n::normalize(resolved), prelude).unwrap();
+        crate::checked(program, &mut cx).unwrap();
     }
 
     /// A function is passed into a call; bound to a name, it would be a
@@ -2357,9 +2344,9 @@ mod tests {
     #[test]
     fn a_function_is_not_bound() {
         let fixture = Fixture::new();
-        let (prelude, resolved) =
+        let (program, mut cx) =
             fixture.load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal = (\n  f = id\n  f(-1)\n)\n");
-        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
+        let failure = crate::checked(program, &mut cx).unwrap_err();
         assert!(
             failure.message.contains("passed straight into a call"),
             "{}",
@@ -2370,18 +2357,16 @@ mod tests {
     #[test]
     fn receiver_type_selects_a_method() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
+        let (program, mut cx) = fixture.load(
             "increment : Nat -> Nat\nincrement(n) -> n.add(1)\ntruth : Bool -> Bool\ntruth(b) -> b.not()\n",
         );
-        let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
+        let checked = crate::checked(program, &mut cx).unwrap();
         let targets = methods(&checked);
-        assert!(targets.contains(&prelude.bool_not));
+        assert!(targets.contains(&cx.prelude.bool_not));
         assert!(
-            targets.iter().any(|target| checked
-                .resolved
-                .symbols
-                .text(*target)
-                .ends_with("Nat.add"))
+            targets
+                .iter()
+                .any(|target| cx.symbols.text(*target).ends_with("Nat.add"))
         );
     }
 
@@ -2391,20 +2376,18 @@ mod tests {
     #[test]
     fn a_method_several_types_have_is_a_bound() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
+        let (program, mut cx) = fixture.load(
             "Flip : [Off, On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\nflip(x) -> x.not()\n",
         );
-        let checked = type_check(n::normalize(resolved), prelude).unwrap();
-        let resolved = &checked.resolved;
-        let scheme = &resolved
-            .program
+        let checked = crate::checked(program, &mut cx).unwrap();
+        let scheme = &checked
             .functions
             .iter()
-            .find(|function| resolved.symbols.text(function.name).ends_with("$$flip"))
+            .find(|function| cx.symbols.text(function.name).ends_with("$$flip"))
             .unwrap()
             .scheme;
         assert_eq!(scheme.bounds.len(), 1);
-        assert_eq!(resolved.symbols.text(scheme.bounds[0].member), "not");
+        assert_eq!(cx.symbols.text(scheme.bounds[0].member), "not");
     }
 
     #[test]
@@ -2414,9 +2397,9 @@ mod tests {
             "hidden.fn",
             "export {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper = 0\n",
         );
-        let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
-        let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
-        assert!(methods(&checked).contains(&prelude.bool_not));
+        let (program, mut cx) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
+        let checked = crate::checked(program, &mut cx).unwrap();
+        assert!(methods(&checked).contains(&cx.prelude.bool_not));
     }
 
     #[test]
@@ -2424,9 +2407,8 @@ mod tests {
         let root = crate::standard_path();
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/utilities.fn");
         let loaded = modules::load_program(&entry, root, &crate::test_host()).unwrap();
-        let prelude = PreludeIds::find_in(&loaded).unwrap();
-        let resolved = resolve::resolve_names(loaded).unwrap();
-        let checked = type_check(n::normalize(resolved), prelude).unwrap();
+        let (program, mut cx) = crate::resolve(loaded).unwrap();
+        let checked = crate::checked(program, &mut cx).unwrap();
         assert!(!methods(&checked).is_empty());
     }
 
@@ -2444,12 +2426,11 @@ mod tests {
         );
         let root = crate::standard_path();
         let loaded = modules::load_program(&entry, root, &crate::test_host()).unwrap();
-        let prelude = PreludeIds::find_in(&loaded).unwrap();
-        let resolved = resolve::resolve_names(loaded).unwrap();
-        let checked = type_check(n::normalize(resolved), prelude).unwrap();
+        let (program, mut cx) = crate::resolve(loaded).unwrap();
+        let checked = crate::checked(program, &mut cx).unwrap();
         let methods: HashSet<_> = methods(&checked)
             .into_iter()
-            .map(|target| checked.resolved.symbols.text(target))
+            .map(|target| cx.symbols.text(target))
             .collect();
         for ty in ["Nat", "Int", "U8"] {
             for operation in ["add", "sub", "mul", "div", "mod"] {
@@ -2466,19 +2447,19 @@ mod tests {
     #[test]
     fn pure_definitions_and_nested_expressions_cannot_hide_effects() {
         let fixture = Fixture::new();
-        let (prelude, resolved) =
+        let (program, mut cx) =
             fixture.load("stop! : Nat -> Nat\nstop!(n) -> n\nbad : Nat\nbad = stop!(0)\n");
-        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
+        let failure = crate::checked(program, &mut cx).unwrap_err();
         assert!(
             failure
                 .message
                 .contains("pure definitions cannot call effect")
         );
 
-        let (prelude, resolved) = fixture.load(
+        let (program, mut cx) = fixture.load(
             "stop! : Nat -> Nat\nstop!(n) -> n\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat -> Nat\nbad!(n) -> id(stop!(n))\n",
         );
-        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
+        let failure = crate::checked(program, &mut cx).unwrap_err();
         assert!(failure.message.contains("must stand on its own"));
     }
 
@@ -2487,8 +2468,8 @@ mod tests {
     #[test]
     fn a_constructor_where_another_type_is_wanted_says_both() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load("bad : Nat\nbad = Zero.add(True)\n");
-        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
+        let (program, mut cx) = fixture.load("bad : Nat\nbad = Zero.add(True)\n");
+        let failure = crate::checked(program, &mut cx).unwrap_err();
         assert_eq!(failure.message, "mismatched types");
         assert_eq!(failure.labels[0].text, "expected `Nat`, found `Bool`");
     }
@@ -2496,8 +2477,8 @@ mod tests {
     #[test]
     fn a_negative_nat_is_rejected() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load("bad : Nat\nbad = -1\n");
-        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
+        let (program, mut cx) = fixture.load("bad : Nat\nbad = -1\n");
+        let failure = crate::checked(program, &mut cx).unwrap_err();
         assert!(failure.message.contains("negative numeral"));
     }
 }
