@@ -1512,6 +1512,7 @@ fn resolve_clause(
         conditional: 0,
         loops: Vec::new(),
         rebinding: Vec::new(),
+        ahead: 0,
         loops_hidden: false,
     };
     let patterns = clause
@@ -1632,6 +1633,9 @@ struct ClauseResolver<'a> {
     /// While a loop's body is read ahead, for each loop being read so, the
     /// names it binds again.
     rebinding: Vec<HashSet<Symbol>>,
+    /// How many loops around here are having their bodies read ahead, a
+    /// reading thrown away once it says what they bind again.
+    ahead: u32,
     /// Whether a lambda's body is being read inside a loop it hides.
     loops_hidden: bool,
 }
@@ -1818,7 +1822,16 @@ impl ClauseResolver<'_> {
             s::LoopHead::For(_, list) => Some(self.expr(list)?),
             s::LoopHead::While(_) => None,
         };
-        let carried = self.rebound_in(head, body, &before)?;
+        // Read ahead, a loop needs no reading ahead of its own: what the
+        // outer reading keeps is which names are bound again, and binding
+        // one tells every loop being read ahead. Reading each loop inside
+        // ahead once keeps nested loops from reading their bodies twice
+        // over at each level.
+        let carried = if self.ahead > 0 {
+            Vec::new()
+        } else {
+            self.rebound_in(head, body, &before)?
+        };
         let mut loop_carried = Vec::with_capacity(carried.len());
         for name in &carried {
             let initial = self.sites.expr(span, h::ExprKind::Local(before[name]));
@@ -1880,6 +1893,7 @@ impl ClauseResolver<'_> {
     ) -> Result<Vec<Symbol>, ResolveError> {
         let hidden = self.hidden.clone();
         let merged = self.merged.len();
+        self.ahead += 1;
         self.rebinding.push(HashSet::new());
         self.loops.push(Vec::new());
         let list = match head {
@@ -1890,6 +1904,7 @@ impl ClauseResolver<'_> {
             s::LoopHead::While(_) => None,
         };
         let read = self.round(head, list, body);
+        self.ahead -= 1;
         self.loops.pop();
         let names = self.rebinding.pop().unwrap_or_default();
         self.locals.clone_from(before);

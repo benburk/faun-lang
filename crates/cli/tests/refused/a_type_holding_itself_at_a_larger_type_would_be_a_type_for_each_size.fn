@@ -1,0 +1,9 @@
+import std.host {Host}
+
+Nest(a) : [Flat(a), Deeper(Nest((a, a)))]
+
+main! : Host -> []
+main!(host) -> (
+  nested = Deeper(Flat((1, 2)))
+  host.exit!(0)
+)

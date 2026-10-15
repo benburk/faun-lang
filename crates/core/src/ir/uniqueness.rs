@@ -92,6 +92,14 @@ enum Def {
     Carried(RegionId, usize),
 }
 
+/// The loop parameters taken to be buffers nothing else holds, by loop
+/// and place.
+type Carried = HashSet<(RegionId, usize)>;
+
+/// What [`Walk::fresh`] found of each value it was asked about, for one
+/// [`Carried`].
+type Fresh = HashMap<ValueId, bool>;
+
 /// One function's body, read once: each instruction, what it answers and
 /// where it was read; where each value comes from and each reading of it;
 /// and where each `if` and loop is left.
@@ -304,8 +312,20 @@ impl<'a> Walk<'a> {
     }
 
     /// Whether `value` is a buffer nothing else holds where it is made,
-    /// where `carried` says which loop parameters are taken to be.
-    fn fresh(&self, value: ValueId, carried: &HashSet<(RegionId, usize)>) -> bool {
+    /// where `carried` says which loop parameters are taken to be. What is
+    /// found is kept in `known`, which holds for one `carried`: a value
+    /// several exits hand on is asked about once, not once for each way
+    /// through the branches before it.
+    fn fresh(&self, value: ValueId, carried: &Carried, known: &mut Fresh) -> bool {
+        if let Some(&found) = known.get(&value) {
+            return found;
+        }
+        let found = self.made_fresh(value, carried, known);
+        known.insert(value, found);
+        found
+    }
+
+    fn made_fresh(&self, value: ValueId, carried: &Carried, known: &mut Fresh) -> bool {
         match self.defs.get(&value) {
             Some(&Def::Result(at, 0))
                 if matches!(
@@ -323,7 +343,8 @@ impl<'a> Walk<'a> {
                 };
                 exits.is_some_and(|exits| {
                     exits.iter().all(|(values, site)| {
-                        self.fresh(values[index], carried) && self.moved(values[index], *site)
+                        self.fresh(values[index], carried, known)
+                            && self.moved(values[index], *site)
                     })
                 })
             }
@@ -370,22 +391,24 @@ impl<'a> Walk<'a> {
         // Every carried buffer is taken to be one nothing else holds, and
         // those it cannot be are given up until none is.
         let shapes = self.candidates(ownable);
-        let mut carried: HashSet<(RegionId, usize)> = shapes.keys().copied().collect();
+        let mut carried: Carried = shapes.keys().copied().collect();
         loop {
-            let kept: HashSet<_> = carried
+            let mut known = Fresh::new();
+            let kept: Carried = carried
                 .iter()
                 .copied()
-                .filter(|&(body, index)| self.carries_its_own(body, index, &carried))
+                .filter(|&(body, index)| self.carries_its_own(body, index, &carried, &mut known))
                 .collect();
             if kept == carried {
                 break;
             }
             carried = kept;
         }
+        let mut known = Fresh::new();
         for &(body, index) in &carried {
             let (site, initial) = self.initial(body);
             let entered = initial[index];
-            if !(self.fresh(entered, &carried) && self.moved(entered, site)) {
+            if !(self.fresh(entered, &carried, &mut known) && self.moved(entered, site)) {
                 found
                     .owned
                     .entry(body)
@@ -396,7 +419,10 @@ impl<'a> Walk<'a> {
         for (op, results, site) in &self.ops {
             if let Op::BufferReplace { operands, shape } = *op {
                 let buffer = self.source.values(operands)[0];
-                if plain(shape) && self.fresh(buffer, &carried) && self.moved(buffer, *site) {
+                if plain(shape)
+                    && self.fresh(buffer, &carried, &mut known)
+                    && self.moved(buffer, *site)
+                {
                     found.replaced.insert(results[0]);
                 }
             }
@@ -433,13 +459,14 @@ impl<'a> Walk<'a> {
         &self,
         body: RegionId,
         index: usize,
-        carried: &HashSet<(RegionId, usize)>,
+        carried: &Carried,
+        known: &mut Fresh,
     ) -> bool {
         let param = self.source.values(self.source.region(body).params)[index];
         self.continues.get(&body).is_none_or(|rounds| {
             rounds.iter().all(|(values, site)| {
                 values[index] != param
-                    && self.fresh(values[index], carried)
+                    && self.fresh(values[index], carried, known)
                     && self.moved(values[index], *site)
             })
         })

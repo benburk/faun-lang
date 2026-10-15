@@ -18,7 +18,9 @@
 //! for its position's type to choose between the tag and the constructor.
 //!
 //! Only the host leaves a definition without clauses, for its target to
-//! answer.
+//! answer. A declared type holds itself, through whatever it holds, only
+//! at its own parameters or at types not made of them: one holding itself
+//! at a larger type would be a type of its own at every size.
 //!
 //! `where` bounds are structural. A signed body meets its written bounds at
 //! its rigid variables; a use of a bounded definition owes its bounds, met
@@ -174,6 +176,7 @@ pub fn type_check(
 ) -> Result<CheckedProgram, Diagnostic> {
     crate::derive::requested(&mut resolved, &prelude)?;
     let facts = validate_externals(&resolved.program, resolved.host, &resolved.symbols)
+        .and_then(|()| validate_regular(&resolved.program.data, &resolved.symbols))
         .and_then(|()| validate_effects(&resolved.program, &resolved.symbols))
         .and_then(|()| {
             Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
@@ -4665,6 +4668,139 @@ fn validate_externals(
     )
     .note("only the host leaves a definition for its target to answer")
     .help(format!("write the clauses of `{name}`")))
+}
+
+/// Refuse a declared type that holds itself, through whatever types it
+/// holds, at a type larger than its parameters, as
+/// `Nest(a) : [Flat(a), Deeper(Nest((a, a)))]` does. Every size of it
+/// would be a type of its own, and a program holding one would ask for
+/// them without end.
+fn validate_regular(data: &HashMap<Symbol, n::Data>, symbols: &Symbols) -> Result<(), CheckError> {
+    let mut handed = Handed::new();
+    for declared in data.values() {
+        let fields = declared
+            .constructors
+            .iter()
+            .flat_map(|constructor| &constructor.fields)
+            .chain(declared.wrapper.iter().map(|wrapper| &wrapper.field));
+        for field in fields {
+            hands_on(field, declared, data, &mut handed);
+        }
+    }
+    let mut declarations: Vec<_> = data.values().collect();
+    declarations.sort_by_key(|declared| (declared.module, declared.span));
+    for declared in declarations {
+        for parameter in 0..declared.parameters.len() {
+            let from = (declared.name, parameter);
+            let grows = handed
+                .get(&from)
+                .into_iter()
+                .flatten()
+                .any(|&(to, wrapped)| wrapped && reaches(&handed, to, from));
+            if grows {
+                let name = spelled(declared.name, symbols);
+                return Err(failure(
+                    declared.module,
+                    declared.span,
+                    format!("`{name}` holds itself at a larger type"),
+                )
+                .note("every size of it would be a type of its own, without end")
+                .help("hold it at the parameters it is declared with"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Each declared type's parameter, by position, and the parameters of the
+/// declared types it is handed to, with whether it is wrapped in another
+/// type there rather than handed on whole.
+type Handed = HashMap<(Symbol, usize), Vec<((Symbol, usize), bool)>>;
+
+/// Record what `declared` hands each of its parameters to within `ty`.
+fn hands_on(
+    ty: &h::Type,
+    declared: &n::Data,
+    data: &HashMap<Symbol, n::Data>,
+    handed: &mut Handed,
+) {
+    match ty {
+        h::Type::Named(name, arguments) => {
+            if data.contains_key(name) {
+                for (at, argument) in arguments.iter().enumerate() {
+                    for (index, parameter) in declared.parameters.iter().enumerate() {
+                        if mentions(argument, *parameter) {
+                            let wrapped = *argument != h::Type::Variable(*parameter);
+                            handed
+                                .entry((declared.name, index))
+                                .or_default()
+                                .push(((*name, at), wrapped));
+                        }
+                    }
+                }
+            }
+            for argument in arguments {
+                hands_on(argument, declared, data, handed);
+            }
+        }
+        h::Type::Variable(_) | h::Type::Hole => {}
+        h::Type::Function(parameters, result) => {
+            for part in parameters.iter().chain([result.as_ref()]) {
+                hands_on(part, declared, data, handed);
+            }
+        }
+        h::Type::Variants(tags) => {
+            for field in tags.iter().flat_map(|tag| &tag.fields) {
+                hands_on(field, declared, data, handed);
+            }
+        }
+        h::Type::Record(fields, _) => {
+            for (_, field) in fields {
+                hands_on(field, declared, data, handed);
+            }
+        }
+        h::Type::Tuple(members) => {
+            for member in members {
+                hands_on(member, declared, data, handed);
+            }
+        }
+    }
+}
+
+/// Whether `ty` names the type variable `variable` anywhere in it.
+fn mentions(ty: &h::Type, variable: Symbol) -> bool {
+    match ty {
+        h::Type::Variable(name) => *name == variable,
+        h::Type::Hole => false,
+        h::Type::Named(_, parts) | h::Type::Tuple(parts) => {
+            parts.iter().any(|part| mentions(part, variable))
+        }
+        h::Type::Function(parameters, result) => parameters
+            .iter()
+            .chain([result.as_ref()])
+            .any(|part| mentions(part, variable)),
+        h::Type::Variants(tags) => tags
+            .iter()
+            .flat_map(|tag| &tag.fields)
+            .any(|field| mentions(field, variable)),
+        h::Type::Record(fields, _) => fields.iter().any(|(_, field)| mentions(field, variable)),
+    }
+}
+
+/// Whether a parameter handed on from `from` arrives, by any number of
+/// steps, at `to`.
+fn reaches(handed: &Handed, from: (Symbol, usize), to: (Symbol, usize)) -> bool {
+    let mut seen = HashSet::new();
+    let mut pending = vec![from];
+    while let Some(at) = pending.pop() {
+        if at == to {
+            return true;
+        }
+        if seen.insert(at) {
+            pending.extend(handed.get(&at).into_iter().flatten().map(|&(next, _)| next));
+        }
+    }
+    false
 }
 
 fn validate_effects(program: &n::Program, symbols: &Symbols) -> Result<(), CheckError> {

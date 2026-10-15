@@ -1,0 +1,8 @@
+error: `Nest` holds itself at a larger type
+ --> a_type_holding_itself_at_a_larger_type_would_be_a_type_for_each_size.fn:3:1
+  |
+3 | Nest(a) : [Flat(a), Deeper(Nest((a, a)))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: every size of it would be a type of its own, without end
+  = help: hold it at the parameters it is declared with

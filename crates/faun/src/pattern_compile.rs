@@ -8,6 +8,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 
 use num_traits::ToPrimitive;
 
@@ -92,6 +93,7 @@ pub(crate) fn compile(
         symbols,
         run_out: RunOut::Refused,
         joins: &joins,
+        clauses: None,
     };
     let mut functions: Vec<Function> = program
         .functions
@@ -126,7 +128,11 @@ pub(crate) fn compile(
                         })
                         .collect::<Result<Vec<_>, LowerError>>()?;
                     let mut next = u32::try_from(subjects.len()).expect("a sane arity");
-                    Definition::Body(Box::new(compiler.plan(&rows, &subjects, &mut next)?))
+                    let planning = Compiler {
+                        clauses: Some(Rc::new(Clauses::of(&function.key))),
+                        ..compiler.clone()
+                    };
+                    Definition::Body(Box::new(planning.plan(&rows, &subjects, &mut next)?))
                 }
             };
             Ok(Function {
@@ -256,6 +262,26 @@ struct Compiler<'a> {
     symbols: &'a Symbols,
     run_out: RunOut,
     joins: &'a Joins,
+    /// Where the rows planned are a function's own clauses; see
+    /// [`Compiler::fallthrough`].
+    clauses: Option<Rc<Clauses>>,
+}
+
+/// A function's clauses as they are planned: the function, and the type of
+/// each value planning has taken apart, which a join point it makes is
+/// handed.
+struct Clauses {
+    function: FunctionKey,
+    types: RefCell<HashMap<Value, Type>>,
+}
+
+impl Clauses {
+    fn of(function: &FunctionKey) -> Self {
+        Self {
+            function: function.clone(),
+            types: RefCell::new(HashMap::new()),
+        }
+    }
 }
 
 /// The join points made while compiling, and how many there are; the
@@ -944,6 +970,14 @@ impl Compiler<'_> {
         subjects: &[Subject],
         next: &mut u32,
     ) -> Result<Decision, LowerError> {
+        if let Some(clauses) = &self.clauses {
+            let mut types = clauses.types.borrow_mut();
+            for subject in subjects {
+                types
+                    .entry(subject.value)
+                    .or_insert_with(|| subject.ty.clone());
+            }
+        }
         if rows.iter().any(|row| {
             row.patterns
                 .iter()
@@ -996,13 +1030,14 @@ impl Compiler<'_> {
                         .collect();
                     either.push(row);
                 }
-                either.extend(rows[1..].iter().cloned());
+                either.extend(self.rest(&rows[1..], subjects)?);
                 return self.plan(&either, subjects, next);
             }
-            let otherwise = self.plan(&rows[1..], subjects, next)?;
+            let rest = self.rest(&rows[1..], subjects)?;
+            let otherwise = self.plan(&rest, subjects, next)?;
             let locals = first.locals.clone();
             let mut going_on = vec![first];
-            going_on.extend(rows[1..].iter().cloned());
+            going_on.extend(rest);
             let answer = self.plan(&going_on, subjects, next)?;
             let booleans = Type::Named(self.prelude.bool_, Vec::new()).constructors(self.data)?;
             if booleans.len() != 2
@@ -1192,8 +1227,7 @@ impl Compiler<'_> {
                 .collect();
             below.push(row);
         }
-        for row in &rows[1..] {
-            let mut row = row.clone();
+        for mut row in self.rest(&rows[1..], subjects)? {
             row.patterns.push(Pattern::Wild);
             below.push(row);
         }
@@ -1207,6 +1241,125 @@ impl Compiler<'_> {
             locals: first.locals,
             decision: Box::new(self.plan(&below, &tested, next)?),
         })
+    }
+
+    /// The rows tried where the row above them fails: themselves, or where
+    /// they are a function's clauses, one row taking anything that calls a
+    /// join point planned from them, handed each value matched and each
+    /// one they have bound. A row's guard, a test in it, or a list's end
+    /// failing has every row below it planned again on each way it fails,
+    /// and each of those again, which a join point plans once. Rows no
+    /// more than a catch-all are kept, as copying one copies nothing more.
+    fn rest(&self, rest: &[Row], subjects: &[Subject]) -> Result<Vec<Row>, LowerError> {
+        let Some(clauses) = &self.clauses else {
+            return Ok(rest.to_vec());
+        };
+        let plain = |row: &Row| row.guard.is_empty() && row.patterns.iter().all(irrefutable);
+        if rest.is_empty() || matches!(rest, [only] if plain(only)) {
+            return Ok(rest.to_vec());
+        }
+        let mut handed: Vec<(Value, Type)> = subjects
+            .iter()
+            .map(|subject| (subject.value, subject.ty.clone()))
+            .collect();
+        let mut bound: Vec<Value> = rest
+            .iter()
+            .flat_map(|row| row.locals.values().copied())
+            .filter(|value| !handed.iter().any(|(handed, _)| handed == value))
+            .collect();
+        bound.sort_unstable_by_key(|value| value.0);
+        bound.dedup();
+        {
+            let types = clauses.types.borrow();
+            for value in bound {
+                let ty = types
+                    .get(&value)
+                    .cloned()
+                    .ok_or_else(|| error("a value a row bound has a type"))?;
+                handed.push((value, ty));
+            }
+        }
+        let renumbered: HashMap<Value, Value> = handed
+            .iter()
+            .enumerate()
+            .map(|(at, (value, _))| (*value, Value(u32::try_from(at).expect("a sane arity"))))
+            .collect();
+        let join_subjects: Vec<Subject> = subjects
+            .iter()
+            .map(|subject| Subject {
+                value: renumbered[&subject.value],
+                ty: subject.ty.clone(),
+            })
+            .collect();
+        let join_rows: Vec<Row> = rest
+            .iter()
+            .map(|row| Row {
+                locals: row
+                    .locals
+                    .iter()
+                    .map(|(local, value)| (*local, renumbered[value]))
+                    .collect(),
+                ..row.clone()
+            })
+            .collect();
+        let key = self.made_key(
+            &clauses.function,
+            handed.iter().map(|(_, ty)| ty.clone()).collect(),
+        );
+        // The rows are tried only where the rows above failed, which this
+        // plan does not know: a way it leaves for no row is one the rows
+        // above took, as the clauses were found to cover every value.
+        let run_out = join_subjects.first().map_or_else(
+            || self.run_out.clone(),
+            |subject| RunOut::Unreachable(subject.clone()),
+        );
+        let joined = Clauses::of(&clauses.function);
+        joined.types.borrow_mut().extend(
+            handed
+                .iter()
+                .map(|(value, ty)| (renumbered[value], ty.clone())),
+        );
+        let planning = Self {
+            clauses: Some(Rc::new(joined)),
+            run_out,
+            ..self.clone()
+        };
+        let mut next = u32::try_from(handed.len()).expect("a sane arity");
+        let decision = planning.plan(&join_rows, &join_subjects, &mut next)?;
+        self.joins.functions.borrow_mut().push(Function {
+            key: key.clone(),
+            definition: Definition::Body(Box::new(decision)),
+        });
+        let (module, span) = (rest[0].body.result.module, rest[0].body.result.span);
+        let mut locals = HashMap::new();
+        let arguments = handed
+            .iter()
+            .map(|(value, ty)| {
+                let local = self.loop_local();
+                locals.insert(local, *value);
+                Expr {
+                    module,
+                    span,
+                    ty: ty.clone(),
+                    kind: ExprKind::Local(local),
+                }
+            })
+            .collect();
+        let call = Expr {
+            module,
+            span,
+            ty: clauses.function.signature.result.as_ref().clone(),
+            kind: ExprKind::DirectCall(key, arguments),
+        };
+        Ok(vec![Row {
+            patterns: vec![Pattern::Wild; subjects.len()],
+            guard: Vec::new(),
+            body: Body {
+                bindings: Vec::new(),
+                result: call,
+            },
+            locals,
+        }])
     }
 
     /// Split the list in `column` as `split` does, the front and back two
@@ -1229,8 +1382,21 @@ impl Compiler<'_> {
             value
         };
         let (front, back) = (fresh(), fresh());
+        // Where the first row is split here, every way its end does not
+        // match goes on to the rows below it: one join point, not a copy of
+        // them for each way.
+        let rows = match rows.split_first() {
+            Some((first, below))
+                if ending(&first.patterns[column]).is_some_and(|own| own.last.len() == count) =>
+            {
+                let mut rows = vec![first.clone()];
+                rows.extend(self.rest(below, subjects)?);
+                rows
+            }
+            _ => rows.to_vec(),
+        };
         let mut specialized = Vec::with_capacity(rows.len());
-        for row in rows {
+        for row in &rows {
             let mut row = row.clone();
             let (front, back) = match ending(&row.patterns[column]) {
                 Some(split) if split.last.len() == count => {
@@ -1953,7 +2119,10 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
 /// for each part, so what a test binds is in scope where it held. Past an
 /// `&` the right is asked; past an `|`, `yes` answers where the left held
 /// and the right is asked where it failed. A branch is copied to each
-/// place it is reached from.
+/// place it is reached from, where it is no more than a value; one that
+/// branches itself is written once, after the condition is worked out
+/// (see [`outcome`]), as copying it would copy what it holds as often as
+/// the chains before it have parts.
 fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
     let (module, span, ty) = (yes.module, condition.span, yes.ty.clone());
     let header = |kind| Expr {
@@ -1969,6 +2138,14 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
             Box::new(yes),
             Box::new(no),
         ));
+    }
+    let copied = match &condition.kind {
+        ExprKind::DirectCall(key, _) if key.name == prelude.bool_and => Some(&no),
+        ExprKind::DirectCall(key, _) if key.name == prelude.bool_or => Some(&yes),
+        _ => None,
+    };
+    if copied.is_some_and(branches) {
+        return outcome(condition, yes, no, prelude);
     }
     match condition.kind {
         ExprKind::Is(value, pattern) => {
@@ -1990,6 +2167,119 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
         }
         _ => unreachable!("only a test, `&` and `|` bind"),
     }
+}
+
+/// `if condition then yes else no`, where the condition is a chain of `&`
+/// and `|` holding a test: the condition worked out first, to one tag
+/// holding what its tests bound that `yes` reads, or another saying it
+/// failed, and that tag taken apart once, `yes` in one arm and `no` in the
+/// other. Only the tags are copied along the chain.
+fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
+    let (module, span) = (condition.module, condition.span);
+    let bound = bound_by(&condition, prelude);
+    let mut read: Vec<(LocalId, Type)> = Vec::new();
+    each_expr(&yes, &mut |expression| {
+        if let ExprKind::Local(local) = expression.kind
+            && bound.contains(&local)
+            && !read.iter().any(|(seen, _)| *seen == local)
+        {
+            read.push((local, expression.ty.clone()));
+        }
+    });
+    let (held, failed) = (prelude.bool_true, prelude.bool_false);
+    let mut tags = vec![
+        (held, read.iter().map(|(_, ty)| ty.clone()).collect()),
+        (failed, Vec::new()),
+    ];
+    tags.sort_by_key(|(label, _)| *label);
+    let ty = Type::Variants(tags);
+    let tag = |label, fields| Expr {
+        module,
+        span,
+        ty: ty.clone(),
+        kind: ExprKind::Construct(label, fields),
+    };
+    let reads = read
+        .iter()
+        .map(|(local, ty)| Expr {
+            module,
+            span,
+            ty: ty.clone(),
+            kind: ExprKind::Local(*local),
+        })
+        .collect();
+    let chosen = branched(
+        condition,
+        tag(held, reads),
+        tag(failed, Vec::new()),
+        prelude,
+    );
+    let holding = read
+        .iter()
+        .map(|(local, _)| Pattern::Bind(*local))
+        .collect();
+    Expr {
+        module: yes.module,
+        span,
+        ty: yes.ty.clone(),
+        kind: ExprKind::Match(
+            Box::new(chosen),
+            vec![
+                d::Arm {
+                    rows: vec![(Pattern::Constructor(held, holding), None)],
+                    body: yes,
+                },
+                d::Arm {
+                    rows: vec![(Pattern::Constructor(failed, Vec::new()), None)],
+                    body: no,
+                },
+            ],
+        ),
+    }
+}
+
+/// Whether `expression` branches anywhere in it, so that copying it copies
+/// more than a value.
+fn branches(expression: &Expr) -> bool {
+    let mut found = false;
+    each_expr(expression, &mut |part| {
+        found |= matches!(
+            part.kind,
+            ExprKind::If(..) | ExprKind::Match(..) | ExprKind::Loop(..) | ExprKind::Block(..)
+        );
+    });
+    found
+}
+
+/// What a condition's tests bind on every way it holds: past an `&`, what
+/// each part binds; past an `|`, what both sides bind.
+fn bound_by(condition: &Expr, prelude: &PreludeIds) -> HashSet<LocalId> {
+    match &condition.kind {
+        ExprKind::Is(_, alternatives) => {
+            let each = alternatives.iter().map(|(pattern, guard)| {
+                let mut bound = HashSet::new();
+                pattern_bound(pattern, &mut bound);
+                if let Some(guard) = guard {
+                    bound.extend(bound_by(guard, prelude));
+                }
+                bound
+            });
+            intersection(each)
+        }
+        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_and => sides
+            .iter()
+            .flat_map(|side| bound_by(side, prelude))
+            .collect(),
+        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_or => {
+            intersection(sides.iter().map(|side| bound_by(side, prelude)))
+        }
+        _ => HashSet::new(),
+    }
+}
+
+fn intersection(sets: impl Iterator<Item = HashSet<LocalId>>) -> HashSet<LocalId> {
+    sets.reduce(|all, next| all.intersection(&next).copied().collect())
+        .unwrap_or_default()
 }
 
 /// What a guard asks, in turn: the parts of a chain of `&` holding a test,
@@ -2300,6 +2590,7 @@ mod tests {
             symbols: &checked.resolved.symbols,
             run_out: RunOut::Refused,
             joins: &Joins::default(),
+            clauses: None,
         };
         let subjects = [Subject {
             value: Value(0),
@@ -2351,6 +2642,7 @@ mod tests {
             symbols: &checked.resolved.symbols,
             run_out: RunOut::Refused,
             joins: &Joins::default(),
+            clauses: None,
         };
         let nat = Type::Named(prelude.nat, Vec::new());
         let record = Type::Record(vec![(a, nat.clone()), (b, nat)]);

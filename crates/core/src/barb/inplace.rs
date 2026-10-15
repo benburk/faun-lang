@@ -44,7 +44,7 @@
 //! buffer nothing else's to write. Fusion comes first, since a list fusion
 //! never builds is better than one written in place.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::copy::{self, Scope};
 use super::facts::Recognised;
@@ -93,16 +93,21 @@ pub(crate) fn in_place(program: &mut Program) {
 fn found(program: &Program, recognised: &Recognised) -> Vec<(FnId, Walk)> {
     let mut walks: Vec<(FnId, Walk)> = Vec::new();
     let mut known: HashMap<FnId, Known> = HashMap::new();
+    // Each round takes only walks no round took, so it goes round at most
+    // once for each definition: a walk whose base case does not answer
+    // what it built is found once, and never becomes known.
+    let mut taken: HashSet<FnId> = HashSet::new();
     loop {
         let more: Vec<_> = (0..program.functions().len())
             .map(FnId::at)
-            .filter(|id| !recognised.answered(*id) && !known.contains_key(id))
+            .filter(|id| !recognised.answered(*id) && !taken.contains(id))
             .filter_map(|id| Walk::of(program, recognised, id, &known).map(|walk| (id, walk)))
             .collect();
         if more.is_empty() {
             return walks;
         }
         for (id, walk) in more {
+            taken.insert(id);
             if let Some(answer) = walk.answer {
                 let at = Known {
                     walked: walk.walked,

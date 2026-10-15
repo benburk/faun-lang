@@ -12,6 +12,8 @@
 //! first jump or return, so every place control may reach stays where it
 //! was, and so does the entry, which is the first instruction.
 
+use std::collections::HashSet;
+
 use super::machine::{Condition, Inst};
 use faun_core::targets::code::{Code, Label};
 
@@ -24,11 +26,12 @@ pub(crate) fn thread(code: &mut Code<Inst>) {
 /// Point every jump past the unconditional jumps it lands on. Answers
 /// whether any moved.
 fn retarget(code: &mut Code<Inst>) -> bool {
+    let mut landed = vec![None; code.labels().len()];
     let finals: Vec<_> = code
         .insts()
         .iter()
         .map(|inst| match *inst {
-            Inst::Jump { target, .. } => Some(landing(code, target)),
+            Inst::Jump { target, .. } => Some(landing(code, target, &mut landed)),
             _ => None,
         })
         .collect();
@@ -45,18 +48,36 @@ fn retarget(code: &mut Code<Inst>) -> bool {
 }
 
 /// Where a jump to `label` ends up, following unconditional jumps, and
-/// stopping at the first one seen twice.
-fn landing(code: &Code<Inst>, mut label: Label) -> Label {
+/// stopping at the first one seen twice. Where the jumps followed end
+/// somewhere, each label passed is kept in `landed` with where they end,
+/// so a chain many jumps land in is followed once rather than once for
+/// each of them.
+fn landing(code: &Code<Inst>, mut label: Label, landed: &mut [Option<Label>]) -> Label {
     let mut seen = Vec::new();
+    let mut passed = HashSet::new();
+    let mut ended = true;
     while let Some(at) = code.position(label)
         && let Some(&Inst::Jump {
             condition: None,
             target,
         }) = code.insts().get(at)
-        && !seen.contains(&target)
     {
+        if let Some(end) = landed[label.index()] {
+            label = end;
+            break;
+        }
+        if passed.contains(&target.index()) {
+            ended = false;
+            break;
+        }
+        passed.insert(label.index());
         seen.push(label);
         label = target;
+    }
+    if ended {
+        for passed in seen {
+            landed[passed.index()] = Some(label);
+        }
     }
     label
 }

@@ -615,8 +615,13 @@ impl<'a> Normal<'a> {
         Self { walks, ..self }
     }
 
+    /// Normalize this definition's body at `args`, within a budget that
+    /// each expression visited and each part of a term copied spends: a
+    /// term is copied each time it is read, so `n + n` holds two of `n`,
+    /// and paying by size keeps a body that doubles what it is handed from
+    /// building more than the budget.
     fn run(&self, args: Vec<Term>) -> Option<Term> {
-        self.body(self.program.function(self.id).body()?, args, &mut 256)
+        self.body(self.program.function(self.id).body()?, args, &mut 1024)
     }
     fn body(&self, body: Body, mut locals: Vec<Term>, fuel: &mut u32) -> Option<Term> {
         for &binding in self.program.bindings(body.bindings) {
@@ -626,18 +631,18 @@ impl<'a> Normal<'a> {
     }
     fn expr(&self, id: super::ExprId, locals: &[Term], fuel: &mut u32) -> Option<Term> {
         *fuel = fuel.checked_sub(1)?;
-        let args = |range| {
+        let mut args = |range| {
             self.program
                 .atoms(range)
                 .iter()
-                .map(|a| locals[a.0.index()].clone())
-                .collect::<Vec<_>>()
+                .map(|a| copied(&locals[a.0.index()], fuel))
+                .collect::<Option<Vec<_>>>()
         };
         match self.program.expr(id) {
-            Expr::Atom(a) => Some(locals[a.0.index()].clone()),
+            Expr::Atom(a) => copied(&locals[a.0.index()], fuel),
             Expr::Static(value) => self.constant(value),
             Expr::Con(ctor, fields) => {
-                let mut fields = args(fields);
+                let mut fields = args(fields)?;
                 Some(if ctor == self.nil {
                     zero()
                 } else if ctor == self.cons {
@@ -647,7 +652,7 @@ impl<'a> Normal<'a> {
                 })
             }
             Expr::Call(called, fields) => {
-                let fields = args(fields);
+                let fields = args(fields)?;
                 if called == self.id {
                     return Some(Term::Recursive(fields));
                 }
@@ -714,6 +719,28 @@ impl<'a> Normal<'a> {
             choices.push((arm.ctor, self.body(arm.body, locals.to_vec(), fuel)?));
         }
         Some(Term::Match(Box::new(value.clone()), choices))
+    }
+}
+
+/// `term`, a unit of `fuel` spent for each of its parts.
+fn copied(term: &Term, fuel: &mut u32) -> Option<Term> {
+    paid(term, fuel)?;
+    Some(term.clone())
+}
+
+fn paid(term: &Term, fuel: &mut u32) -> Option<()> {
+    *fuel = fuel.checked_sub(1)?;
+    match term {
+        Term::Variable(_) | Term::Number(_) => Some(()),
+        Term::Succ(inner) => paid(inner, fuel),
+        Term::Constructor(_, parts)
+        | Term::Recursive(parts)
+        | Term::Known(_, parts)
+        | Term::Walk(_, parts) => parts.iter().try_for_each(|part| paid(part, fuel)),
+        Term::Match(value, arms) => {
+            paid(value, fuel)?;
+            arms.iter().try_for_each(|(_, arm)| paid(arm, fuel))
+        }
     }
 }
 

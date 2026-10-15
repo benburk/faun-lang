@@ -8,6 +8,266 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "clauses ending a list in fewer elements each try the next once, not once for each way the last fails",
+        "f : List(Nat) -> Nat
+         f([*_, a0, a1, a2, a3, a4, a5, a6, a7]) -> 8 * 10 + a0
+         f([*_, a0, a1, a2, a3, a4, a5, a6]) -> 7 * 10 + a0
+         f([*_, a0, a1, a2, a3, a4, a5]) -> 6 * 10 + a0
+         f([*_, a0, a1, a2, a3, a4]) -> 5 * 10 + a0
+         f([*_, a0, a1, a2, a3]) -> 4 * 10 + a0
+         f([*_, a0, a1, a2]) -> 3 * 10 + a0
+         f([*_, a0, a1]) -> 2 * 10 + a0
+         f([*_, a0]) -> 1 * 10 + a0
+         f([]) -> 0
+         
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(f([n, 2, 3]) + f([n]) + f([]) + f([n, 1, 1, 1, 1, 1, 1, 1, 1, 1])))
+         )",
+        123,
+    ),
+    (
+        "guarded clauses each fall through to the next once, not once for each way the guard fails",
+        "Opt : [Some(Nat), None]
+         
+         g : Opt -> Nat
+         g(x) if x is Some(y) & y == 0 -> 0
+         g(x) if x is Some(y) & y == 1 -> 1
+         g(x) if x is Some(y) & y == 2 -> 2
+         g(x) if x is Some(y) & y == 3 -> 3
+         g(x) if x is Some(y) & y == 4 -> 4
+         g(x) if x is Some(y) & y == 5 -> 5
+         g(x) if x is Some(y) & y == 6 -> 6
+         g(x) if x is Some(y) & y == 7 -> 7
+         g(x) if x is Some(y) & y == 8 -> 8
+         g(x) if x is Some(y) & y == 9 -> 9
+         g(x) if x is Some(y) & y == 10 -> 10
+         g(x) if x is Some(y) & y == 11 -> 11
+         g(x) if x is Some(y) & y == 12 -> 12
+         g(x) if x is Some(y) & y == 13 -> 13
+         g(x) if x is Some(y) & y == 14 -> 14
+         g(x) if x is Some(y) & y == 15 -> 15
+         g(x) if x is Some(y) & y == 16 -> 16
+         g(x) if x is Some(y) & y == 17 -> 17
+         g(_) -> 50
+         
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(g(Some(n + 4)) + g(Some(n + 40)) + g(None)))
+         )",
+        105,
+    ),
+    (
+        "a guard of alternatives each testing goes on to the next clause once",
+        "h : (Bool, Bool) -> Nat
+         h(a, b) if (a is True | b is True) & (a is True | b is True) & (a is True | b is True) & (a is True | b is True) & (a is True | b is True) & (a is True | b is True) -> 7
+         h(_, _) -> 3
+         
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(h(n == 1, False) * 10 + h(False, n == 2)))
+         )",
+        73,
+    ),
+    (
+        "a chain of else ifs each testing is written once, not once for each part of the tests before",
+        "Opt : [Some(Nat), None]
+         
+         pick : Opt -> Nat
+         pick(o) -> (
+           if o is Some(y) & y == 0 then 100
+           else if o is Some(y) & y == 1 then 1
+           else if o is Some(y) & y == 2 then 2
+           else if o is Some(y) & y == 3 then 3
+           else if o is Some(y) & y == 4 then 4
+           else if o is Some(y) & y == 5 then 5
+           else if o is Some(y) & y == 6 then 6
+           else if o is Some(y) & y == 7 then 7
+           else if o is Some(y) & y == 8 then 8
+           else if o is Some(y) & y == 9 then 9
+           else if o is Some(y) & y == 10 then 10
+           else if o is Some(y) & y == 11 then 11
+           else if o is Some(y) & y == 12 then 12
+           else if o is Some(y) & y == 13 then 13
+           else if o is Some(y) & y == 14 then 14
+           else if o is Some(y) & y == 15 then 15
+           else if o is Some(y) & y == 16 then 16
+           else if o is Some(y) & y == 17 then 17
+           else if o is Some(y) & y == 18 then 18
+           else if o is Some(y) & y == 19 then 19
+           else if o is Some(y) & y == 20 then 20
+           else if o is Some(y) & y == 21 then 21
+           else 50
+         )
+         
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(pick(Some(n + 6)) + pick(Some(n + 60)) + pick(None)))
+         )",
+        107,
+    ),
+    (
+        "loops nested deep are each read ahead once",
+        "count : Nat -> Nat
+         count(z) -> (
+           t = z
+           while t < 1 do (
+             while t < 1 do (
+               while t < 1 do (
+                 while t < 1 do (
+                   while t < 1 do (
+                     while t < 1 do (
+                       while t < 1 do (
+                         while t < 1 do (
+                           while t < 1 do (
+                             while t < 1 do (
+                               while t < 1 do (
+                                 while t < 1 do (
+                                   while t < 1 do (
+                                     while t < 1 do (
+                                       while t < 1 do (
+                                         while t < 1 do (
+                                           while t < 1 do (
+                                             while t < 1 do (
+                                               while t < 1 do (
+                                                 while t < 1 do (
+                                                   while t < 1 do (
+                                                     while t < 1 do (
+                                                       while t < 1 do (
+                                                         while t < 1 do (
+                                                           t = t + 1
+                                                         )
+                                                       )
+                                                     )
+                                                   )
+                                                 )
+                                               )
+                                             )
+                                           )
+                                         )
+                                       )
+                                     )
+                                   )
+                                 )
+                               )
+                             )
+                           )
+                         )
+                       )
+                     )
+                   )
+                 )
+               )
+             )
+           )
+           t
+         )
+         
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(count(host.args.len() - 1) + 40))",
+        41,
+    ),
+    (
+        "a buffer handed through many ifs in a round is asked about once for each",
+        "work : (List(U8), Nat) -> Nat
+         work(xs, n) -> (
+           i = 0
+           count = 0
+           while i < n do (
+             xs = xs.set(i % 3, U8.of_nat(i % 200)).ok_or([])
+             (xs, count) = if i % 2 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 3 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 4 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 5 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 6 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 7 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 8 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 9 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 10 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 11 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 12 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 13 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 14 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 15 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 16 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 17 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 18 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 19 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 20 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 21 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 22 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 23 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 24 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 25 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 26 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 27 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 28 == 0 then (xs, count + 1) else (xs, count)
+             (xs, count) = if i % 29 == 0 then (xs, count + 1) else (xs, count)
+             i = i + 1
+           )
+           xs.len() + count
+         )
+         
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(work([1, 2, 3], host.args.len())))",
+        31,
+    ),
+    (
+        "a walk building a list whose base case answers something else of it compiles",
+        "w : (List(Nat), List(Nat)) -> Nat
+         w(xs, built) -> xs is (
+           [] -> built.len()
+           [x, *rest] -> w(rest, built.append(x + 1))
+         )
+
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(w([1, 2, 3].take(host.args.len() + 1), [])))",
+        2,
+    ),
+    (
+        "a helper doubling what it is handed is no larger for arithmetic recognition to read",
+        "d : Nat -> Nat
+         d(n) -> (
+           m = n + n
+           p = m + m
+           q = p + p
+           if q > 1000000 then q else d(q)
+         )
+
+         w : (Nat, Nat) -> Nat
+         w(a, _) -> d(a + 1)
+
+         main! : Host -> []
+         main!(host) -> (
+           k = host.args.len()
+           host.exit!(U8.of_nat(w(k, k) / 65536))
+         )",
+        64,
+    ),
+    (
+        "a recursive call at another type that stops growing needs finitely many definitions",
+        "size : (a, Nat) -> Nat
+         size(_, 0) -> 0
+         size(_, n) -> 1 + size(n, n - 1)
+
+         Tree(a) : [Leaf(a), Node(List(Tree(a)))]
+
+         leaves : Tree(a) -> Nat
+         leaves(Leaf(_)) -> 1
+         leaves(Node(children)) -> children.fold(0, |sum, child| sum + leaves(child))
+
+         main! : Host -> []
+         main!(host) -> (
+           tree = Node([Leaf(\"a\"), Node([Leaf(\"b\"), Leaf(\"c\")])])
+           host.exit!(U8.of_nat(size(\"s\", 3) * 10 + leaves(tree)))
+         )",
+        33,
+    ),
+    (
         "an order chained with `|` works out the next only where the first ties",
         "forever : Nat -> Nat
          forever(n) -> forever(n + 1)

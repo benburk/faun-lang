@@ -155,19 +155,84 @@ fn predecessors<R: Register>(code: &Code<R>) -> Vec<Vec<BlockId>> {
     predecessors
 }
 
+/// For each block, which of its edges go back to a block the walk from
+/// its function's entry is still within: the edges that close a loop.
+/// Block order says nothing of this, as a branch's join may be made before
+/// its arms, so each is found by walking.
+fn back_edges<R: Register>(code: &Code<R>) -> Vec<[bool; 2]> {
+    let count = code.blocks.len();
+    let mut seen = vec![Seen::Not; count];
+    let mut back = vec![[false; 2]; count];
+    // Every function from its entry, then any block no entry reaches.
+    let roots = code
+        .functions
+        .iter()
+        .map(|function| function.entry)
+        .chain((0..count).map(BlockId::at));
+    for root in roots {
+        if seen[root.index()] == Seen::Not {
+            walk_from(code, root, &mut seen, &mut back);
+        }
+    }
+    back
+}
+
+/// Where a block stands in the walk [`back_edges`] makes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Seen {
+    Not,
+    Within,
+    Left,
+}
+
+/// Walk depth first from `root`, marking each edge to a block the walk is
+/// still within.
+fn walk_from<R: Register>(
+    code: &Code<R>,
+    root: BlockId,
+    seen: &mut [Seen],
+    back: &mut [[bool; 2]],
+) {
+    seen[root.index()] = Seen::Within;
+    // Each block being walked, and which of its edges is next.
+    let mut walking = vec![(root, 0)];
+    while let Some(top) = walking.last_mut() {
+        let (at, edge) = *top;
+        if edge == 2 {
+            seen[at.index()] = Seen::Left;
+            walking.pop();
+            continue;
+        }
+        top.1 += 1;
+        let Some(target) = successors(code.blocks[at].terminator)[edge] else {
+            continue;
+        };
+        match seen[target.index()] {
+            Seen::Not => {
+                seen[target.index()] = Seen::Within;
+                walking.push((target, 0));
+            }
+            Seen::Within => back[at.index()][edge] = true,
+            Seen::Left => {}
+        }
+    }
+}
+
 /// For each block, what taking each of its edges counts as for the loops
-/// it leaves. A loop is found by an edge back to a block no later than its
-/// source; its body is what reaches that source without passing its head.
+/// it leaves. A loop is found by an edge back to a block the walk is still
+/// within; its body is what reaches that edge's source without passing its
+/// head.
 fn leaving<R: Register>(code: &Code<R>) -> Vec<Vec<u32>> {
     let predecessors = predecessors(code);
+    let back = back_edges(code);
     // The loops each block is in, by the order they were found.
     let mut within: Vec<Vec<usize>> = vec![Vec::new(); code.blocks.len()];
     let mut loops = 0;
     for (id, block) in code.blocks.iter_enumerated() {
-        for head in successors(block.terminator).into_iter().flatten() {
-            if head.index() > id.index() {
+        for (edge, head) in successors(block.terminator).into_iter().enumerate() {
+            let Some(head) = head.filter(|_| back[id.index()][edge]) else {
                 continue;
-            }
+            };
             within[head.index()].push(loops);
             let mut pending = vec![id];
             while let Some(member) = pending.pop() {

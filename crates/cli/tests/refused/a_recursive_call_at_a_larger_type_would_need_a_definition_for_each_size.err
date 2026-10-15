@@ -1,0 +1,8 @@
+error: this call asks for `nest` again, at a larger type
+ --> a_recursive_call_at_a_larger_type_would_need_a_definition_for_each_size.fn:5:19
+  |
+5 | nest(x, n) -> 1 + nest([x], n - 1)
+  |                   ^^^^
+  |
+  = note: each round would ask for another definition, without end
+  = help: recurse at the types the definition was given

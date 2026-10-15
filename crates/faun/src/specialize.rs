@@ -6,6 +6,12 @@
 //! [`crate::callbacks`] makes each into the definition it is handed to.
 //! Every function key carries a signature, not an arbitrary type; an external
 //! names its provider instead of carrying an empty body.
+//!
+//! What cannot be made finitely is refused: a call asking for the
+//! definition it is reached through again, at types the earlier ones are
+//! found within, as `nest(x, n) -> nest([x], n - 1)` does. Nothing in a
+//! body but its bounds depends on a type, so the call grows them again
+//! each round.
 
 #![allow(clippy::too_many_lines)]
 
@@ -16,7 +22,7 @@ use num_bigint::BigUint;
 use crate::blessed::NumeralType;
 use crate::blessed::{LiteralExpr, PreludeIds};
 use crate::check::{CheckedProgram, InferredBound, InferredScheme, InferredType, TypeVariable};
-use crate::diagnostic::LowerError;
+use crate::diagnostic::{Advised, LowerError};
 use crate::hir as h;
 use crate::typed as t;
 use crate::{ModuleId, Symbol};
@@ -383,6 +389,15 @@ fn holds_function(ty: &Type) -> bool {
     }
 }
 
+/// What asked for a requested definition: the definition whose body
+/// called it, and the call, where it was one.
+struct Origin {
+    key: FunctionKey,
+    asker: Option<usize>,
+    /// How many askers it has above it.
+    depth: usize,
+}
+
 struct Specializer<'a> {
     /// The spellings a refusal names.
     symbols: &'a crate::Symbols,
@@ -397,6 +412,12 @@ struct Specializer<'a> {
     structural: HashMap<FunctionKey, (ModuleId, crate::ast::Span)>,
     queue: VecDeque<FunctionKey>,
     functions: Vec<Option<Function>>,
+    /// What asked for each requested definition, by its index.
+    origins: Vec<Origin>,
+    /// The definitions each call made first, by what it calls and where.
+    made_at: HashMap<(Symbol, (ModuleId, crate::ast::Span)), Vec<usize>>,
+    /// The definition being specialized, which asks for what its body calls.
+    current: Option<usize>,
     /// The next local a test's literal is held in, numbered apart from
     /// every clause's own.
     test_locals: u32,
@@ -437,6 +458,9 @@ impl<'a> Specializer<'a> {
             structural: HashMap::new(),
             queue: VecDeque::new(),
             functions: Vec::new(),
+            origins: Vec::new(),
+            made_at: HashMap::new(),
+            current: None,
             test_locals: 1 << 30,
         }
     }
@@ -480,9 +504,12 @@ impl<'a> Specializer<'a> {
         roots: Vec<FunctionKey>,
     ) -> Result<Program, LowerError> {
         for key in entry.iter().cloned().chain(roots) {
+            // A root is asked for by nothing the last root reached.
+            self.current = None;
             self.request(key);
             while let Some(key) = self.queue.pop_front() {
                 let index = self.requested[&key];
+                self.current = Some(index);
                 let function = self.specialize_function(&key)?;
                 self.functions[index] = Some(function);
             }
@@ -500,21 +527,94 @@ impl<'a> Specializer<'a> {
     }
 
     fn request(&mut self, key: FunctionKey) {
-        if self.requested.contains_key(&key) {
-            return;
+        self.ask(key);
+    }
+
+    /// Ask for `key`, answering where it is held among those asked for.
+    fn ask(&mut self, key: FunctionKey) -> usize {
+        if let Some(&index) = self.requested.get(&key) {
+            return index;
         }
         let index = self.functions.len();
         self.requested.insert(key.clone(), index);
         self.functions.push(None);
+        let depth = self
+            .current
+            .map_or(0, |asker| self.origins[asker].depth + 1);
+        self.origins.push(Origin {
+            key: key.clone(),
+            asker: self.current,
+            depth,
+        });
         self.queue.push_back(key);
+        index
     }
 
     /// Ask for `key`, which the expression at `at` calls.
-    fn request_at(&mut self, key: FunctionKey, at: (ModuleId, crate::ast::Span)) {
+    fn request_at(
+        &mut self,
+        key: FunctionKey,
+        at: (ModuleId, crate::ast::Span),
+    ) -> Result<(), LowerError> {
         if self.is_structural(key.name, &key.signature.parameters) {
             self.structural.entry(key.clone()).or_insert(at);
         }
-        self.request(key);
+        self.request_from(key, at)
+    }
+
+    /// Ask for `key`, named at `at`, refusing a call that asks for the
+    /// definition it is reached through again at a larger type. Nothing
+    /// in a body depends on a type but its bounds, so a call that grew
+    /// the types once grows them again from the larger ones, and each
+    /// round would ask for another definition.
+    fn request_from(
+        &mut self,
+        key: FunctionKey,
+        at: (ModuleId, crate::ast::Span),
+    ) -> Result<(), LowerError> {
+        if self.requested.contains_key(&key) {
+            return Ok(());
+        }
+        // Only a definition this call made first can be one it makes again
+        // larger, and only where this one is reached through it.
+        let site = (key.name, at);
+        let grows = self
+            .made_at
+            .get(&site)
+            .into_iter()
+            .flatten()
+            .any(|&earlier| {
+                embeds_signature(&self.origins[earlier].key.signature, &key.signature)
+                    && self.reached_through(earlier)
+            });
+        if grows {
+            let canonical = self.symbols.text(key.name);
+            let name = canonical
+                .rsplit_once("$$")
+                .map_or(canonical, |(_, spelled)| spelled);
+            let message = format!("this call asks for `{name}` again, at a larger type");
+            return Err(located(at.0, at.1, &message)
+                .note("each round would ask for another definition, without end")
+                .help("recurse at the types the definition was given"));
+        }
+        let index = self.ask(key);
+        self.made_at.entry(site).or_default().push(index);
+        Ok(())
+    }
+
+    /// Whether the definition being specialized is `earlier`, or was asked
+    /// for through it.
+    fn reached_through(&self, earlier: usize) -> bool {
+        let depth = self.origins[earlier].depth;
+        let mut at = self.current;
+        while let Some(index) = at {
+            let origin = &self.origins[index];
+            if index == earlier || origin.depth <= depth {
+                return index == earlier;
+            }
+            at = origin.asker;
+        }
+        false
     }
 
     /// Whether `name` on these parameters is a closed record's or a
@@ -703,7 +803,7 @@ impl<'a> Specializer<'a> {
             for (index, field) in (0..count).zip(fields) {
                 let target = self.implementation(field, key.name)?;
                 let call = self.method_key(target, field, &[], &str_)?;
-                self.request_at(call.clone(), (module, span));
+                self.request_at(call.clone(), (module, span))?;
                 pieces.push(Expr {
                     module,
                     span,
@@ -782,7 +882,7 @@ impl<'a> Specializer<'a> {
             pieces.push(self.text(module, span, &before)?);
             let target = self.implementation(ty, key.name)?;
             let call = self.method_key(target, ty, &[], &str_)?;
-            self.request_at(call.clone(), (module, span));
+            self.request_at(call.clone(), (module, span))?;
             pieces.push(Expr {
                 module,
                 span,
@@ -879,7 +979,7 @@ impl<'a> Specializer<'a> {
             let target = self.implementation(component, key.name)?;
             let call =
                 self.method_key(target, component, std::slice::from_ref(component), answer)?;
-            self.request_at(call.clone(), (module, span));
+            self.request_at(call.clone(), (module, span))?;
             compared.push(Expr {
                 module,
                 span,
@@ -957,7 +1057,7 @@ impl<'a> Specializer<'a> {
         for (index, component) in (0..count).zip(components) {
             let target = self.implementation(component, key.name)?;
             let call = self.method_key(target, component, std::slice::from_ref(hasher), hasher)?;
-            self.request_at(call.clone(), (module, span));
+            self.request_at(call.clone(), (module, span))?;
             result = Expr {
                 module,
                 span,
@@ -1325,7 +1425,7 @@ impl<'a> Specializer<'a> {
                     signature: ty.clone().into_signature()?,
                     instance: Instance::Written,
                 };
-                self.request(key.clone());
+                self.request_from(key.clone(), (module, span))?;
                 ExprKind::Function(key)
             }
             t::ExprKind::Constructor(name) => {
@@ -1427,7 +1527,7 @@ impl<'a> Specializer<'a> {
                         instance: Instance::Written,
                     }
                 };
-                self.request_at(key.clone(), (module, span));
+                self.request_at(key.clone(), (module, span))?;
                 ExprKind::DirectCall(key, arguments)
             }
             t::ExprKind::Project(receiver, field) => {
@@ -1738,7 +1838,7 @@ impl<'a> Specializer<'a> {
             .implementation(ty, cmp)
             .map_err(|_| located(module, span, "a range is tested with its type's `cmp`"))?;
         let compare = self.method_key(target, ty, std::slice::from_ref(ty), &order)?;
-        self.request_at(compare.clone(), (module, span));
+        self.request_at(compare.clone(), (module, span))?;
         let view = self.method_key(self.prelude.order_le, &order, &[], &bool_ty)?;
         self.request(view.clone());
         let compared = Expr {
@@ -2275,6 +2375,85 @@ pub(crate) fn surface_type(
                 .map(|member| surface_type(member, variables))
                 .collect::<Result<_, _>>()?,
         )),
+    }
+}
+
+/// Whether `small` is `large` with parts left out: each type of `small`
+/// found in `large`, in its place, under whatever `large` wraps it in.
+/// Along any endless run of types some earlier one embeds in a later one,
+/// so a run in which none does ends.
+fn embeds_signature(small: &Signature, large: &Signature) -> bool {
+    Embedding::default().signature(small, large)
+}
+
+/// What [`embeds_signature`] has found of each part of one type in each of
+/// another, so that a pair is compared once and a comparison costs at most
+/// the product of the two sizes.
+#[derive(Default)]
+struct Embedding {
+    known: HashMap<(*const Type, *const Type), bool>,
+}
+
+impl Embedding {
+    fn signature(&mut self, small: &Signature, large: &Signature) -> bool {
+        self.all(&small.parameters, &large.parameters) && self.embeds(&small.result, &large.result)
+    }
+
+    fn all(&mut self, small: &[Type], large: &[Type]) -> bool {
+        small.len() == large.len() && small.iter().zip(large).all(|(a, b)| self.embeds(a, b))
+    }
+
+    fn embeds(&mut self, small: &Type, large: &Type) -> bool {
+        let pair = (std::ptr::from_ref(small), std::ptr::from_ref(large));
+        if let Some(&found) = self.known.get(&pair) {
+            return found;
+        }
+        let found = self.couples(small, large) || self.within(small, large);
+        self.known.insert(pair, found);
+        found
+    }
+
+    /// Whether the two are alike at the top, each part embedding in its own.
+    fn couples(&mut self, small: &Type, large: &Type) -> bool {
+        match (small, large) {
+            (Type::Named(a, xs), Type::Named(b, ys)) => a == b && self.all(xs, ys),
+            (Type::Function(a), Type::Function(b)) => self.signature(a, b),
+            (Type::Variants(xs), Type::Variants(ys)) => {
+                xs.len() == ys.len()
+                    && xs
+                        .iter()
+                        .zip(ys)
+                        .all(|((a, xs), (b, ys))| a == b && self.all(xs, ys))
+            }
+            (Type::Record(xs), Type::Record(ys)) => {
+                xs.len() == ys.len()
+                    && xs
+                        .iter()
+                        .zip(ys)
+                        .all(|((a, x), (b, y))| a == b && self.embeds(x, y))
+            }
+            (Type::Tuple(xs), Type::Tuple(ys)) => self.all(xs, ys),
+            _ => false,
+        }
+    }
+
+    /// Whether `small` embeds in some part of `large`.
+    fn within(&mut self, small: &Type, large: &Type) -> bool {
+        match large {
+            Type::Named(_, parts) | Type::Tuple(parts) => {
+                parts.iter().any(|part| self.embeds(small, part))
+            }
+            Type::Function(signature) => signature
+                .parameters
+                .iter()
+                .chain([signature.result.as_ref()])
+                .any(|part| self.embeds(small, part)),
+            Type::Variants(tags) => tags
+                .iter()
+                .flat_map(|(_, fields)| fields)
+                .any(|part| self.embeds(small, part)),
+            Type::Record(fields) => fields.iter().any(|(_, part)| self.embeds(small, part)),
+        }
     }
 }
 
