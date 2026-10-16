@@ -1473,6 +1473,103 @@ fn a_list_built_on_the_way_out_goes_round_rather_than_down() {
     );
 }
 
+/// A loop inside another, for more rounds of the outer than a stack of
+/// frames goes: where the inner one ends, the outer goes round, and a
+/// `return` inside the inner one leaves both. Each is a loop of the
+/// function holding it, not a call of the outer from inside the inner;
+/// three deep too, with a `continue` at every depth or at none.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one program's four nests of loops, each a shape that must go round"
+)]
+fn a_loop_inside_another_goes_round_rather_than_down() {
+    let rounds: u64 = if TARGET.word() == 16 { 300 } else { 200_000 };
+    let text = format!(
+        "import std.host {{Host}}
+
+         marked : Nat -> Nat
+         marked(count) -> (
+           seen = List.repeat(False, count)
+           groups = []
+           for start in List.range(count) do (
+             if start % 2 == 1 continue
+             stack = [start]
+             while stack is [*stack, node] do (
+               seen = seen.put(node, True)
+             )
+             groups = groups.append(1)
+           )
+           groups.len() + seen.count(|mark| mark)
+         )
+
+         first_past : (Nat, Nat) -> Nat
+         first_past(count, limit) -> (
+           for start in List.range(count) do (
+             if start % 2 == 1 continue
+             stack = [start]
+             while stack is [*stack, node] do (
+               if node >= limit return node
+             )
+           )
+           0
+         )
+
+         nested : Nat -> Nat
+         nested(count) -> (
+           total = 0
+           for a in List.range(count) do (
+             for b in [a, a + 1] do (
+               stack = [b]
+               while stack is [*stack, node] do (
+                 total = total + 1
+               )
+             )
+           )
+           total
+         )
+
+         skipping : Nat -> Nat
+         skipping(count) -> (
+           total = 0
+           for a in List.range(count) do (
+             if a % 2 == 1 continue
+             for b in [a, a] do (
+               if b % 4 == 2 continue
+               stack = [b]
+               while stack is [*stack, node] do (
+                 if node % 8 == 4 continue
+                 total = total + 1
+               )
+             )
+           )
+           total
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           count = {rounds} + host.args.len() - 1
+           two = marked(count) + first_past(count, count - 2)
+           three = nested(count) + skipping(count)
+           host.exit!(U8.of_nat((two + three) % 100))
+         )"
+    );
+    let program = read(&text).expect("the loops compile");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    // Every other start marks one node and adds a group, and the last even
+    // start is the first past the limit. Three deep, every start counts
+    // twice, or, skipping, only every eighth does.
+    let two = rounds + rounds - 2;
+    let three = 2 * rounds + 2 * ((rounds - 1) / 8 + 1);
+    let status = (two + three) % 100;
+    assert_eq!(
+        execute(&program),
+        (i32::try_from(status).expect("a byte"), String::new())
+    );
+}
+
 /// Exercise day 18's row kernel with runtime cells on every target. The
 /// complete application exceeds sim65's 64 KiB code space; the larger
 /// targets also run its expectations and both hundred-step stdin solvers.

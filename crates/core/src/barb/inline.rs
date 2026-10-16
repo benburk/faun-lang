@@ -35,6 +35,16 @@ pub(super) struct Inlining {
 
 impl Inlining {
     pub(super) fn new(program: &Program, limits: InlineLimits) -> Option<Self> {
+        Self::keeping(program, limits, super::calls::breakers(program))
+    }
+
+    /// Expansion of only the definitions that keep a round of calls apart,
+    /// so that each round becomes one definition calling itself.
+    pub(super) fn joining(program: &Program, limits: InlineLimits) -> Option<Self> {
+        Self::keeping(program, limits, super::calls::apart(program))
+    }
+
+    fn keeping(program: &Program, limits: InlineLimits, breakers: Vec<bool>) -> Option<Self> {
         if limits.total == 0
             || limits.per_function == 0
             || limits.max_callee == 0
@@ -43,7 +53,7 @@ impl Inlining {
             return None;
         }
         Some(Self {
-            breakers: super::calls::breakers(program),
+            breakers,
             costs: program
                 .functions()
                 .iter()

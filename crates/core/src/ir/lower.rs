@@ -132,6 +132,8 @@ fn lower_with(
         callees,
         refused: std::cell::RefCell::default(),
         looping: std::cell::RefCell::default(),
+        round: std::cell::RefCell::default(),
+        onward: std::cell::RefCell::default(),
         arguments: arguments.map(|at| {
             let made = (wanted == Arguments::Made)
                 .then(|| making_arguments(&mut machine, routines, bytes));
@@ -297,6 +299,7 @@ fn declare<'a>(
 ) -> Result<Vec<Callee<'a>>, String> {
     let (program, facts) = (demand.program, demand.facts);
     let mut callees = Vec::with_capacity(program.functions().len());
+    let written = written_where_called(demand, entry);
     for (at, reached) in demand.reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if id == entry {
@@ -332,7 +335,7 @@ fn declare<'a>(
             .collect();
         // External functions carry the provider's machine contract. They
         // share function IDs and calls with bodies, not the narrowing policy.
-        if once_round(program, &demand.reached, id) {
+        if written[at] {
             let (params, returns) = demand.signature(id);
             callees.push(Callee::Inline { params, returns });
             continue;
@@ -385,12 +388,76 @@ fn declare<'a>(
     Ok(callees)
 }
 
+/// Which loops are written where they are called rather than as functions
+/// of their own: each called from one place besides itself, or from one
+/// place besides itself and the loops it holds. A loop it holds is written
+/// where it answers and goes on to its next round only by calling it as
+/// what it answers, which lowering makes leave for that round rather than
+/// call it; so that one place must hold it too, being a function lowered
+/// as a loop, other than the entry, or held itself.
+fn written_where_called(demand: &Demand<'_>, entry: barb::FnId) -> Vec<bool> {
+    let program = demand.program;
+    let count = demand.reached.len();
+    let looping = loops(demand, entry);
+    let sites: Vec<Vec<(barb::FnId, barb::ExprId)>> = (0..count)
+        .map(|at| outside_calls(program, &demand.reached, barb::FnId::at(at)))
+        .collect();
+    let mut hosts: Vec<Option<(barb::FnId, barb::ExprId)>> = (0..count)
+        .map(|at| match sites[at].as_slice() {
+            &[site] if looping[at] => Some(site),
+            _ => None,
+        })
+        .collect();
+    loop {
+        let mut more = false;
+        for at in 0..count {
+            if !looping[at] || hosts[at].is_some() {
+                continue;
+            }
+            let id = barb::FnId::at(at);
+            let rest: Vec<_> = sites[at]
+                .iter()
+                .filter(|&&(caller, _)| !held_in(program, &hosts, entry, caller, id))
+                .collect();
+            let &[&site] = rest.as_slice() else {
+                continue;
+            };
+            hosts[at] = Some(site);
+            if held_in(program, &hosts, entry, id, site.0) {
+                more = true;
+            } else {
+                hosts[at] = None;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    hosts.iter().map(Option::is_some).collect()
+}
+
+/// Which definitions reached are loops lowering may write where they are
+/// called: neither the entry nor answered by the tier below.
+fn loops(demand: &Demand<'_>, entry: barb::FnId) -> Vec<bool> {
+    let (program, facts) = (demand.program, demand.facts);
+    (0..demand.reached.len())
+        .map(|at| {
+            let id = barb::FnId::at(at);
+            demand.reached[at]
+                && id != entry
+                && facts.operation(id).is_none()
+                && facts.float(id).is_none()
+                && facts.sequence_operation(id).is_none()
+                && goes_round_or_leaves(program, id)
+        })
+        .collect()
+}
+
 /// Whether `id` goes round by calling itself only as what it answers, and
-/// is called from one place besides: a loop that place may as well hold.
-/// One answering nothing is left a function, since it never leaves, and so
-/// is one every path of which goes round again: nothing follows a loop that
-/// never leaves.
-fn once_round(program: &barb::Program, reached: &[bool], id: barb::FnId) -> bool {
+/// leaves on some path: a loop. One answering nothing is left a function,
+/// since it never leaves, and so is one every path of which goes round
+/// again: nothing follows a loop that never leaves.
+fn goes_round_or_leaves(program: &barb::Program, id: barb::FnId) -> bool {
     let Some(body) = program.function(id).body() else {
         return false;
     };
@@ -398,24 +465,75 @@ fn once_round(program: &barb::Program, reached: &[bool], id: barb::FnId) -> bool
         return false;
     }
     let tails = tail_calls(program, id, body);
-    if tails.is_empty() || !leaves(program, id, body) {
-        return false;
-    }
-    let mut outside = 0;
+    !tails.is_empty()
+        && leaves(program, id, body)
+        && calls_of(program, body, id)
+            .iter()
+            .all(|expr| tails.contains(expr))
+}
+
+/// Every call of `id` from a function reached other than itself, and where.
+fn outside_calls(
+    program: &barb::Program,
+    reached: &[bool],
+    id: barb::FnId,
+) -> Vec<(barb::FnId, barb::ExprId)> {
+    let mut found = Vec::new();
     for (at, &reached) in reached.iter().enumerate() {
         let caller = barb::FnId::at(at);
-        let Some(held) = program.function(caller).body().filter(|_| reached) else {
+        let Some(body) = program
+            .function(caller)
+            .body()
+            .filter(|_| reached && caller != id)
+        else {
             continue;
         };
-        for expr in calls_of(program, held, id) {
-            if caller != id {
-                outside += 1;
-            } else if !tails.contains(&expr) {
-                return false;
-            }
+        found.extend(
+            calls_of(program, body, id)
+                .into_iter()
+                .map(|expr| (caller, expr)),
+        );
+    }
+    found
+}
+
+/// Whether the loop `held`, written where it is called, is written where
+/// `host` answers and calls `host` only as what it answers, with `host`
+/// lowered as a loop for it to go on to: a function of its own other than
+/// the entry, or held itself.
+fn held_in(
+    program: &barb::Program,
+    hosts: &[Option<(barb::FnId, barb::ExprId)>],
+    entry: barb::FnId,
+    held: barb::FnId,
+    host: barb::FnId,
+) -> bool {
+    let mut held = held;
+    let mut host = host;
+    // A chain of hosts is no longer than there are functions.
+    for _ in 0..hosts.len() {
+        let Some((called_from, site)) = hosts[held.index()] else {
+            return false;
+        };
+        let (Some(holding), Some(body)) =
+            (program.function(host).body(), program.function(held).body())
+        else {
+            return false;
+        };
+        let onward = tail_calls(program, host, body);
+        if called_from != host
+            || !tails(program, holding).contains(&site)
+            || onward.is_empty()
+            || calls_of(program, body, host).len() != onward.len()
+        {
+            return false;
+        }
+        match hosts[host.index()] {
+            None => return host != entry,
+            Some((outer, _)) => (held, host) = (host, outer),
         }
     }
-    outside == 1
+    false
 }
 
 /// Every call of `id` in `body`.
@@ -453,15 +571,23 @@ fn leaves(program: &barb::Program, id: barb::FnId, body: barb::Body) -> bool {
 
 /// The calls of `id` in `body` that are what it answers.
 fn tail_calls(program: &barb::Program, id: barb::FnId, body: barb::Body) -> Vec<barb::ExprId> {
+    tails(program, body)
+        .into_iter()
+        .filter(|&expr| matches!(program.expr(expr), barb::Expr::Call(callee, _) if callee == id))
+        .collect()
+}
+
+/// What `body` answers: its tail, and the tails of each arm of a match
+/// there.
+fn tails(program: &barb::Program, body: barb::Body) -> Vec<barb::ExprId> {
     let mut found = Vec::new();
     let mut waiting = vec![body];
     while let Some(body) = waiting.pop() {
         match program.expr(body.tail) {
-            barb::Expr::Call(callee, _) if callee == id => found.push(body.tail),
             barb::Expr::Match(_, arms) => {
                 waiting.extend(program.arms(arms).iter().map(|arm| arm.body));
             }
-            _ => {}
+            _ => found.push(body.tail),
         }
     }
     found
@@ -1824,6 +1950,18 @@ fn yielded(b: &mut super::Builder, answer: Answer<Held>, classes: &[Class]) {
     }
 }
 
+/// A function lowered as a loop, and the loops it holds where it answers
+/// that call it in tail position: inner loops whose rounds go on to its next
+/// one, as a loop nested in another goes on to the outer loop's next round
+/// when it ends.
+struct Round {
+    id: barb::FnId,
+    held: Vec<barb::FnId>,
+    /// What it goes round with, one class per machine value.
+    params: Vec<Class>,
+    destination: ReturnTo,
+}
+
 #[derive(Clone)]
 enum ReturnTo {
     Entry,
@@ -1889,6 +2027,13 @@ struct Lowering<'a> {
     /// The function being lowered as a loop, and the calls of itself in
     /// tail position, each of which goes round again rather than calling.
     looping: std::cell::RefCell<Option<(barb::FnId, Vec<barb::ExprId>)>>,
+    /// The loops being lowered whose held loops go on to their next round,
+    /// the innermost last: the function's own, and each held loop inside it.
+    round: std::cell::RefCell<Vec<Round>>,
+    /// The calls, in tail position, that a held loop makes of the function
+    /// holding it, each of which leaves the held loop for the function's
+    /// next round.
+    onward: std::cell::RefCell<Vec<barb::ExprId>>,
     /// Where among the entry's parameters the arguments' count and array
     /// are, and the routine making the list of strings from them, where the
     /// program reads the list.
@@ -1987,12 +2132,12 @@ impl Lowering<'_> {
                     .map_or_else(Vec::new, |carried| self.classes(&carried).to_vec()),
             )
         };
-        let tails = if entry {
-            Vec::new()
+        let (tails, held) = if entry {
+            (Vec::new(), Vec::new())
         } else {
-            self.tail_calls(id, body)
+            (self.tail_calls(id, body), self.held_rounds(id, body))
         };
-        if tails.is_empty() {
+        if tails.is_empty() && held.is_empty() {
             machine.try_define(into, |b, params| {
                 let params = if entry {
                     self.arguments_made(b, params)
@@ -2005,7 +2150,7 @@ impl Lowering<'_> {
                 returned(b, answer, &destination)
             })?;
         } else {
-            self.looped(machine, (id, into), (body, tails), &destination)?;
+            self.looped(machine, (id, into), (body, tails, held), &destination)?;
         }
         // A body is built before this can be read: emission answers values,
         // and what it could not lay out is said once, here, where lowering
@@ -2093,15 +2238,23 @@ impl Lowering<'_> {
     /// A function calling itself in tail position, which goes round again
     /// instead: the body is a loop over the parameters, and it leaves by
     /// returning. However deep the recursion, the stack is one frame deep.
+    /// So too where a loop it holds calls it: that call goes round again,
+    /// from inside the held loop.
     fn looped(
         &self,
         machine: &mut Program,
         (id, into): (barb::FnId, FunctionId),
-        (body, tails): (barb::Body, Vec<barb::ExprId>),
+        (body, tails, held): (barb::Body, Vec<barb::ExprId>, Vec<barb::FnId>),
         destination: &ReturnTo,
     ) -> Result<(), String> {
         *self.looping.borrow_mut() = Some((id, tails));
         let defined = machine.try_define(into, |b, params| {
+            self.round.borrow_mut().push(Round {
+                id,
+                held,
+                params: b.takes(into).to_vec(),
+                destination: destination.clone(),
+            });
             let mut lowered = Ok(());
             b.loop_(params, &[], |b, state| {
                 let mut locals = self.parameters(b, id, state);
@@ -2112,7 +2265,80 @@ impl Lowering<'_> {
             lowered
         });
         self.looping.borrow_mut().take();
+        self.round.borrow_mut().clear();
         defined
+    }
+
+    /// The loops `body` holds where it answers, each written there, that go
+    /// on to another round of `id` by calling it, and only in tail position:
+    /// what [`held_in`] says, for a loop being lowered.
+    fn held_rounds(&self, id: barb::FnId, body: barb::Body) -> Vec<barb::FnId> {
+        tails(self.barb, body)
+            .into_iter()
+            .filter_map(|expr| match self.barb.expr(expr) {
+                barb::Expr::Call(callee, _)
+                    if callee != id
+                        && matches!(self.callees[callee.index()], Callee::Inline { .. }) =>
+                {
+                    let held = self.barb.function(callee).body()?;
+                    let onward = tail_calls(self.barb, id, held);
+                    let all = calls_of(self.barb, held, id);
+                    (!onward.is_empty() && all.len() == onward.len()).then_some(callee)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The function being lowered as a loop, where `id` is a loop it holds
+    /// that goes on to its next round: what that round takes, and how the
+    /// function answers.
+    fn holding(&self, id: barb::FnId) -> Option<(barb::FnId, Vec<Class>, ReturnTo)> {
+        let round = self.round.borrow();
+        let round = round.last().filter(|round| round.held.contains(&id))?;
+        Some((round.id, round.params.clone(), round.destination.clone()))
+    }
+
+    /// A loop held where the function lowered as a loop answers, which goes
+    /// on to the function's next round by calling it: written as a loop
+    /// there, left with the next round's arguments, after which the function
+    /// goes round. What else it answers, the function answers, from inside
+    /// it. Calling the function from inside would leave a frame on the
+    /// stack for every round of the function.
+    fn held(
+        &self,
+        b: &mut super::Builder,
+        id: barb::FnId,
+        args: &[ValueId],
+        (outer, params, destination): (barb::FnId, Vec<Class>, ReturnTo),
+    ) {
+        let body = self.barb.function(id).body().expect("a loop has a body");
+        let tails = self.tail_calls(id, body);
+        let onward = tail_calls(self.barb, outer, body);
+        let Callee::Inline { params: own, .. } = &self.callees[id.index()] else {
+            unreachable!("a held loop is written where it is called");
+        };
+        // It may hold loops of its own, which go on to its next round.
+        self.round.borrow_mut().push(Round {
+            id,
+            held: self.held_rounds(id, body),
+            params: own.clone(),
+            destination: destination.clone(),
+        });
+        let looping = self.looping.replace(Some((id, tails)));
+        let leaving = self.onward.replace(onward);
+        let next = b.loop_(args, &params, |b, state| {
+            let mut locals = self.parameters(b, id, state);
+            let mut statics = vec![None; locals.len()];
+            let answer = self.body(b, body, &mut locals, &mut statics);
+            if let Err(why) = returned(b, answer, &destination) {
+                self.refuse(why);
+            }
+        });
+        *self.looping.borrow_mut() = looping;
+        *self.onward.borrow_mut() = leaving;
+        self.round.borrow_mut().pop();
+        b.continue_(&next);
     }
 
     /// Whether `expr` is a call of the function being lowered as a loop, to
@@ -2657,6 +2883,15 @@ impl Lowering<'_> {
             }
             Callee::Inline { params, returns } => {
                 let mut args = self.call_arguments(function, arguments, locals);
+                // A held loop going on to the next round of a held loop
+                // holding it leaves for it.
+                if self.onward.borrow().contains(&expr) {
+                    for (arg, &wanted) in args.iter_mut().zip(params) {
+                        *arg = met(b, *arg, wanted);
+                    }
+                    b.break_(&args);
+                    return Answer::Never;
+                }
                 if self.goes_round(expr) {
                     for (arg, &wanted) in args.iter_mut().zip(params) {
                         *arg = met(b, *arg, wanted);
@@ -2672,6 +2907,10 @@ impl Lowering<'_> {
                         *arg = b.convert(wanted, *arg);
                     }
                 }
+                if let Some(holding) = self.holding(function) {
+                    self.held(b, function, &args, holding);
+                    return Answer::Never;
+                }
                 (self.inlined(b, function, &args, returns), None)
             }
             Callee::Function(callee) => {
@@ -2683,6 +2922,12 @@ impl Lowering<'_> {
                 }
                 if self.goes_round(expr) {
                     b.continue_(&args);
+                    return Answer::Never;
+                }
+                // A held loop going on to the next round of the function
+                // holding it leaves for it.
+                if self.onward.borrow().contains(&expr) {
+                    b.break_(&args);
                     return Answer::Never;
                 }
                 (b.call(callee, &args), None)
@@ -4059,6 +4304,12 @@ impl Lowering<'_> {
             // A call of itself in tail position goes round again rather
             // than answering here.
             barb::Expr::Call(..) if self.goes_round(expr) => Answer::Never,
+            // So does a held loop, and its call of the function holding it.
+            barb::Expr::Call(function, _)
+                if self.holding(function).is_some() || self.onward.borrow().contains(&expr) =>
+            {
+                Answer::Never
+            }
             barb::Expr::Call(function, _) => {
                 let ty = self.barb.function(function).result;
                 self.answer(ty)

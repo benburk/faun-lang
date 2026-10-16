@@ -113,6 +113,23 @@ pub(super) fn inline_with_identities(program: &mut Program, limits: InlineLimits
     rewrite(program, inlining, rules, FoldLimits::default(), None);
 }
 
+/// Inline the definitions that keep a round of calls apart, and nothing
+/// else: no identity, no folding. The stages after inlining change what
+/// calls what -- simplifying a walk over a list it knows has one element
+/// makes it call on rather than round -- and can leave two definitions
+/// calling each other where neither did before, which only becomes a loop
+/// below once one is copied into the other.
+pub(super) fn join_rounds(program: &mut Program) {
+    let inlining = Inlining::joining(program, InlineLimits::default());
+    rewrite(
+        program,
+        inlining,
+        Rules::default(),
+        FoldLimits::default(),
+        None,
+    );
+}
+
 /// Constant folding alone: the walk evaluating what it can, without the
 /// identities or algebra.
 #[cfg(test)]

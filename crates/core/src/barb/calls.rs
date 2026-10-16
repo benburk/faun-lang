@@ -62,6 +62,20 @@ pub(super) fn breakers(program: &Program) -> Vec<bool> {
     breaker
 }
 
+/// The definitions a pass joining rounds keeps whole: every breaker, and
+/// every definition in a round of its own, which calls nothing that comes
+/// back to it but itself. The rest are what keeps two definitions calling
+/// each other apart, and copying them into their callers joins them.
+pub(super) fn apart(program: &Program) -> Vec<bool> {
+    let mut kept = breakers(program);
+    for round in rounds(&graph(program)) {
+        if round.len() == 1 {
+            kept[round[0].index()] = true;
+        }
+    }
+    kept
+}
+
 /// Every definition, each after everything it calls, but for those calling
 /// each other, which come together in no particular order.
 pub(super) fn callees_first(program: &Program) -> Vec<FnId> {

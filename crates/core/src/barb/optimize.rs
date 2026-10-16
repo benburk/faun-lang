@@ -13,7 +13,8 @@ use super::{InlineLimits, Program};
 /// identities, fusion, writing a walk over a list in place, simplification -- evaluating what is known, the
 /// identities and combining constants, in one walk -- copies of a loop for
 /// the known values its callers hand it and the values they all hand alike,
-/// simplified again where they bound something, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
+/// simplified again where they bound something, joining what still calls
+/// round through another definition, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
 /// aliases and unused inert bindings, never calls or matches whose
 /// evaluation may have effects. Inlining and folding stop at their fixed
 /// budgets, which bound work rather than choose what is done.
@@ -29,6 +30,7 @@ pub fn optimize(program: &mut Program) {
     super::inplace::in_place(program);
     super::normalize::simplify(program);
     super::specialize::specialize(program);
+    super::normalize::join_rounds(program);
     super::sweep::sweep(program);
     super::cleanup::cleanup(program);
 }

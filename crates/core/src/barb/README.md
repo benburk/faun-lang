@@ -405,15 +405,22 @@ two types -- so nothing infers a provider or an effect from the display name.
    of that value -- a known sequence's length, a match on it -- is answered
    too. Simplifying one copy again skips call-graph construction and
    ordering; several keep callee-first order and the same budgets.
-9. Sweep: where there is an entry, drop every definition it does not reach,
-   renumbering function IDs in order. Types, constructors and constants stay.
-10. Effect-safe cleanup: remove aliases, unused inert terms -- constructors,
+9. Joining rounds: inlining again, of only the definitions keeping a round
+   apart -- in a round with others, and no breaker -- with no identity or
+   folding. Simplifying and specializing change what calls what: a walk over
+   a list known to hold one element calls on rather than round, and a loop
+   nested in two others can be left as two definitions calling each other,
+   neither of them calling itself. Copying the one into the other leaves a
+   definition calling itself, which machine lowering makes a loop.
+10. Sweep: where there is an entry, drop every definition it does not reach,
+    renumbering function IDs in order. Types, constructors and constants stay.
+11. Effect-safe cleanup: remove aliases, unused inert terms -- constructors,
     calls of pure definitions, and matches whose arms are all inert -- and
     retain calls reaching an external routine. Inert work read only inside
     one arm of a later match moves to the top of that arm, so the other arms
     do none of it.
 
-Every normalizing stage (1, 4 and 7) also decides what is already decided: a
+Every normalizing stage (1, 4, 7 and 9) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
