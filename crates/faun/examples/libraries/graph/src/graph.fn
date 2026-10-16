@@ -15,8 +15,9 @@
 # `components` asks for every edge once, which only an undirected one does.
 #
 # `edge` is what a search asks, `adjacency` how both graphs build their
-# lists, `table` what every search keeps, `walk` the walks, which are each
-# one worklist, and `components`, `dijkstra` and `toposort` the rest.
+# lists, `walk` the walks, which are each one worklist, and `components`,
+# `dijkstra` and `toposort` the rest. Each table a search keeps is written
+# with `List.put`.
 
 package {
   heap: "../../heap/src/heap"

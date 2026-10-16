@@ -5,28 +5,29 @@
 # each node, which only a directed graph answers.
 
 import edge {Walkable}
-import table {put}
 
 export {toposort}
 
 # Every node, each before the targets of the edges leaving it, or `Cycle`
 # where edges go round and no such order exists. Of the nodes ready at
-# once, the latest made ready goes first.
+# once, the latest made ready goes first, and of those ready from the
+# start, the least.
 toposort : g -> Result(List(Nat), [Cycle]) where
   Walkable(g, e),
   g.in_degree : (g, Nat) -> Nat
 toposort(graph) -> (
   nodes = List.range(graph.node_count())
   degrees = nodes.map(|node| graph.in_degree(node))
-  ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
+  sources = nodes.filter(|node| degrees.get_or(node, 0) == 0)
+  ready = sources.reverse()
   order = []
-  while ready is [node, *ready] do (
+  while ready is [*ready, node] do (
     order = order.append(node)
     for edge in graph.edges_from(node) do (
       degree = degrees.get_or(edge.target, 0) - 1
-      degrees = put(degrees, edge.target, degree)
+      degrees = degrees.put(edge.target, degree)
       if degree > 0 continue
-      ready = ready.prepend(edge.target)
+      ready = ready.append(edge.target)
     )
   )
   # A node never ready was on a cycle.

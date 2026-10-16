@@ -6,8 +6,7 @@
 # component.
 
 import edge {Walkable, targets}
-import table {put}
-import walk {groups_from, drain_stack}
+import walk {groups_from, unseen}
 
 export {components, strong_components}
 
@@ -38,7 +37,7 @@ joined : (List(Nat), (Nat, Nat, e)) -> List(Nat)
 joined(parents, (one, other, _)) -> (
   first = root(parents, one)
   second = root(parents, other)
-  put(parents, first.max(second), first.min(second))
+  parents.put(first.max(second), first.min(second))
 )
 
 # `node` added to the group its root names.
@@ -46,7 +45,7 @@ gathered : (List(Nat), List(List(Nat)), Nat) -> List(List(Nat))
 gathered(parents, groups, node) -> (
   named = root(parents, node)
   held = groups.get_or(named, [])
-  put(groups, named, held.append(node))
+  groups.put(named, held.append(node))
 )
 
 # The nodes grouped by which reach which both ways, each group in the order
@@ -63,26 +62,26 @@ strong_components(graph) -> (
 
 Step = [Enter(Nat), Leave(Nat)]
 
-Leaving = {seen: List(Bool), left: List(Nat)}
-
 # Every node in the order a depth-first walk from each node in turn leaves
-# it: after every node it was first to reach.
+# it: after every node it was first to reach. Entering a node not entered
+# before follows each of its edges and then leaves it; leaving it records
+# it.
 leaving_order : g -> List(Nat) where Walkable(g, e)
 leaving_order(graph) -> (
-  count = graph.node_count()
-  start = {seen: List.repeat(False, count), left: []}
-  nodes = List.range(count)
-  walked = nodes.fold(start, |state, node| drain_stack([Enter(node)], state, |leaving, step| take(graph, leaving, step)))
-  walked.left
+  seen = unseen(graph)
+  left = []
+  for node in List.range(graph.node_count()) do (
+    steps = [Enter(node)]
+    while steps is [*steps, step] do (
+      left = if step is Leave(done) then left.append(done) else left
+      step is Enter(next) else continue
+      if seen.get_or(next, True) continue
+      seen = seen.put(next, True)
+      edges = graph.edges_from(next)
+      entering = targets(edges).map(|target| Enter(target))
+      leaving = steps.append(Leave(next))
+      steps = leaving.concat(entering.reverse())
+    )
+  )
+  left
 )
-
-# Entering a node not entered before follows each of its edges and then
-# leaves it; leaving it records it.
-take : (g, Leaving, Step) -> (Leaving, List(Step)) where Walkable(g, e)
-take(_, leaving, Enter(node)) if leaving.seen.get_or(node, True) -> (leaving, [])
-take(graph, {seen, left}, Enter(node)) -> (
-  edges = graph.edges_from(node)
-  entering = targets(edges).map(|target| Enter(target))
-  ({seen: put(seen, node, True), left}, entering.append(Leave(node)))
-)
-take(_, {seen, left}, Leave(node)) -> ({seen, left: left.append(node)}, [])

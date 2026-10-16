@@ -4,7 +4,6 @@
 # the heap. Each node is settled once and pushes each of its edges once.
 
 import edge {Walkable}
-import table {put}
 import heap {Heap}
 
 export {dijkstra, Paths, Weight}
@@ -39,7 +38,7 @@ dijkstra(graph, source) -> (
 settle : (g, Settled(e), Nat, Step(e)) -> (Settled(e), List((e, {node: Nat, from: Nat}))) where Walkable(g, e), Weight(e)
 settle(_, settled, node, step) if settled.get_or(node, Ok(step)) is Ok(_) -> (settled, [])
 settle(graph, settled, node, step) -> (
-  marked = put(settled, node, Ok(step))
+  marked = settled.put(node, Ok(step))
   edges = graph.edges_from(node)
   onward = edges.map(|edge| (step.cost + edge.weight, {node: edge.target, from: node}))
   (marked, onward)
