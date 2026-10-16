@@ -84,7 +84,7 @@ fn runtime_shapes_distinguish_sequences_from_other_spines_and_aggregates() {
 #[test]
 fn addition_is_recognised_and_its_near_miss_is_not() {
     let program = crate::programs::two_and_two_in_barb();
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     let add = FnId::at(0);
     assert_eq!(program.name(program.function(add).name), "add");
     assert_eq!(facts.operation(add), Some(Operation::Add));
@@ -111,7 +111,7 @@ fn addition_is_recognised_and_its_near_miss_is_not() {
             _ => unreachable!("Nat takes at most one field"),
         })
     });
-    assert_eq!(analyzed(&program).operation(wrong), None);
+    assert_eq!(program.analyze().operation(wrong), None);
 }
 
 /// Recognized arithmetic works on the compact magnitude, not the unary tree.

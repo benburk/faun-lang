@@ -213,7 +213,7 @@ pub fn compile_barb_to_image(
     }
     barb::optimize(&mut barb);
     let machine =
-        faun_core::lower_to_machine_ir(&mut barb, &target.routines()).map_err(Diagnostic::new)?;
+        faun_core::lower_to_machine_ir(&barb, &target.routines()).map_err(Diagnostic::new)?;
     target.compile_machine_ir(&machine).map_err(Diagnostic::new)
 }
 

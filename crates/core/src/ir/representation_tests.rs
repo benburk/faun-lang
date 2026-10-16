@@ -24,7 +24,7 @@ fn routines() -> Routines {
 }
 
 fn lower_program(source: &barb::Program) -> Result<Program, String> {
-    lower(&mut source.clone(), &routines())
+    lower(&source.clone(), &routines())
 }
 
 /// Natural arithmetic, the host, a byte held as eight flags and a signed
@@ -211,7 +211,7 @@ fn unused_library_types_and_functions_do_not_need_runtime_representations() {
     barb::optimize(&mut optimized);
     for machine in [
         lower_program(&source).unwrap(),
-        crate::lower_to_machine_ir(&mut optimized, &routines()).unwrap(),
+        crate::lower_to_machine_ir(&optimized, &routines()).unwrap(),
     ] {
         validate(&machine).unwrap();
         assert_eq!(bodies(&machine), 1, "only main is emitted");
@@ -260,7 +260,7 @@ fn default_pipeline_removes_folded_library_temporaries() {
         });
         let mut optimized = source.clone();
         barb::optimize(&mut optimized);
-        let machine = crate::lower_to_machine_ir(&mut optimized, &routines()).unwrap();
+        let machine = crate::lower_to_machine_ir(&optimized, &routines()).unwrap();
         validate(&machine).unwrap();
         assert_eq!(bodies(&machine), 1);
         assert_eq!(externals(&machine), 1, "only exit remains");
@@ -274,7 +274,7 @@ fn default_pipeline_removes_folded_library_temporaries() {
         barb::structural(&mut uncleaned);
         barb::normalize_with_limits(&mut uncleaned, barb::InlineLimits::default());
         barb::fold(&mut uncleaned);
-        let uncleaned = crate::lower_to_machine_ir(&mut uncleaned, &routines()).unwrap();
+        let uncleaned = crate::lower_to_machine_ir(&uncleaned, &routines()).unwrap();
         validate(&uncleaned).unwrap();
     }
 }
@@ -362,7 +362,7 @@ fn default_pipeline_accepts_runtime_product_programs() {
     for byte in [true, false] {
         let mut source = runtime_product(byte);
         barb::optimize(&mut source);
-        let machine = crate::lower_to_machine_ir(&mut source, &routines()).unwrap();
+        let machine = crate::lower_to_machine_ir(&source, &routines()).unwrap();
         validate(&machine).unwrap();
     }
 }
@@ -487,9 +487,9 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
         b.call(world.exit, &[args[0], sum])
     });
     source.set_entry(main);
-    let facts = barb::analyzed(&source);
+    let facts = source.analyze();
     assert_eq!(facts.operation(add), Some(barb::Operation::Add));
-    let machine = lower(&mut source, &routines).unwrap();
+    let machine = lower(&source, &routines).unwrap();
     assert_eq!(bodies(&machine), 1, "add becomes an instruction");
 }
 

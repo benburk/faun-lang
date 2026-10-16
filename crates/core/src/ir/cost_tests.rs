@@ -48,7 +48,7 @@ impl Cost {
 /// Lower, legalize and run a Barb program's entry, checking that it frees
 /// everything it built.
 fn cost(source: &barb::Program) -> Cost {
-    let machine = lower(&mut source.clone(), &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&source.clone(), &Routines::builtin().with_word(64)).unwrap();
     let config = natural::Config {
         word_bits: 64,
         heap_bytes: HEAP_BYTES,
@@ -254,7 +254,7 @@ fn only_what_a_function_consumes_is_owned() {
         b.known(nought)
     });
     source.set_entry(twice);
-    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&source, &Routines::builtin().with_word(64)).unwrap();
     let owned = ownership::owned_parameters(&machine);
     let lowered = |name: &str| {
         machine

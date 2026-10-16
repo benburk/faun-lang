@@ -23,7 +23,7 @@ pub mod targets;
 ///
 /// Names what the machine tier cannot represent.
 pub fn lower_to_machine_ir(
-    program: &mut barb::Program,
+    program: &barb::Program,
     routines: &platform::Routines,
 ) -> Result<ir::Program, String> {
     let held = ir::lower(program, routines)?;

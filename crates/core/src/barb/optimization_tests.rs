@@ -194,7 +194,7 @@ fn affine_facts_collect_shared_linear_terms_without_synthesizing_calls() {
     });
     validate(&program).unwrap();
 
-    let facts = crate::barb::analyzed(&program);
+    let facts = program.analyze();
     let tail = program.function(test).body().unwrap().tail;
     let affine = facts.affine(tail).expect("a bounded affine summary");
     assert_eq!(affine.constant, 6);
@@ -220,7 +220,7 @@ fn affine_facts_stop_at_nonlinear_products_and_the_term_limit() {
     });
     validate(&program).unwrap();
 
-    let facts = crate::barb::analyzed(&program);
+    let facts = program.analyze();
     for id in [nonlinear, crowded] {
         let tail = program.function(id).body().unwrap().tail;
         assert!(facts.affine(tail).is_none(), "{}", program.render());

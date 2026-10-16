@@ -62,7 +62,7 @@ pub(super) fn machine(
 ) -> Result<Program, String> {
     barb::validate(&program)?;
     barb::optimize(&mut program);
-    crate::lower_to_machine_ir(&mut program, routines)
+    crate::lower_to_machine_ir(&program, routines)
 }
 
 /// A width is what a value needs, so a value needing fewer bits than what
@@ -245,7 +245,7 @@ fn two_names_may_give_the_same_routine() {
         consumes: false,
     });
 
-    let machine = lower(&mut program, &routines).expect("a representable program");
+    let machine = lower(&program, &routines).expect("a representable program");
     let held: Vec<&str> = machine
         .functions()
         .iter()
@@ -297,7 +297,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         });
         program.set_entry(main);
 
-        lower(&mut program, &routines)
+        lower(&program, &routines)
     };
 
     held(9).expect("a value inside four bits");
@@ -342,7 +342,7 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
         b.call(world.exit, &[args[0], status])
     });
     source.set_entry(main);
-    let program = lower(&mut source, &routines).unwrap();
+    let program = lower(&source, &routines).unwrap();
     let unwrap = program
         .functions()
         .iter()

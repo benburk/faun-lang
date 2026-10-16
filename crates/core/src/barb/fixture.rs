@@ -214,9 +214,8 @@ mod tests {
 
     #[test]
     fn every_operation_is_recognised_from_its_equations() {
-        let mut library = Library::new();
-        library.program.analyze();
-        let facts = library.program.facts().expect("just analyzed");
+        let library = Library::new();
+        let facts = library.program.analyze();
         for (id, expected) in [
             (library.add, Operation::Add),
             (library.sub, Operation::Monus),

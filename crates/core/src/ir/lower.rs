@@ -75,7 +75,7 @@ mod tests;
 ///
 /// Names a program with no entry, which has nothing to run, and the first
 /// type whose representation is not decided.
-pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program, String> {
+pub fn lower(program: &barb::Program, routines: &Routines) -> Result<Program, String> {
     lower_with(program, routines, Arguments::Made)
 }
 
@@ -85,7 +85,7 @@ pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program
 /// # Errors
 /// As [`lower`].
 pub fn lower_counting_arguments(
-    program: &mut barb::Program,
+    program: &barb::Program,
     routines: &Routines,
 ) -> Result<Program, String> {
     lower_with(program, routines, Arguments::Counted)
@@ -105,14 +105,13 @@ enum Arguments {
 }
 
 fn lower_with(
-    program: &mut barb::Program,
+    program: &barb::Program,
     routines: &Routines,
     wanted: Arguments,
 ) -> Result<Program, String> {
     barb::validate(program)?;
     let assumed = assumed(program, routines);
     let facts = &program.assuming(&assumed);
-    let program = &*program;
     let entry = program
         .entry()
         .ok_or("a program with no entry has nothing to run")?;

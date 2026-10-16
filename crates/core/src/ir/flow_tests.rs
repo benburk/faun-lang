@@ -267,7 +267,7 @@ fn source_never_functions_keep_their_contract_without_inlining() {
     let main = source.declare_named("main!", &[("host", world.host)], world.never);
     source.define(main, |b, args| b.call(finish, &[args[0]]));
     source.set_entry(main);
-    let p = lower(&mut source, &routines).unwrap();
+    let p = lower(&source, &routines).unwrap();
     validate(&p).unwrap();
     assert_eq!(
         p.functions().iter().filter(|f| f.body().is_some()).count(),

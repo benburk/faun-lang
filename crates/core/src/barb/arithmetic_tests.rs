@@ -213,7 +213,7 @@ fn library_equations_are_recognized_before_and_after_folding() {
     let mut program = library();
     validate(&program).unwrap();
     for _ in 0..2 {
-        let facts = analyzed(&program);
+        let facts = program.analyze();
         for (name, op) in [
             ("add", Operation::Add),
             ("sub", Operation::Monus),
@@ -244,16 +244,16 @@ fn library_equations_are_recognized_before_and_after_folding() {
 fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
     let program = variant(true, Miss::Nothing);
     assert_eq!(
-        analyzed(&program).operation(named(&program, "plus")),
+        program.analyze().operation(named(&program, "plus")),
         Some(Operation::Add)
     );
     assert_eq!(
-        analyzed(&program).operation(named(&program, "mod")),
+        program.analyze().operation(named(&program, "mod")),
         Some(Operation::Mod)
     );
     let program = variant(false, Miss::Nothing);
     assert_eq!(
-        analyzed(&program).operation(named(&program, "div")),
+        program.analyze().operation(named(&program, "div")),
         Some(Operation::Div)
     );
     for (miss, name) in [
@@ -266,7 +266,7 @@ fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
         let program = variant(false, miss);
         validate(&program).unwrap();
         assert_eq!(
-            analyzed(&program).operation(named(&program, name)),
+            program.analyze().operation(named(&program, name)),
             None,
             "{name}"
         );
@@ -385,7 +385,7 @@ fn an_early_exit_refines_the_continuation() {
     validate(&program).unwrap();
     normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     let body = program.function(program.entry().unwrap()).body().unwrap();
     let sum = program.bindings(body.bindings).iter().copied().find(|expr| {
         matches!(program.expr(*expr), Expr::Call(called, _) if facts.operation(called) == Some(Operation::Add))
@@ -397,7 +397,7 @@ fn an_early_exit_refines_the_continuation() {
             high: Some(2)
         }
     );
-    let machine = crate::ir::lower(&mut program, &routines).unwrap();
+    let machine = crate::ir::lower(&program, &routines).unwrap();
     assert!(
         (0..machine.values_count())
             .all(|at| machine.class(crate::ir::ValueId::at(at)) != crate::ir::Class::Natural)
@@ -454,7 +454,7 @@ fn range_propagation_observes_earlier_answers_in_the_same_round() {
     }
     program.set_entry(previous);
     validate(&program).unwrap();
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     for id in chain {
         assert_eq!(facts.answers(id), Bounds::at(7));
     }
@@ -697,7 +697,7 @@ fn a_field_holds_what_was_built_into_it() {
         b.call(outcome, &[held])
     });
     program.set_entry(main);
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     assert_eq!(facts.answers(outcome), Bounds::at(2));
     assert_eq!(facts.answers(count), Bounds::at(0));
     assert_eq!(facts.field(&program, pair_ctor, 0), Bounds::at(2));
@@ -721,7 +721,7 @@ fn a_field_built_out_of_sight_is_known_only_by_its_type() {
         b.match_(args[0], pair, |_, _, fields| fields[0])
     });
     program.set_entry(main);
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     assert_eq!(
         facts.answers(main),
         Bounds {
@@ -758,7 +758,7 @@ fn a_long_countdown_settles_with_nought_as_its_least() {
         b.call(down, &[start])
     });
     program.set_entry(main);
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     assert_eq!(
         facts.takes(down),
         [Bounds {
@@ -798,7 +798,7 @@ fn a_remainder_of_a_widened_count_stays_below_its_divisor() {
         b.call(sink, &[low])
     });
     program.set_entry(main);
-    let facts = analyzed(program);
+    let facts = program.analyze();
     let below = Bounds {
         low: 0,
         high: Some(255),
@@ -863,7 +863,7 @@ fn a_field_kept_below_a_width_is_widened_to_that_width() {
         b.call(copy, &[args[0], stepped])
     });
     program.set_entry(main);
-    let facts = analyzed(program);
+    let facts = program.analyze();
     let held = facts.field(program, make, 0);
     assert!(
         held.high
@@ -941,7 +941,7 @@ fn a_count_of_a_list_is_its_length() {
         for rest_first in [false, true] {
             let (program, count) = counted(step, rest_first);
             assert_eq!(
-                analyzed(&program).sequence_operation(count),
+                program.analyze().sequence_operation(count),
                 Some(SequenceOperation::Length),
                 "{step:?}, rest first: {rest_first}"
             );
@@ -956,7 +956,7 @@ fn a_near_miss_of_a_count_is_not_a_length() {
     for step in [Step::PlusElement, Step::Twice, Step::FromOne] {
         let (program, count) = counted(step, false);
         assert_eq!(
-            analyzed(&program).sequence_operation(count),
+            program.analyze().sequence_operation(count),
             None,
             "{step:?}"
         );
@@ -1003,10 +1003,10 @@ fn counted_walk(step: u64) -> (Program, FnId) {
 #[test]
 fn a_count_beside_a_walk_is_bounded_by_what_it_walks() {
     let (program, walk) = counted_walk(1);
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     assert_eq!(facts.takes(walk)[2].high, Some(5));
     // Stepped by two, the sum is not kept, and nothing bounds it.
     let (program, walk) = counted_walk(2);
-    let facts = analyzed(&program);
+    let facts = program.analyze();
     assert_ne!(facts.takes(walk)[2].high, Some(5));
 }

@@ -1,5 +1,6 @@
 //! Program storage, queries, and construction entry points.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::budget::Budget;
@@ -42,8 +43,6 @@ pub struct Program {
     /// worked out. Rewriting a body keeps what it means, so this outlives
     /// every optimization; only defining a body or a type forgets it.
     recognised: Derived<Recognised>,
-    /// What [`Self::analyze`] found, until anything it read changes.
-    facts: Derived<Option<Facts>>,
 }
 
 /// What was worked out from a program rather than said by it. Two programs
@@ -160,7 +159,6 @@ impl Program {
     /// than something owned, so replacing one is a store and nothing that
     /// named it has to hear about it.
     pub(super) fn write(&mut self, id: ExprId, expr: Expr) {
-        self.facts.0 = None;
         self.terms.write(id, expr);
     }
 
@@ -168,52 +166,61 @@ impl Program {
     /// sequence, by function: worked out the first time anything asks, and
     /// kept while bodies are only rewritten.
     pub(super) fn recognised(&mut self) -> &Recognised {
-        if self.recognised.0.operations.len() != self.functions.len() {
-            let operations = super::arithmetic::recognise(self);
-            let sequences = super::arithmetic::recognise_sequences(self, &operations);
-            let floats = self
-                .functions
-                .iter()
-                .map(|function| function.float)
-                .collect();
-            self.recognised.0 = Recognised {
-                operations,
-                sequences,
-                floats,
-            };
+        if !self.recognition_kept() {
+            self.recognised.0 = self.recognise();
         }
         &self.recognised.0
     }
 
-    /// Work out what every term, parameter, result and field can hold, and
-    /// keep it until the program changes. Lowering reads what this found;
-    /// the program is answered back so that reading follows directly.
-    pub fn analyze(&mut self) -> &Self {
-        let recognised = self.recognised().clone();
-        let facts = super::facts::analyze(self, recognised, &super::Assumed::default());
-        self.facts.0 = Some(facts);
-        self
+    /// The same, for a reader: what was kept where it still holds, and
+    /// otherwise worked out afresh and not kept.
+    fn recognition(&self) -> Cow<'_, Recognised> {
+        if self.recognition_kept() {
+            Cow::Borrowed(&self.recognised.0)
+        } else {
+            Cow::Owned(self.recognise())
+        }
+    }
+
+    /// Whether what was recognised was recognised of these functions: no
+    /// function has been added or taken away since, and nothing redefined.
+    const fn recognition_kept(&self) -> bool {
+        self.recognised.0.operations.len() == self.functions.len()
+    }
+
+    fn recognise(&self) -> Recognised {
+        let operations = super::arithmetic::recognise(self);
+        let sequences = super::arithmetic::recognise_sequences(self, &operations);
+        let floats = self
+            .functions
+            .iter()
+            .map(|function| function.float)
+            .collect();
+        Recognised {
+            operations,
+            sequences,
+            floats,
+        }
+    }
+
+    /// What every term, parameter, result and field can hold, as the
+    /// program alone says.
+    #[must_use]
+    pub fn analyze(&self) -> Facts {
+        self.assuming(&super::Assumed::default())
     }
 
     /// What analysis finds when values from outside the program are what
-    /// `assumed` says. The tier that knows a target asks this; the answer is
-    /// its own, and the program's facts stay what the program alone says.
-    pub fn assuming(&mut self, assumed: &super::Assumed) -> Facts {
-        let recognised = self.recognised().clone();
-        super::facts::analyze(self, recognised, assumed)
-    }
-
-    /// What [`Self::analyze`] found, where nothing it read has changed since.
+    /// `assumed` says. The tier that knows a target asks this.
     #[must_use]
-    pub const fn facts(&self) -> Option<&Facts> {
-        self.facts.0.as_ref()
+    pub fn assuming(&self, assumed: &super::Assumed) -> Facts {
+        super::facts::analyze(self, self.recognition().into_owned(), assumed)
     }
 
-    /// Forget everything worked out about this program: a declaration or a
-    /// body now says something it did not.
+    /// Forget what was recognised of this program: a declaration or a body
+    /// now says something it did not.
     pub(super) fn redefined(&mut self) {
         self.recognised.0 = Recognised::default();
-        self.facts.0 = None;
     }
 
     #[must_use]
@@ -488,8 +495,7 @@ impl Program {
     }
 
     /// The function a target enters.
-    pub fn set_entry(&mut self, id: FnId) {
-        self.facts.0 = None;
+    pub const fn set_entry(&mut self, id: FnId) {
         self.entry = Some(id);
     }
 
@@ -543,7 +549,6 @@ impl Program {
 
     /// Publish roots only after a pass has finished reading the original bodies.
     pub(super) fn replace_bodies(&mut self, bodies: Vec<(FnId, Body)>) {
-        self.facts.0 = None;
         for (id, body) in bodies {
             self.functions[id].define(body);
         }

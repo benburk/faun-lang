@@ -223,15 +223,15 @@ fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), Diagnost
     barb::optimize(&mut barb);
     let routines = target.routines();
     let text = match stage {
-        Stage::Barb => barb.analyze().render(),
+        Stage::Barb => barb.render_analyzed(&barb.analyze()),
         Stage::Machine => {
             let machine =
-                faun_core::lower_to_machine_ir(&mut barb, &routines).map_err(Diagnostic::new)?;
+                faun_core::lower_to_machine_ir(&barb, &routines).map_err(Diagnostic::new)?;
             machine.render()
         }
         Stage::Target => {
             let machine =
-                faun_core::lower_to_machine_ir(&mut barb, &routines).map_err(Diagnostic::new)?;
+                faun_core::lower_to_machine_ir(&barb, &routines).map_err(Diagnostic::new)?;
             let prepared = target.prepare(&machine).map_err(Diagnostic::new)?;
             target.render(&prepared)
         }

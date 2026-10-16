@@ -4,12 +4,23 @@ use std::fmt::Write;
 
 use super::model::{Body, ConstId, Expr, ExprId, FnId, Range, Symbol, TypeId};
 use super::program::Program;
-use super::{Operation, SequenceOperation};
+use super::{Facts, Operation, SequenceOperation};
 
 impl Program {
     /// The whole program: its types, then its functions.
     #[must_use]
     pub fn render(&self) -> String {
+        self.rendered(None)
+    }
+
+    /// The same, each definition `facts` recognizes as an operation shown
+    /// as that operation rather than its body.
+    #[must_use]
+    pub fn render_analyzed(&self, facts: &Facts) -> String {
+        self.rendered(Some(facts))
+    }
+
+    fn rendered(&self, facts: Option<&Facts>) -> String {
         let mut out = String::new();
         for id in 0..self.types().len() {
             let id = TypeId::at(id);
@@ -17,13 +28,13 @@ impl Program {
                 self.render_type(id, &mut out);
             }
         }
-        let shown = self.shown();
+        let shown = self.shown(facts);
         let mut hidden = Vec::new();
         for (at, &shown) in shown.iter().enumerate() {
             let id = FnId::at(at);
             if shown {
                 out.push('\n');
-                self.render_function(id, &mut out);
+                self.render_function(id, facts, &mut out);
             } else {
                 hidden.push(self.name(self.function(id).name));
             }
@@ -42,13 +53,13 @@ impl Program {
     /// by going into an answered definition's body. Those are what an
     /// answered operation's body is written with -- a target with the
     /// instruction never walks them -- and are only named.
-    fn shown(&self) -> Vec<bool> {
+    fn shown(&self, facts: Option<&Facts>) -> Vec<bool> {
         let count = self.functions().len();
         let Some(entry) = self.entry() else {
             return vec![true; count];
         };
-        let through = self.reached(entry, true);
-        let around = self.reached(entry, false);
+        let through = self.reached(entry, facts, true);
+        let around = self.reached(entry, facts, false);
         through
             .iter()
             .zip(around)
@@ -58,14 +69,14 @@ impl Program {
 
     /// Which definitions `entry` reaches, going into answered definitions'
     /// bodies only where `answered` says to.
-    fn reached(&self, entry: FnId, answered: bool) -> Vec<bool> {
+    fn reached(&self, entry: FnId, facts: Option<&Facts>, answered: bool) -> Vec<bool> {
         let mut reached = vec![false; self.functions().len()];
         let mut waiting = vec![entry];
         while let Some(id) = waiting.pop() {
             if std::mem::replace(&mut reached[id.index()], true) {
                 continue;
             }
-            if !answered && self.answered_as(id).is_some() {
+            if !answered && self.answered_as(id, facts).is_some() {
                 continue;
             }
             let Some(body) = self.function(id).body() else {
@@ -112,7 +123,7 @@ impl Program {
         };
     }
 
-    fn render_function(&self, id: FnId, out: &mut String) {
+    fn render_function(&self, id: FnId, facts: Option<&Facts>, out: &mut String) {
         let function = self.function(id);
         let params: Vec<String> = self
             .parameter_names(id)
@@ -126,7 +137,7 @@ impl Program {
             params.join(", "),
             self.name(self.type_(function.result).name)
         );
-        if let Some(answered) = self.answered_as(id) {
+        if let Some(answered) = self.answered_as(id, facts) {
             let _ = writeln!(out, " <{answered}>");
             return;
         }
@@ -141,14 +152,14 @@ impl Program {
     }
 
     /// What a definition is answered as rather than walked, where it is:
-    /// the IEEE 754 operation it is claimed to compute, or, once the program
-    /// is analyzed, the operation it was recognized as. Its body is the
+    /// the IEEE 754 operation it is claimed to compute, or, where `facts`
+    /// are given, the operation it was recognized as. Its body is the
     /// operation's equations and says nothing new, so it is not rendered.
-    fn answered_as(&self, id: FnId) -> Option<String> {
+    fn answered_as(&self, id: FnId, facts: Option<&Facts>) -> Option<String> {
         if let Some(float) = self.function(id).float {
             return Some(float.to_string());
         }
-        let facts = self.facts()?;
+        let facts = facts?;
         if let Some(operation) = facts.operation(id) {
             let name = match operation {
                 Operation::Add => "add",

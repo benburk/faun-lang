@@ -44,7 +44,7 @@ impl Hosted {
     /// Lower after running `stages`.
     fn lower(mut self, routines: &Routines, stages: impl FnOnce(&mut barb::Program)) -> Program {
         stages(&mut self.library.program);
-        let program = crate::lower_to_machine_ir(&mut self.library.program, routines).unwrap();
+        let program = crate::lower_to_machine_ir(&self.library.program, routines).unwrap();
         validate(&program).unwrap();
         program
     }
@@ -409,7 +409,7 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
     // Inlining, without the laws or folding that would decide the comparison.
     barb::structural(&mut p);
     barb::normalize_with_limits(&mut p, barb::InlineLimits::default());
-    let lowered = crate::ir::lower(&mut p, &routines).unwrap();
+    let lowered = crate::ir::lower(&p, &routines).unwrap();
     validate(&lowered).unwrap();
     let optimized = crate::ir::optimize(&lowered);
     validate(&optimized).unwrap();

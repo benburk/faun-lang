@@ -207,13 +207,14 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
   nonlinear products.
-- `facts.rs`: the fact tables. `Program` owns them. Recognition is worked out
-  the first time a pass asks and kept across rewrites, since rewriting a body
-  keeps what it means; defining a body or a type forgets it. `Program::analyze`
-  adds ranges and affine summaries, which any change to a body, declaration
-  or the entry drops, so `Program::facts` answers only facts about the program
-  as it stands. Lowering reads them there and refuses an unanalyzed program.
-  Facts attach to functions, types and fields where possible, because those
+- `facts.rs`: the fact tables. Recognition is the one table `Program` keeps:
+  worked out the first time a pass asks and kept across rewrites, since
+  rewriting a body keeps what it means; defining a body or a type forgets it.
+  A reader with only `&Program` uses what is kept where it still holds and
+  works it out afresh otherwise. `Program::analyze` and `Program::assuming`
+  answer ranges and affine summaries as a value, so facts are always about
+  the program as it stands; lowering asks `assuming` for its own. Facts
+  attach to functions, types and fields where possible, because those
   survive rewriting; expression-indexed facts do not.
 - `normalize.rs`: capture-free structural rebuilding; `inline.rs`: expansion
   eligibility, copy costs and budgets. Structural-only normalization does not
@@ -340,8 +341,8 @@ x    ::= a parameter, a binding, or a field an arm bound
 `Program::render` uses indentation to delimit match arms and nested bodies,
 without braces. Bodyless declarations keep `= <elsewhere>` on the signature
 line, and a definition answered rather than walked keeps what it is answered
-as there instead of its body: `<binary64 add>` for a claimed float, and, once
-the program is analyzed, `<add>` or `<prepend>` for a recognized operation.
+as there instead of its body: `<binary64 add>` for a claimed float, and, in
+`Program::render_analyzed`, `<add>` or `<prepend>` for a recognized operation.
 Where there is an entry, a definition it reaches only through such a body --
 soft-float helpers a target with the instruction never runs -- is named at
 the end rather than rendered. `faun emit barb` analyzes before rendering. Types reserved with `declare_inline_type` carry their complete structural

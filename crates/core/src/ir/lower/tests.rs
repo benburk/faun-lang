@@ -118,7 +118,7 @@ fn payload_sums_hold_their_products_flat() {
         });
         source.set_entry(main);
 
-        let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
+        let machine = lower(&source, &Routines::builtin().with_word(64)).unwrap();
         // `Some`'s pair is laid inline as two leaves, and nothing projects a
         // pair back out as a cell of its own.
         let built: Vec<_> = machine
@@ -210,7 +210,7 @@ fn selection() -> Program {
         b.call(select, &[outer, inner, unit])
     });
     source.set_entry(main);
-    lower(&mut source, &Routines::builtin().with_word(64)).unwrap()
+    lower(&source, &Routines::builtin().with_word(64)).unwrap()
 }
 
 #[test]
@@ -284,7 +284,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
     });
     source.set_entry(entry);
     barb::validate(&source).unwrap();
-    let facts = barb::analyzed(&source);
+    let facts = source.analyze();
     let demand = Demand::discover(&source, &facts, &Routines::default(), entry).unwrap();
     let lowering = Lowering {
         barb: &source,
@@ -345,7 +345,7 @@ fn one_field_products_are_transparent_through_machine_lowering() {
     barb::validate(&source).unwrap();
 
     // A target whose word is a byte hands the entry a byte-wide count.
-    let machine = lower(&mut source, &Routines::builtin().with_word(8)).unwrap();
+    let machine = lower(&source, &Routines::builtin().with_word(8)).unwrap();
     let entry = machine.entry();
     assert_eq!(machine.parameter_name(entry, 0), "argc");
     assert_eq!(
@@ -388,7 +388,7 @@ fn known_one_field_products_lower_as_their_field() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(&mut source, &Routines::default()).unwrap();
+    let machine = lower(&source, &Routines::default()).unwrap();
     let result = evaluate::evaluate(
         &machine,
         machine.entry(),
@@ -413,7 +413,7 @@ fn unused_parameters_do_not_demand_unsupported_representations() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(&mut source, &Routines::default()).unwrap();
+    let machine = lower(&source, &Routines::default()).unwrap();
     assert!(
         machine
             .signature(machine.function(machine.entry()).params)
@@ -444,7 +444,7 @@ fn parameters_read_only_in_impossible_arms_are_unused() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(&mut source, &Routines::default()).unwrap();
+    let machine = lower(&source, &Routines::default()).unwrap();
     assert!(
         machine
             .signature(machine.function(machine.entry()).params)
@@ -478,7 +478,7 @@ fn parameters_read_only_after_a_nonreturning_call_are_unused() {
         consumes: false,
     });
 
-    let machine = lower(&mut source, &routines).unwrap();
+    let machine = lower(&source, &routines).unwrap();
     assert!(
         machine
             .signature(machine.function(machine.entry()).params)
@@ -513,7 +513,7 @@ fn external_parameter_names_survive_machine_lowering() {
         consumes: false,
     });
 
-    let machine = lower(&mut source, &routines).unwrap();
+    let machine = lower(&source, &routines).unwrap();
     let stop = machine
         .functions()
         .iter()
@@ -543,7 +543,7 @@ fn unused_parameters_leave_machine_signatures_and_calls_together() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(&mut source, &Routines::default()).unwrap();
+    let machine = lower(&source, &Routines::default()).unwrap();
     let keep = machine
         .functions()
         .iter()
@@ -640,7 +640,7 @@ fn products_are_held_flat_across_calls_and_nesting() {
     });
     source.set_entry(main);
 
-    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&source, &Routines::builtin().with_word(64)).unwrap();
     assert!(
         !machine
             .ops
@@ -695,7 +695,7 @@ fn wide_and_self_holding_products_are_cells() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(&mut source, &Routines::default()).unwrap();
+    let machine = lower(&source, &Routines::default()).unwrap();
     let mut expected = vec![Class::Cell];
     expected.extend(vec![Class::Natural; FLAT_LEAVES]);
     expected.push(Class::Cell);
@@ -769,7 +769,7 @@ fn a_constant_holding_a_product_widens_its_fields() {
     });
     source.set_entry(main);
 
-    let facts = barb::analyzed(&source);
+    let facts = source.analyze();
     assert_eq!(
         facts.field(&source, pair_ctor, 0),
         barb::Bounds {
@@ -777,7 +777,7 @@ fn a_constant_holding_a_product_widens_its_fields() {
             high: Some(200)
         }
     );
-    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&source, &Routines::builtin().with_word(64)).unwrap();
     assert_eq!(
         run(&machine, named(&machine, "run")),
         [BigUint::from(200u8)]
@@ -836,13 +836,13 @@ fn a_product_field_grown_by_recursion_is_held_whole() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let facts = barb::analyzed(&source);
+    let facts = source.analyze();
     // The walk settles, and the total's field widened to anything on the
     // way; the count beside it stays nought.
     assert_eq!(facts.answers(main), barb::Bounds::at(0));
     assert_eq!(facts.field(&source, s, 1).width(), None);
     assert_eq!(facts.field(&source, s, 0), barb::Bounds::at(0));
-    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&source, &Routines::builtin().with_word(64)).unwrap();
     assert_eq!(run(&machine, named(&machine, "run")), [BigUint::from(40u8)]);
 }
 
@@ -891,7 +891,7 @@ fn a_wrapped_byte_string_is_handed_over_as_its_bytes() {
 
     // The string is lowered as a value too, which nothing reads once the
     // call is handed its bytes, so only those are left.
-    let machine = crate::ir::optimize(&lower(&mut source, &Routines::builtin()).unwrap());
+    let machine = crate::ir::optimize(&lower(&source, &Routines::builtin()).unwrap());
     assert_eq!(machine.data(), b"hi\n");
 }
 
@@ -926,7 +926,7 @@ fn a_startup_field_names_and_bounds_what_the_entry_is_handed() {
     );
 
     let routines = Routines::builtin().with_word(16);
-    let machine = crate::lower_to_machine_ir(&mut library.program, &routines).unwrap();
+    let machine = crate::lower_to_machine_ir(&library.program, &routines).unwrap();
     let entry = machine.entry();
     assert_eq!(machine.parameter_names(entry).collect::<Vec<_>>(), ["argc"]);
     let body = machine.function(entry).body().unwrap();

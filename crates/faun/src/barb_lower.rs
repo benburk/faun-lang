@@ -1362,7 +1362,7 @@ mod tests {
             assert!(rendered.contains("Host.exit!(v0, v5)"), "{rendered}");
             assert!(!rendered.contains("start"));
             assert!(!rendered.contains('$'));
-            let machine = faun_core::lower_to_machine_ir(&mut program.clone(), &routines).unwrap();
+            let machine = faun_core::lower_to_machine_ir(&program.clone(), &routines).unwrap();
             // A program reading only how many arguments it has is handed
             // `argc` alone, into the entry's frame, as wide as its word.
             let entry = machine.entry();

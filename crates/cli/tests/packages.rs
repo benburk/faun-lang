@@ -40,7 +40,7 @@ fn a_library_lowers_to_barb_with_no_entry_and_does_not_build() {
     assert!(barb.entry().is_none());
     assert!(barb.render().contains("double(v0: Nat) -> Nat ="));
     let nothing_to_run =
-        faun_core::lower_to_machine_ir(&mut barb.clone(), &X86_64Linux.routines()).unwrap_err();
+        faun_core::lower_to_machine_ir(&barb, &X86_64Linux.routines()).unwrap_err();
     assert!(nothing_to_run.contains("no entry"));
     let refused = faun::compile_barb_to_image(barb, &X86_64Linux).unwrap_err();
     assert!(refused.message.contains("no `main!` to build"));
@@ -57,7 +57,7 @@ fn an_application_builds_only_what_main_reaches() {
     assert!(barb.render().contains("unused(v0: Nat) -> Nat ="));
     let mut optimized = barb.clone();
     faun_core::barb::optimize(&mut optimized);
-    let machine = faun_core::lower_to_machine_ir(&mut optimized, &X86_64Linux.routines()).unwrap();
+    let machine = faun_core::lower_to_machine_ir(&optimized, &X86_64Linux.routines()).unwrap();
     assert!(!machine.render().contains("unused"));
     faun::compile_barb_to_image(barb, &X86_64Linux).unwrap();
 }

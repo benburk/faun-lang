@@ -134,14 +134,6 @@ pub use constant::{
 pub(crate) use constant::Shape;
 pub use facts::{Facts, Operation, SequenceOperation};
 
-/// What analysis finds in `program`, worked out on a copy, for a test that
-/// reads facts beside the program itself.
-#[cfg(test)]
-pub(crate) fn analyzed(program: &Program) -> Facts {
-    let mut copy = program.clone();
-    copy.analyze();
-    copy.facts().expect("just analyzed").clone()
-}
 pub use inline::InlineLimits;
 pub use model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,

@@ -191,7 +191,7 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
             built: None,
             consumes: false,
         });
-        let error = lower(&mut source, &routines).unwrap_err();
+        let error = lower(&source, &routines).unwrap_err();
         assert!(error.contains("about returning"), "{error}");
     }
 }

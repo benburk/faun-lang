@@ -15,7 +15,7 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
             let sum = b.call(add, &[n, n]);
             b.match_(sum, nat, |b, _, _| b.known(zero))
         });
-        let machine = lower(&mut source, &crate::platform::Routines::builtin()).unwrap();
+        let machine = lower(&source, &crate::platform::Routines::builtin()).unwrap();
         let body = machine.function(machine.entry()).body().unwrap();
         assert!(machine.walk(body).any(|(op, results)| {
             matches!(
@@ -44,7 +44,7 @@ fn an_unbounded_entry_result_is_not_silently_truncated() {
         .intern_natural(nat, &(BigUint::from(1u8) << 100usize))
         .unwrap();
     source.define(source.entry().unwrap(), |b, _| b.known(value));
-    let error = lower(&mut source, &crate::platform::Routines::builtin()).unwrap_err();
+    let error = lower(&source, &crate::platform::Routines::builtin()).unwrap_err();
     assert!(error.contains("unbounded"), "{error}");
 }
 

@@ -600,8 +600,7 @@ fn running() -> Vec<(&'static str, Program, i32)> {
     ] {
         let mut barb = programs::an_arm_that_leaves(leave);
         faun_core::barb::optimize(&mut barb);
-        let machine =
-            faun_core::lower_to_machine_ir(&mut barb, &TARGET.routines()).expect("a program");
+        let machine = faun_core::lower_to_machine_ir(&barb, &TARGET.routines()).expect("a program");
         held.push((name, machine, answer));
     }
     for (name, text, answer) in WRITTEN {
@@ -1847,9 +1846,8 @@ fn it_lays_out_a_chain_as_the_number_it_builds() {
 
 #[test]
 fn it_runs_a_program_built_rather_than_written() {
-    let mut barb = programs::two_and_two_in_barb();
-    let machine =
-        faun_core::ir::lower(&mut barb, &TARGET.routines()).expect("a representable program");
+    let barb = programs::two_and_two_in_barb();
+    let machine = faun_core::ir::lower(&barb, &TARGET.routines()).expect("a representable program");
     // Recognized addition becomes an instruction; only the entry survives.
     assert_eq!(
         machine
@@ -2368,7 +2366,7 @@ fn lowered(
 ) -> Program {
     faun_core::barb::validate(&barb).expect("a sound program");
     faun_core::barb::optimize(&mut barb);
-    faun_core::lower_to_machine_ir(&mut barb, routines).expect("a representable program")
+    faun_core::lower_to_machine_ir(&barb, routines).expect("a representable program")
 }
 
 #[test]
