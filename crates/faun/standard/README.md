@@ -82,12 +82,14 @@ of equality, asked before the clause's guard.
 `List` follows Ori's standard list: `len`, `is_empty`, `append`, `concat`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
 `any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
-`get`, `get_or`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,
+`get`, `get_or`, `put`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,
 `contains`, `sum`, `take`, `drop`, `take_while`, `drop_while`, `split_at`,
 `partition`, `zip`, `unzip`, `cross`, `enumerate`, `windows`, `min`, `max`,
 `sort`, `sort_on` and `to_str`, and the constructors `List.range(n)` and
 `List.repeat(x, n)`. `sort` is a stable merge sort by the element's `cmp`, and
-`sort_on` by a key's. `join` puts a separator between the pieces of
+`sort_on` by a key's. `put` writes an element and leaves a list with none
+at that index unchanged; `set` answers `Err(OutOfBounds)` there instead.
+`join` puts a separator between the pieces of
 anything with `empty` and `concat`: `["a", "b"].join(", ")` is `"a, b"`,
 and `[[1], [2]].join([0])` is `[1, 0, 2]`. `to_str` writes a list as it is written, `[1, 2, 3]`. A list
 pattern's rest may go unnamed, as `[a, b, *]`. A

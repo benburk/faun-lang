@@ -109,8 +109,8 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
     entries = index.get_or(bucket, []).filter(|(_, at)| at != position)
     Map({
       seed: seed,
-      slots: slots.set(position, Removed).ok_or([]),
-      index: index.set(bucket, entries).ok_or([]),
+      slots: slots.put(position, Removed),
+      index: index.put(bucket, entries),
       size: size - 1,
     })
   )
@@ -255,7 +255,7 @@ filled(Removed) -> []
 replaced : (Result(Nat, [Missing]), U64, List(Slot(k, v)), List(List((U64, Nat))), Nat, k, v) -> Map(k, v) where
   k.hash_into : (k, Mixer) -> Mixer
 replaced(Ok(position), seed, slots, index, size, key, value) ->
-  Map({seed: seed, slots: slots.set(position, Filled(key, value)).ok_or([]), index: index, size: size})
+  Map({seed: seed, slots: slots.put(position, Filled(key, value)), index: index, size: size})
 replaced(Err(_), seed, slots, index, size, key, value) -> (
   position = slots.len()
   digest = digest_of(seed, key)
@@ -265,7 +265,7 @@ replaced(Err(_), seed, slots, index, size, key, value) -> (
     Map({
       seed: seed,
       slots: slots.append(Filled(key, value)),
-      index: index.set(bucket, [(digest, position), *entries]).ok_or([]),
+      index: index.put(bucket, [(digest, position), *entries]),
       size: size + 1,
     }),
   )
@@ -293,7 +293,8 @@ resized(map) -> map
 placed : (List(List((U64, Nat))), Nat, U64, Nat) -> List(List((U64, Nat)))
 placed(index, room, digest, position) -> (
   bucket = bucket_of(digest, room)
-  index.set(bucket, [(digest, position), *index.get_or(bucket, [])]).ok_or([])
+  held = index.get_or(bucket, [])
+  index.put(bucket, [(digest, position), *held])
 )
 
 expect Map.counted(["a", "b", "a"]).to_list() == [("a", 2), ("b", 1)] & Map.counted([0].drop(1)).is_empty()

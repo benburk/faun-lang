@@ -81,27 +81,27 @@ taken((key, value), rest) -> {key, value, rest}
 # `entries` with `entry` written where it stops climbing from `hole`: each
 # parent costing more comes down into the hole, and the hole goes up to it.
 climb : (List((k, v)), Nat, (k, v)) -> List((k, v)) where k.cmp : (k, k) -> Order
-climb(entries, 0, entry) -> put(entries, 0, entry)
+climb(entries, 0, entry) -> entries.put(0, entry)
 climb(entries, hole, entry is (key, _)) -> (
   above = (hole - 1) / 2
   (parent_key, parent) = entries.get_or(above, entry)
   if key < parent_key
-    then climb(put(entries, hole, (parent_key, parent)), above, entry)
-    else put(entries, hole, entry)
+    then climb(entries.put(hole, (parent_key, parent)), above, entry)
+    else entries.put(hole, entry)
 )
 
 # `entries`, the first `count` of them a heap but for `hole`, with `entry`
 # written where it stops sinking from there: the cheaper child, where it
 # costs less, comes up into the hole, and the hole goes down to it.
 sink : (List((k, v)), Nat, (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
-sink(entries, hole, entry, count) if hole * 2 + 1 >= count -> put(entries, hole, entry)
+sink(entries, hole, entry, count) if hole * 2 + 1 >= count -> entries.put(hole, entry)
 sink(entries, hole, entry is (key, _), count) -> (
   left = hole * 2 + 1
   child = cheaper(entries, left, count, entry)
   (child_key, lower) = entries.get_or(child, entry)
   if child_key < key
-    then sink(put(entries, hole, (child_key, lower)), child, entry, count)
-    else put(entries, hole, entry)
+    then sink(entries.put(hole, (child_key, lower)), child, entry, count)
+    else entries.put(hole, entry)
 )
 
 # The index of the cheaper child: the right one only where there is one and
@@ -119,13 +119,6 @@ empty_onto(heap, found) -> (
   heap.pop() is Ok({key, value, rest}) else return found
   empty_onto(rest, [(key, value), *found])
 )
-
-# `values` with the element at `index` replaced, as `List.set` writes it:
-# where it lies, in a list nothing else holds.
-put : (List(a), Nat, a) -> List(a)
-put([], _, _) -> []
-put([_, *tail], 0, value) -> [value, *tail]
-put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]
 
 # An empty heap, at a type: one written bare has nothing to say which.
 nothing : Heap(Nat, Str)

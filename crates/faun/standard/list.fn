@@ -138,9 +138,17 @@ List(a) : [Nil, Cons(a, List(a))].(
   get_or : (List(a), Nat, a) -> a
   get_or(values, index, fallback) -> get(values, index).ok_or(fallback)
 
-  # The list with the element at `index` replaced by `value`. A list
-  # nothing else holds is written where it lies, so a list threaded through
-  # repeated `set`s is not copied.
+  # The list with the element at `index` replaced by `value`, and unchanged
+  # where there is none. A list nothing else holds is written where it
+  # lies, so a list threaded through repeated `put`s is not copied: written
+  # as a walk rebuilding the front, a compiler reads it as one element
+  # written over, so it is never walked.
+  put : (List(a), Nat, a) -> List(a)
+  put([], _, _) -> []
+  put([_, *tail], 0, value) -> [value, *tail]
+  put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]
+
+  # `put`, where a miss is `Err(OutOfBounds)` rather than the list unchanged.
   set : (List(a), Nat, a) -> Result(List(a), [OutOfBounds])
   set(values, index, value) if index < len(values) -> Ok(put(values, index, value))
   set(_, _, _) -> Err(OutOfBounds)
@@ -273,14 +281,6 @@ List(a) : [Nil, Cons(a, List(a))].(
 reverse_into : (List(a), List(a)) -> List(a)
 reverse_into([], output) -> output
 reverse_into([head, *tail], output) -> reverse_into(tail, [head, *output])
-
-# `values` with the element at `index` replaced by `value`, and unchanged
-# where there is none. Written as a walk rebuilding the front, a compiler
-# reads it as one element written over, so it is never walked.
-put : (List(a), Nat, a) -> List(a)
-put([], _, _) -> []
-put([_, *tail], 0, value) -> [value, *tail]
-put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]
 
 range_into : (Nat, List(Nat)) -> List(Nat)
 range_into(0, built) -> built

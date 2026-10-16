@@ -87,6 +87,11 @@ const CASES: &[(&str, &str, u32)] = &[
     ("get", "xs.get(3).ok_or(9) + xs.get(n).ok_or(9) * 10", 93),
     ("get_or", "xs.get_or(2, 9) + xs.get_or(n, 9) * 10", 92),
     (
+        "put",
+        "xs.put(1, 7).get_or(1, 0) + xs.put(n, 7).len() * 10 + xs.put(n, 7).get_or(4, 0) * 100",
+        (7 + 50 + 400) % 256,
+    ),
+    (
         "set",
         "xs.set(1, 7).ok_or([]).get_or(1, 0) + xs.set(n, 7).ok_or([]).len() * 10",
         7,
