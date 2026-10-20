@@ -208,7 +208,7 @@ impl Parser<'_> {
                 token.span(),
                 "`==name` compares a part of a pattern, so no line begins with one",
             )
-            .help("compare the whole value with a guard: `n if n == limit -> …`");
+            .help("compare the whole value with a guard: `n if n == limit then …`");
         }
         let message = match token.kind {
             Kind::Error if token.start == token.end => "unterminated string literal".to_owned(),
@@ -981,7 +981,10 @@ impl Parser<'_> {
     fn not_leaving(&self, leave: &str) -> SyntaxError {
         SyntaxError::new(
             self.tokens[self.at].span(),
-            format!("a body leaves only by a leaving line: `if c {leave}`, or `c else {leave}`"),
+            format!(
+                "a body leaves only by a leaving line, `if c {leave}` or `c else {leave}`, \
+                 or by an arm, `P {leave}`"
+            ),
         )
     }
 
@@ -1259,14 +1262,20 @@ impl Parser<'_> {
         let first = self.statement()?;
         match self.peek() {
             Kind::Comma => self.tuple(open, value_of(first, "a tuple's member")?),
-            Kind::Arrow | Kind::KwIf => self.arms(open, value_of(first, "an arm's pattern")?),
+            // `->` too, for the arm to say it wants `then`.
+            Kind::KwThen
+            | Kind::KwIf
+            | Kind::KwReturn
+            | Kind::KwContinue
+            | Kind::KwBreak
+            | Kind::Arrow => self.arms(open, value_of(first, "an arm's pattern")?),
             Kind::Newline => self.lines_from(open, first),
             _ => {
                 let Statement::Value(first) = first else {
                     return self.lines_from(open, first);
                 };
                 self.note("`,`");
-                self.note("`->`");
+                self.note("`then`");
                 self.note("a new line");
                 let close = self.expect(Kind::RParen, "`)`")?;
                 Ok(Expr {
@@ -1292,15 +1301,29 @@ impl Parser<'_> {
         })
     }
 
-    /// An arm after its pattern: its guard, if any, and its value.
+    /// An arm after its pattern: its guard, if any, and its value after
+    /// `then`, or how it leaves, as an `if`'s condition takes either.
     fn arm(&mut self, written: Expr) -> Parsed<Arm> {
         let guard = match self.eat(Kind::KwIf) {
             Some(_) => Some(self.expr()?),
             None => None,
         };
-        self.note("`if`");
-        self.expect(Kind::Arrow, "`->`")?;
-        let body = self.expr()?;
+        let body = match self.peek() {
+            Kind::KwReturn | Kind::KwContinue | Kind::KwBreak => self.leaving()?,
+            Kind::Arrow => {
+                return Err(SyntaxError::new(
+                    self.tokens[self.at].span(),
+                    "an arm's value follows `then`, as an `if`'s does: `P then value`",
+                )
+                .help("an arm may leave instead: `P return value`, `P continue` or `P break`"));
+            }
+            _ => {
+                self.note("`if`");
+                self.note("`return`");
+                self.expect(Kind::KwThen, "`then`")?;
+                self.expr()?
+            }
+        };
         let pattern = lines::pattern(written, self.source)?;
         Ok(Arm {
             pattern,

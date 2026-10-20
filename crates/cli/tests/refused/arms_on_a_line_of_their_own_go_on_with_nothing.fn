@@ -1,0 +1,17 @@
+import std.host {Host}
+
+f : List(Nat) -> Nat
+f(xs) -> (
+  total = 0
+  for x in xs do (
+    x is (
+      0 continue
+      _ then x
+    )
+    total = total + x
+  )
+  total
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

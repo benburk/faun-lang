@@ -9,7 +9,9 @@ left to one, so none is lost.
 ## Likely slips
 
 - **An unused binding.** It catches a typo that makes a new name,
-  `totl = total + 1`, since binding again is a binding.
+  `totl = total + 1`, since binding again is a binding, and a body ending
+  in a binding by mistake, which answers `{}` where nothing declares what
+  it answers.
 - **`x = x`,** a binding to itself.
 - **A test that always holds,** `n is _`, or `n is m` binding `m`.
 - **Lines no path reaches,** after an unconditional leave, and a loop

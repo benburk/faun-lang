@@ -553,17 +553,35 @@ covering nothing; every arm answers one type.
 
 ```
 area(shape) -> shape is (
-  Circle(r) -> 3 * r * r
-  Rect(w, h) -> w * h
-  Dot -> 0
+  Circle(r) then 3 * r * r
+  Rect(w, h) then w * h
+  Dot then 0
 )
 ```
 
 An arm takes every pattern a clause's parameter does, alternatives
-unparenthesized, `Celsius(c) | Kelvin(c) -> c`, and its value may be a
+unparenthesized, `Celsius(c) | Kelvin(c) then c`, and its value may be a
 block. As an `if`'s branches, arms may leave by `?` or an `else` line.
 Clauses suit a body that is the dispatch;
 arms suit a value worked out partway through one.
+
+An arm's pattern and guard are a condition, so as after an `if`'s, a
+leave may stand where `then` would: `P return value`, `P continue` or `P
+break`. A leaving arm adds nothing to the type the arms answer, and stands
+where the `is` is a line's value or a body's answer, not inside an operand
+or an argument. Arms on a line of their own go on with nothing, each that
+does not leave answering `{}`:
+
+```
+for r in results do (
+  r is (
+    Err(Skipped) continue
+    Err(error) return Err(error)
+    Ok(_) then {}
+  )
+  count = count + 1
+)
+```
 
 ## Leaving lines
 
@@ -572,8 +590,8 @@ lines after it seeing what it bound, and where it fails, leaves the clause
 or lambda: `else return value`, the value any expression, a block doing
 its steps first among them. A line `if condition return value` leaves where the
 condition holds, what the condition bound seen by the `return` alone, and
-goes on where it fails. Neither is a block's last line, since the lines
-after it answer.
+goes on where it fails. The lines after either answer, and where there are
+none the block answers `{}`.
 
 ```
 first_over(xs, k) -> (
@@ -601,7 +619,7 @@ round and out of the loop, at one type where it is read in the next round
 or after the loop; one first bound in the body is the round's. `if c continue` or `c else
 continue` ends a round, `break` the loop, and `return` the clause from
 inside any loop; any line may be a round's last. A loop is a block's line,
-not the last of a block that answers.
+not an expression: what it computes comes out in the names it assigns.
 
 ```
 summed(xs) -> (
@@ -637,7 +655,9 @@ swaps. On a straight line the name may take another type, `x =
 Nat.from_str(x)?` after `x = text.trim()`; where paths meet, after a branch
 that bound it again, it has one type whichever way was taken, if anything
 reads it there. A name first
-bound inside a block leaves with it. Nothing changes in place: a method
+bound inside a block leaves with it. A block whose last line is a binding,
+a leaving line or a loop answers `{}`, so an arm on a line of its own may
+just assign. Nothing changes in place: a method
 answers a new value, so a step is written whole, `order =
 order.append(node)`, and a list nothing else holds is still written where
 it lies. Values have no identity, so `snapshot = order` stays what it was

@@ -63,8 +63,9 @@ a spaced infix operator.
 - **Arms only after `is`.**
 - **`continue` and `break` only in a loop's body.**
 - **A block's last line is its answer.** A block's lines and a loop's
-  body's are one rule; a binding, a leaving line or a loop last is refused
-  in a block, where the round would go on.
+  body's are one rule; where the last is a binding, a leaving line or a
+  loop, a block answers `{}` where the round would go on (2026-10-18;
+  until then it was refused).
 - **A tuple's member and an arm's pattern are values.** A parenthesis's
   first line is any block line; a binding, a leaving line or a loop before
   a `,` or `->` is refused.

@@ -29,14 +29,6 @@ fn body(source: &str) -> Body {
 fn items_and_statements_end_with_their_lines() {
     let error = parse("main! : Host -> [] main!(host) -> host.exit!(0)").unwrap_err();
     assert!(error.message.contains("a new line"), "{}", error.message);
-    let error = parse("f(x) -> (\n  y = x\n)").unwrap_err();
-    assert!(
-        error
-            .message
-            .contains("a block ends with its answer, a line after its last binding"),
-        "{}",
-        error.message
-    );
 }
 
 #[test]
@@ -310,7 +302,7 @@ fn a_file_is_read_no_further_than_its_first_twenty_errors() {
 #[test]
 fn an_error_inside_a_block_passes_over_its_line_whole() {
     let error = parse(
-        "f(x) -> (\n  y = x is (\n    0 -> (\n      z = 1\n    )\n    _ -> 2\n  )\n  y\n)\ng(y) -> y +\n",
+        "f(x) -> (\n  y = x is (\n    0 then (\n      z = 1 1\n    )\n    _ then 2\n  )\n  y\n)\ng(y) -> y +\n",
     )
     .unwrap_err();
     let told: Vec<_> = std::iter::once(&error)
@@ -318,10 +310,7 @@ fn an_error_inside_a_block_passes_over_its_line_whole() {
         .map(|error| (error.line, error.message.as_str()))
         .collect();
     assert_eq!(told.len(), 2, "{told:?}");
-    assert!(
-        told[0].1.contains("a block ends with its answer"),
-        "{told:?}"
-    );
+    assert_eq!(told[0].0, 4, "{told:?}");
     assert_eq!(told[1].0, 11);
 }
 
@@ -495,26 +484,34 @@ fn a_test_is_not_tested_again_or_compared() {
     assert!(parse("f(x) -> (x is 3) == y").is_ok());
 }
 
-/// The lines after an `else` line answer where its condition holds, so a
-/// block does not end with one.
+/// A block answers its last line where that is a value, and `{}` where it
+/// is a binding, a leaving line or a loop; a round goes on to the next.
 #[test]
-fn an_else_line_is_not_a_block_s_last() {
-    let error = parse("f(x) -> (\n  y = x\n  y > 0 else return 0\n)").unwrap_err();
-    assert!(error.message.contains("not a block's last"), "{error}");
-    assert!(parse("f(x) -> (\n  x > 0 else return 0\n  x\n)").is_ok());
-}
-
-/// An `if` line leaves where its condition holds, so the lines after it
-/// answer; a loop is no block's last line either, but in a loop's body
-/// either may end the round.
-#[test]
-fn an_if_line_and_a_loop_are_not_a_block_s_last() {
-    let error = parse("f(x) -> (\n  y = x\n  if y return 0\n)").unwrap_err();
-    assert!(error.message.contains("not a block's last"), "{error}");
-    let error = parse("f(x) -> (\n  for y in x do (\n    if y break\n  )\n)").unwrap_err();
-    assert!(error.message.contains("not a block's last"), "{error}");
-    assert!(parse("f(x) -> (\n  if x return 0\n  x\n)").is_ok());
-    assert!(parse("f(x) -> (\n  for y in x do (\n    if y break\n  )\n  0\n)").is_ok());
+fn a_block_ending_in_no_value_answers_nothing() {
+    for source in [
+        "f(x) -> (\n  y = x\n)",
+        "f(x) -> (y = x)",
+        "f(x) -> (\n  y = x\n  y > 0 else return 0\n)",
+        "f(x) -> (\n  y = x\n  if y return 0\n)",
+        "f(x) -> (\n  for y in x do (\n    if y break\n  )\n)",
+    ] {
+        let clause = clauses(source).remove(0);
+        let mut answer = &clause.body.result;
+        loop {
+            answer = match &answer.kind {
+                ExprKind::Block(body)
+                | ExprKind::Else { rest: body, .. }
+                | ExprKind::Leave { rest: body, .. }
+                | ExprKind::Loop { rest: body, .. } => &body.result,
+                _ => break,
+            };
+        }
+        assert!(
+            matches!(&answer.kind, ExprKind::Record(fields) if fields.is_empty()),
+            "{source}: {answer:?}"
+        );
+    }
+    assert!(parse("f(x) -> (\n  for y in x do (\n    y = 1\n  )\n  0\n)").is_ok());
 }
 
 /// A parenthesis holds lines; a tuple's member and an arm's pattern are
@@ -533,14 +530,9 @@ fn a_tuple_s_member_and_an_arm_s_pattern_are_values() {
             "{error}"
         );
     }
-    let error = parse("f(x) -> x is (\n  y = 1 -> y\n)").unwrap_err();
+    let error = parse("f(x) -> x is (\n  y = 1 then y\n)").unwrap_err();
     assert!(
         error.message.contains("an arm's pattern is a value"),
-        "{error}"
-    );
-    let error = parse("f(x) -> (y = x)").unwrap_err();
-    assert!(
-        error.message.contains("a block ends with its answer"),
         "{error}"
     );
     assert!(parse("f(x) -> (if x then 1 else 2, 3)").is_ok());
@@ -568,9 +560,9 @@ fn a_lambda_is_an_argument_and_a_list_holds_one_rest() {
 /// message says how to compare the whole value.
 #[test]
 fn an_arm_does_not_begin_with_equals() {
-    let error = parse("f(n) -> n is (\n  0 -> 1\n  ==limit -> 2\n  _ -> 3\n)").unwrap_err();
+    let error = parse("f(n) -> n is (\n  0 then 1\n  ==limit then 2\n  _ then 3\n)").unwrap_err();
     assert!(error.message.contains("no line begins"), "{error}");
-    assert!(parse("f(n) -> n is (\n  0 -> 1\n    == 2\n  _ -> 3\n)").is_ok());
+    assert!(parse("f(n) -> n is (\n  0 then 1\n    == 2\n  _ then 3\n)").is_ok());
 }
 
 /// A body leaves only by a leaving line, whose `else` is followed by a
@@ -592,4 +584,23 @@ fn a_body_leaves_only_by_a_leaving_line() {
     );
     let error = parse("f(x) -> g (x)").unwrap_err();
     assert!(error.message.contains("touches what it calls"), "{error}");
+}
+
+/// An arm's value follows `then`, or the arm leaves, where the `is` is a
+/// line's value or a body's answer; on a line of its own, arms go on with
+/// `{}`.
+#[test]
+fn an_arm_answers_after_then_or_leaves() {
+    let bound = "f(r) -> (\n  y = r is (\n    Ok(v) then v\n    Err(e) return 0\n  )\n  y\n)\n";
+    assert!(parse(bound).is_ok());
+    let alone = "f(xs) -> (\n  for x in xs do (\n    x is (\n      0 break\n      _ then {}\n    )\n  )\n  0\n)\n";
+    let module = parse(alone).unwrap();
+    assert!(format!("{module:?}").contains("open: false"), "{module:?}");
+    let error = parse("f(r) -> g(r is (\n  Ok(v) then v\n  Err(_) return 0\n))\n").unwrap_err();
+    assert!(
+        error.message.contains("an arm leaves only where"),
+        "{error}"
+    );
+    let error = parse("f(r) -> r is (\n  Ok(v) -> v\n)\n").unwrap_err();
+    assert!(error.message.contains("follows `then`"), "{error}");
 }

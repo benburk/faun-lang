@@ -119,12 +119,12 @@ x = 1 = 2
 
 
 ========================================
-A block ends with its answer
+An arm's value follows `then`, not `->`
 :error
 ========================================
 
-f(x) -> (
-  y = x
+f(r) -> r is (
+  Ok(v) -> v
 )
 
 ---

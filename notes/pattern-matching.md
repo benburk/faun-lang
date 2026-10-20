@@ -27,12 +27,13 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **A bare `expect` in a body,** an assumption checked in development and
   skipped in optimized builds, binding nothing, is for later; until then a
   body's line beginning `expect` is refused.
-- **Arms after `is`** are a line each; an arm may be a block, but nothing
-  leaves from inside one yet but where the `is` answers its clause. Built,
+- **Arms after `is`** are a line each; an arm may be a block. Built,
   with guards, 2026-10-07. Arms on a bare parameter are left to style:
   clauses by default, arms where the other parameters would repeat on every
-  clause.
-- **Many ways on a value** are `is` with arms, `x is ( P -> … )`, with no
+  clause. Revised 2026-10-16: an arm's value follows `then`, as an `if`'s
+  does, and a leave may stand in its place, `P return x`; see the
+  [conditions](proposals/approved/conditions.md) errata.
+- **Many ways on a value** are `is` with arms, `x is ( P then … )`, with no
   `match` or `when` keyword. Both fresh designs used `match`; the brief did
   not offer Finch's idea, so that says nothing against it.
 - **`is` inside a pattern** binds the whole and its parts: `right is [y,

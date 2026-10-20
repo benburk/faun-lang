@@ -11,9 +11,9 @@ const RUNNING: &[(&str, &str, u32)] = &[
         "a numeral an expression's arms test is tested as a clause's is",
         "bucket : Nat -> Nat
          bucket(x) -> x is (
-           70 -> 1
-           200 -> 2
-           _ -> 0
+           70 then 1
+           200 then 2
+           _ then 0
          )
          
          main! : Host -> []
@@ -276,8 +276,8 @@ const RUNNING: &[(&str, &str, u32)] = &[
         "a walk building a list whose base case answers something else of it compiles",
         "w : (List(Nat), List(Nat)) -> Nat
          w(xs, built) -> xs is (
-           [] -> built.len()
-           [x, *rest] -> w(rest, built.append(x + 1))
+           [] then built.len()
+           [x, *rest] then w(rest, built.append(x + 1))
          )
 
          main! : Host -> []

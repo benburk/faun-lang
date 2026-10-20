@@ -268,3 +268,88 @@ table =
     (identifier)
     (list
       (identifier))))
+
+========================================
+An arm answers after `then`, or leaves
+========================================
+
+f(r) -> (
+  y = r is (
+    Ok(v) if v > 0 then v
+    Err(e) return e
+    _ break
+  )
+  y
+)
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (block
+      (binding
+        (identifier)
+        (is_expression
+          (identifier)
+          (arms
+            (arm
+              (call_expression
+                (type_identifier)
+                (arguments
+                  (identifier)))
+              (binary_expression
+                (identifier)
+                (number))
+              (identifier))
+            (arm
+              (call_expression
+                (type_identifier)
+                (arguments
+                  (identifier)))
+              (return_expression
+                (identifier)))
+            (arm
+              (wildcard)
+              (leave)))))
+      (identifier))))
+
+========================================
+A block ending in no value answers `{}`
+========================================
+
+f(x) -> (y = x)
+g(xs) -> (
+  for x in xs do (
+    if x break
+  )
+)
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (block
+      (binding
+        (identifier)
+        (identifier))))
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (block
+      (loop_line
+        (identifier)
+        (identifier)
+        (round
+          (if_line
+            (identifier)
+            (leave)))))))

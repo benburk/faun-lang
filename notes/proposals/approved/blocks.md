@@ -143,9 +143,10 @@ an alias, and inside parentheses always a binding.
   `->`, `=`, a comma or an operator, and into a next line beginning `.`, an
   infix operator, `where` or `if`. No semicolons: a line end separates, as
   it does between items.
-- **Answers.** A block's value is its last line. A line that is neither a
-  binding nor the last must be an effect call; a value worked out and thrown
-  away is refused, as now.
+- **Answers.** A block's value is its last line, or `{}` where that is a
+  binding, a leaving line or a loop (errata, 2026-10-18). A line that is
+  neither a binding nor the last must be an effect call; a value worked out
+  and thrown away is refused, as now.
 - **`?`** answers early from the clause or lambda it is written in, not from
   the block: a block is not a function.
 - **Where blocks go.** Anywhere an expression goes, with no rule of their
@@ -320,3 +321,24 @@ Settled while building it:
   compiling sees a block.
 - **The standard library's `where` lists** were one constraint to a line
   and became comma-separated with the rest of the migration.
+
+## Errata (2026-10-18)
+
+**A block ending in no value answers `{}`.** A block whose last line is a
+binding, a leaving line or a loop answers `{}`, as Rust's block ending in a
+statement answers `()`, where it was refused as having no answer. The
+grammar never decided it: `lines.rs` refused it while making the tree,
+since a body holds its answer. It now puts `{}` there, and the checker
+refuses it where something wants another type, its mismatch noting that
+such a block answers `{}`; the error points at the block's last line.
+
+- **What it gave.** A block and a loop's body end alike, one answering
+  `{}` where the other goes on to the next round. Arms that assign need no
+  `{}` line, nor an effectful body ending in a loop, nor a block ending
+  where a leaving line goes on.
+- **What it cost.** A body ending in a binding by mistake is a type
+  mismatch, not a refusal at the line, and where nothing is declared it
+  may go unnoticed until a caller uses its answer. No warning for a name
+  never read exists yet, which would tell `x = n + 1` ending a body.
+- **Tree-sitter** reads a block of one line where that line is no value,
+  `(y = x)`, a single value in parentheses being grouped.

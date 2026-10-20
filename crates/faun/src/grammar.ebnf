@@ -39,7 +39,7 @@ line              = directive
                   | ( NAME | EFFECT ) [ call ] ( ":" typed | clause | "=" expr ) ;
 after-type        = "=" ( constraints | type )
                   | ":" typed ;
-(* A clause's guard and body, and an arm's guard and value, alike. *)
+(* A clause's guard and body. *)
 clause            = [ "if" expr ] "->" expr ;
 
 directive         = "package" "{" [ dependencies ] "}"
@@ -116,20 +116,25 @@ primary           = TYPE
 exprs             = expr [ "," [ exprs ] ] ;
 
 (* A parenthesis holds lines; after its first, the next token says which:
-   `,` a tuple, `->` or `if` arms, a line's end a block's next line, and `)`
-   one value grouped, where the line is one. That a tuple's member and an
-   arm's pattern are values is told after parsing. *)
-parenthesized     = block-line [ "," [ exprs ] | clause { NEWLINE arm } | NEWLINE lines ] ;
-(* Arms a line apiece, which an `is` takes: `x is (P -> a` … `)`. Arms no
-   `is` takes are refused after parsing. *)
-arm               = expr clause ;
+   `,` a tuple, `if`, `then` or a leave arms, a line's end a block's next
+   line, and `)` one value grouped, where the line is one. That a tuple's
+   member and an arm's pattern are values is told after parsing. *)
+parenthesized     = block-line [ "," [ exprs ] | arm-tail { NEWLINE arm } | NEWLINE lines ] ;
+(* Arms a line apiece, which an `is` takes: `x is (P then a` … `)`. An
+   arm's guard is a condition, so its value follows `then`, or it leaves
+   as an `if` line does. Arms no `is` takes are refused after parsing, and
+   so is an arm leaving where its `is` is not a line's value or a body's
+   answer. *)
+arm               = expr arm-tail ;
+arm-tail          = [ "if" expr ] ( "then" expr | leave ) ;
 (* A block's lines, and a loop's body's: bindings, leaving lines, loops
    and values. A line beginning `if` is the ternary, or, where a leave
    follows its condition, a line leaving where the condition holds; a
    ternary beginning a line takes no `=` and no `else`, which
-   `(if a then b else c) else return x` puts in parentheses. That a
-   block's last line is its answer, and that `continue` and `break` stand
-   in a loop's body, is told after parsing. *)
+   `(if a then b else c) else return x` puts in parentheses. A block
+   answers its last line where that is a value, and `{}` where it is a
+   binding, a leaving line or a loop; that, and that `continue` and `break`
+   stand in a loop's body, is told after parsing. *)
 lines             = block-line { NEWLINE block-line } ;
 block-line        = if-head ( "then" expr "else" expr | leave )
                   | loop-line

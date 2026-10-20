@@ -1,0 +1,7 @@
+error: an arm leaves only where its `is` is a line's value, or a body's answer
+ --> an_arm_leaves_only_where_its_is_is_a_line_s_value.fn:9:10
+  |
+9 |   Err(_) return 0
+  |          ^^^^^^^^
+  |
+  = help: bind what the `is` answers on a line of its own, and use the name here

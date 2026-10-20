@@ -124,3 +124,21 @@ mean(xs) -> (
 )
 
 expect mean([2, 4, 9]) == 5 & mean([]) == 0
+
+# A block whose last line is a binding, a leaving line or a loop answers
+# `{}`: arms that only assign need no answer of their own.
+signs : List(Int) -> (Nat, Nat)
+signs(xs) -> (
+  below = 0
+  above = 0
+  for x in xs do (
+    x is (
+      0 continue
+      _..-1 then (below = below + 1)
+      _ then (above = above + 1)
+    )
+  )
+  (below, above)
+)
+
+expect signs([-2, 0, 3, 4]) == (1, 2)

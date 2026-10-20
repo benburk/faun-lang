@@ -3,8 +3,8 @@ import std.host {Host}
 f : Nat -> Nat
 f(n) -> (
   arms = (
-    0 -> 1
-    _ -> 2
+    0 then 1
+    _ then 2
   )
   arms
 )

@@ -3,8 +3,8 @@ import std.host {Host}
 f : Result(Nat, [Gone]) -> Nat
 f(r) -> (
   base = r is (
-    Ok(v) -> v
-    Err(_) -> 0
+    Ok(v) then v
+    Err(_) then 0
   )
   base + v
 )

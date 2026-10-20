@@ -98,7 +98,7 @@ fn covered(program: &t::Program, symbols: &Symbols, prelude: &PreludeIds) -> Res
                 )
                 .label(format!("no arm matches {missing}"))
                 .help(format!(
-                    "add an arm matching {missing}, or `_ -> …` for the rest"
+                    "add an arm matching {missing}, or `_ then …` for the rest"
                 )));
             }
         }

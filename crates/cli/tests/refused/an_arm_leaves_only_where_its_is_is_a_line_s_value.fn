@@ -1,0 +1,13 @@
+import std.host {Host}
+
+g : Nat -> Nat
+g(n) -> n + 1
+
+f : Result(Nat, Str) -> Nat
+f(r) -> g(r is (
+  Ok(n) then n
+  Err(_) return 0
+))
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

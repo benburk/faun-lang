@@ -151,9 +151,10 @@ loop-line = "while" expr "do" "(" lines ")"
   The body is always a block, a round being lines where a branch is a
   value. So no `(` depends on its spacing: a call's `(` touches what it
   calls, and one apart from it is refused.
-- **A loop is a line of a block,** not an expression, and not the last
-  line of a block that answers. What a loop computes is left in the names
-  it bound again.
+- **A loop is a line of a block,** not an expression. What a loop
+  computes is left in the names it bound again. As a block's last line,
+  the block answers `{}` after it ([blocks](blocks.md) errata,
+  2026-10-18).
 - **A loop's body, a round, is block lines with no answer:** bindings,
   effects, leaving lines and loops, any of which may be its last; where
   nothing leaves it, the round goes on to the next.
@@ -318,3 +319,8 @@ used up there. A `for` walking a list of files takes the list, each round
 using up its element, and a `break` from it, which would leave the rest,
 is refused. The ways out of a loop, its head failing and each `break`,
 must agree on what they used up.
+
+**2026-10-18.** A loop may end a block, which then answers `{}` once the
+loop ends; see the [blocks](blocks.md) errata. A loop still gives no value
+of its own, and `break` none: what a loop computes comes out in the names
+it assigns, which covers what Rust's `break value` is for.

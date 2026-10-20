@@ -34,11 +34,11 @@ expect always(4)
 # Arms whose values are arms, a test of a tuple of lists, and a range.
 sorted_out : (List(Nat), Nat) -> Str
 sorted_out(xs, n) -> (xs, n) is (
-  ([], 0) -> "nothing at all"
-  ([], _) -> "a number alone"
-  ([_, *_], m) -> m is (
-    0..9 -> "a digit and some"
-    _ -> "much"
+  ([], 0) then "nothing at all"
+  ([], _) then "a number alone"
+  ([_, *_], m) then m is (
+    0..9 then "a digit and some"
+    _ then "much"
   )
 )
 
@@ -75,8 +75,8 @@ returned(n, loud) -> (
   if n == 0 return if loud then "ZERO" else "zero"
   n > 1 else return (
     word = n is (
-      1 -> "one"
-      _ -> "?"
+      1 then "one"
+      _ then "?"
     )
     word
   )
@@ -134,8 +134,8 @@ expect fibby([1, 2, 3, 9]) & !fibby([1, 2, 4]) & !fibby([1])
 somewhere : Result(Nat, [Gone]) -> Nat
 somewhere(r) -> (
   r is (
-    Ok(n) -> n > 0
-    Err(_) -> False
+    Ok(n) then n > 0
+    Err(_) then False
   ) else return 0
   1
 )
@@ -171,9 +171,9 @@ expect minus_three(1) == 5 & negated(Ok(2)) == Ok(-2)
 # Ranges with a negative end and an open one.
 around : Int -> Nat
 around(x) -> x is (
-  -3..-1 -> 1
-  0.._ -> 2
-  _ -> 3
+  -3..-1 then 1
+  0.._ then 2
+  _ then 3
 )
 
 expect around(-2) == 1 & around(7) == 2 & around(-9) == 3

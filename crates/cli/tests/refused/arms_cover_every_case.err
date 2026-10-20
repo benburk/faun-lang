@@ -4,4 +4,4 @@ error: this `is` does not cover every case
 6 | area(shape) -> shape is (
   |                ^^^^^ no arm matches `Square(_)`
   |
-  = help: add an arm matching `Square(_)`, or `_ -> …` for the rest
+  = help: add an arm matching `Square(_)`, or `_ then …` for the rest

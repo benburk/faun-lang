@@ -164,6 +164,20 @@
           }
         ]
       },
+      "leave": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "leave",
+            "named": true
+          },
+          {
+            "type": "return_expression",
+            "named": true
+          }
+        ]
+      },
       "pattern": {
         "multiple": false,
         "required": true,
@@ -176,7 +190,7 @@
       },
       "value": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "_expression",

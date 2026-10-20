@@ -146,16 +146,18 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
 
 ### Arms
 
-`value is ( arms )`, an arm a line, `pattern if guard -> value`, answers by
-the first arm whose pattern matches and whose guard holds. An arm's names
+`value is ( arms )`, an arm a line, `pattern if guard then value`, answers
+by the first arm whose pattern matches and whose guard holds. An arm's names
 are seen by its guard and its value; the arms cover every value, as
-clauses do, and answer one type.
+clauses do, and answer one type. An arm may leave in place of `then`, as
+an `if` line does: `pattern return value`, `pattern continue`, `pattern
+break` (errata, 2026-10-16).
 
 ```
 area(shape) -> shape is (
-  Circle(r) -> 3 * r * r
-  Rect(w, h) -> w * h
-  Dot -> 0
+  Circle(r) then 3 * r * r
+  Rect(w, h) then w * h
+  Dot then 0
 )
 ```
 
@@ -167,9 +169,11 @@ partway through a body is.
 - **Syntax.** Two block lines, `condition "else" out` and `"if" condition
   out`, with `out = "return" expr | "continue" | "break"`; `return`'s value
   is any expression, a block among them, and `continue` and `break` come
-  with [loops](loops.md). These are the only places `return`, `continue`
-  and `break` stand. Neither line is an expression, nor the last line of a
-  block that answers. After `if condition`, the next token says which:
+  with [loops](loops.md). These, and an arm in place of its `then`
+  (errata, 2026-10-16), are the only places `return`, `continue` and
+  `break` stand. Neither line is an expression; as a block's last line,
+  the block answers `{}` after it ([blocks](blocks.md) errata,
+  2026-10-18). After `if condition`, the next token says which:
   `then` begins the ternary, a leaving keyword the line.
 - **Meaning.** Where the condition holds, the block goes on, what it bound
   in scope for every line below. Where it fails, the `else` runs and leaves:
@@ -486,3 +490,32 @@ after a test held, what the test took apart is whole again, which is sound
 because a condition's right side can use nothing up. A test standing as a
 value only looks. The resource check reads a condition as two ways on, one
 where it holds and one where it fails, and `&` and `|` combine them.
+
+**2026-10-16.** An arm's value follows `then`, not `->`, and a leave may
+stand in its place: `P return value`, `P continue`, `P break`. An arm's
+pattern and guard are a condition, and after a condition `then` goes on
+with a value and a leave leaves, as after an `if`'s; `->` is left to
+definitions, a clause's body and a function's type. Parsing a value made
+of several fields from keyed input was the case that asked for it: an arm
+for each key, and one for a key repeated or unknown that leaves with the
+error, where before each arm answered a `Result` passed on by `?` on the
+line after.
+
+- **Where an arm leaves.** Where its `is` is a line's value, a binding's
+  or one of its own, or a body's answer, or a branch of one; inside an
+  operand or an argument it is refused, as a leaving line is no
+  expression. Every way out is still marked by `return`, `continue` or
+  `break`.
+- **Arms on a line of their own** go on with nothing: the parser binds
+  them to `{}`, so each arm that does not leave answers `{}`, and one
+  answering anything else is refused, as a value thrown away is.
+- **Meaning.** A leaving arm adds nothing to the arms' type, as a leaving
+  line adds nothing to its block's.
+- **Built** with the lowering of a round's lines after a binding whose
+  branches may leave: the join point they become is handed what the next
+  round and the lines after the loop read, which `continue` and `break`
+  pass on. A `continue` in an `if` branch of a binding in a loop's body
+  had lowered to a call missing them.
+
+**2026-10-18.** A leaving line may end a block, which then answers `{}`
+where the line goes on; see the [blocks](blocks.md) errata.

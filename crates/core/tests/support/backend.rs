@@ -1186,6 +1186,49 @@ fn patterns_name_wholes_compare_and_bind_from_guards() {
     assert_eq!(answers, [12, 122]);
 }
 
+/// An arm leaves where `then` would stand: `return` answers the clause,
+/// `continue` and `break` the loop, from arms that are a binding's value
+/// and from arms on a line of their own, which go on with `{}`.
+#[test]
+fn an_arm_may_leave() {
+    let program = read(
+        "import std.host {Host}
+
+         picked : List(Nat) -> Nat
+         picked(xs) -> (
+           for x in xs do (
+             step = x is (
+               0 break
+               1 continue
+               n if n > 2 return n
+               n then n
+             )
+             x is (
+               2 return step * 10
+               _ then {}
+             )
+           )
+           9
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           answer = picked([1, n + 1, 0, 7]) + picked([0, 5])
+           host.exit!(U8.of_nat(answer))
+         )",
+    )
+    .expect("a program whose arms leave");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [29, 12]);
+}
+
 /// An `is` with arms answers by the first arm whose pattern matches and
 /// whose guard holds, as a value the body goes on from and as a clause's
 /// answer.
@@ -1198,17 +1241,17 @@ fn arms_answer_by_the_first_that_matches() {
 
          area : Shape -> Nat
          area(shape) -> shape is (
-           Circle(r) -> 3 * r * r
-           Square(s) -> s * s
-           Dot -> 0
+           Circle(r) then 3 * r * r
+           Square(s) then s * s
+           Dot then 0
          )
 
          sized : List(Nat) -> Nat
          sized(xs) -> xs.first() is (
-           Ok(n) if n > 1 -> 100
-           Ok(1 | 0) -> 10
-           Ok(_) -> 5
-           Err(_) -> 1
+           Ok(n) if n > 1 then 100
+           Ok(1 | 0) then 10
+           Ok(_) then 5
+           Err(_) then 1
          )
 
          main! : Host -> []
@@ -1291,11 +1334,11 @@ fn an_assigned_name_holds_its_new_value_past_its_branch() {
              1
            ) else 2
            seen = host.args is (
-             [_, *_] -> (
+             [_, *_] then (
                count = count + label
                True
              )
-             [] -> False
+             [] then False
            )
            host.exit!(U8.of_nat(count))
          )",

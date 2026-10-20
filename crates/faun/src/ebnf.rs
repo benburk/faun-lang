@@ -572,7 +572,8 @@ const READ: &[&str] = &[
     "f(x) -> (while x do (\n  if x break\n)\n  0)\n",
     "f(r) -> (\n  if r is Err(e) return Err(e)\n  if done return 0\n  r\n)\n",
     "f(x) -> (if x return 1\n  2\n)\n",
-    "f(x) -> x is (\n  A(v) if v > 0 -> v\n  B | C -> (\n    y = 1\n    y\n  )\n  _ -> 0\n)\n",
+    "f(x) -> x is (\n  A(v) if v > 0 then v\n  B | C then (\n    y = 1\n    y\n  )\n  _ then 0\n)\n",
+    "f(x) -> (\n  y = x is (\n    A(v) return v\n    B if b break\n    C continue\n    _ then 1\n  )\n  y\n)\n",
     "f(xs) -> (\n  xs is [x, *_] else return 0\n  y = x\n  y > 1\n    else return (\n      z = y\n      z\n    )\n  y\n)\n",
 ];
 
@@ -615,8 +616,10 @@ const REFUSED: &[&str] = &[
     "f(x) -> (if x then 1 else 2 = y\n  y)\n",
     "f(x) -> (\n  for y x do (\n    y\n  )\n  0\n)\n",
     "f(x) -> (\n  while x\n    0\n  0\n)\n",
-    "f(x) -> x is (\n  A -> 1\n  B 2\n)\n",
-    "f(x) -> x is (\n  A -> 1\n  B ->\n)\n",
+    "f(x) -> x is (\n  A then 1\n  B 2\n)\n",
+    "f(x) -> x is (\n  A then 1\n  B then\n)\n",
+    "f(x) -> x is (\n  A -> 1\n)\n",
+    "f(x) -> x is (\n  A return\n)\n",
 ];
 
 #[test]

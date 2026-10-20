@@ -4,9 +4,9 @@ Shape : [Circle(Nat), Square(Nat), Dot]
 
 area : Shape -> Nat
 area(shape) -> shape is (
-  Circle(r) -> r
-  Square(s) if s > 1 -> s
-  Dot -> 0
+  Circle(r) then r
+  Square(s) if s > 1 then s
+  Dot then 0
 )
 
 main! : Host -> []

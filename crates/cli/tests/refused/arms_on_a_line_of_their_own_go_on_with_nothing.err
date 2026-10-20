@@ -1,0 +1,7 @@
+error: mismatched types
+ --> arms_on_a_line_of_their_own_go_on_with_nothing.fn:7:5
+  |
+7 |     x is (
+  |     ^^^^^^ expected `Nat`, found `{}`
+  |
+  = note: arms on a line of their own go on with nothing: each arm that does not leave answers `{}`

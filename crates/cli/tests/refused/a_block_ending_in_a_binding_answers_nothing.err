@@ -1,0 +1,7 @@
+error: mismatched types
+ --> a_block_ending_in_a_binding_answers_nothing.fn:6:3
+  |
+6 |   x = x + 1
+  |   ^^^^^^^^^ expected `Nat`, found `{}`
+  |
+  = note: a block whose last line is a binding, a loop or a leaving line answers `{}`

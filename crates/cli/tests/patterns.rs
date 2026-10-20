@@ -389,7 +389,7 @@ fn arms(function: &Function, head: &str, subject: &str) -> String {
     let mut written = format!("{head} -> {subject} is (\n");
     for (at, clause) in function.clauses.iter().enumerate() {
         let guard = guarded(clause, "if");
-        writeln!(written, "  {}{guard} -> {at}", tested(clause)).expect("writing to a string");
+        writeln!(written, "  {}{guard} then {at}", tested(clause)).expect("writing to a string");
     }
     written.push_str(")\n");
     written

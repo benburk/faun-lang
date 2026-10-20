@@ -94,6 +94,10 @@ pub struct InferredBound {
     pub bare: bool,
 }
 
+/// Noted where a value of type `{}` stands where another is wanted.
+const ANSWERS_NOTHING: &str =
+    "a block whose last line is a binding, a loop or a leaving line answers `{}`";
+
 /// Which reading a word some declaration claims took, by its site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reading {
@@ -773,7 +777,18 @@ impl Checker<'_> {
             let value = self.expr(module, &binding.value, locals)?;
             let mut bound = Vec::new();
             collect_pattern_locals(&binding.pattern, &mut bound);
-            self.pattern(module, &binding.pattern, &value, locals, binding.value.span)?;
+            self.pattern(module, &binding.pattern, &value, locals, binding.value.span)
+                .map_err(|mut error| {
+                    // Arms on a line of their own, which the parser binds to
+                    // `{}`: the arms answer otherwise, not a block.
+                    let alone = matches!(&binding.pattern, h::Pattern::Record(fields, false) if fields.is_empty())
+                        && matches!(binding.value.kind, h::ExprKind::Match(..));
+                    if !alone {
+                        return error;
+                    }
+                    error.advice().notes.retain(|note| note != ANSWERS_NOTHING);
+                    error.note("arms on a line of their own go on with nothing: each arm that does not leave answers `{}`")
+                })?;
             self.pending_closings.push(PendingClosing {
                 module,
                 span: binding.value.span,
@@ -1904,10 +1919,17 @@ impl Checker<'_> {
         if let Mismatch::NotAmong { .. } = reason {
             return failure(module, span, reason.describe(self.symbols));
         }
+        let actual = self.infer.resolve(actual);
+        let nothing = matches!(&actual, Ty::Record(fields, None) if fields.is_empty());
         let expected = show(&self.infer.resolve(expected), self.symbols);
-        let actual = show(&self.infer.resolve(actual), self.symbols);
+        let actual = show(&actual, self.symbols);
         let error = failure(module, span, "mismatched types");
         let error = error.label(format!("expected `{expected}`, found `{actual}`"));
+        let error = if nothing {
+            error.note(ANSWERS_NOTHING)
+        } else {
+            error
+        };
         match reason {
             Mismatch::Reason("incompatible types") => error,
             _ => error.note(reason.describe(self.symbols)),

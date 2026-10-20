@@ -455,21 +455,7 @@ impl Compiler<'_> {
         let mut after_reads = free_in(&rest, &afters.iter().copied().collect());
         // A `continue` or `break` of the loop around this one, written
         // after it, hands on what that loop's functions read.
-        let outer: Vec<(LocalId, Type)> = self
-            .joins
-            .exits
-            .borrow()
-            .last()
-            .map(|exits| {
-                exits
-                    .round_reads
-                    .iter()
-                    .chain(&exits.rest_of_list)
-                    .chain(&exits.after_reads)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
+        let outer = self.exit_reads();
         for read in then.iter().flat_map(|(_, reads)| reads).chain(&outer) {
             if !afters.contains(&read.0) && !after_reads.contains(read) {
                 after_reads.push(read.clone());
@@ -612,6 +598,23 @@ impl Compiler<'_> {
         })
     }
 
+    /// What a `continue` or `break` of the innermost loop hands on beside
+    /// what the loop carries: what its round and the lines after it read,
+    /// and the rest of the list a `for` walks.
+    fn exit_reads(&self) -> Vec<(LocalId, Type)> {
+        let exits = self.joins.exits.borrow();
+        let Some(exits) = exits.last() else {
+            return Vec::new();
+        };
+        exits
+            .round_reads
+            .iter()
+            .chain(&exits.rest_of_list)
+            .chain(&exits.after_reads)
+            .cloned()
+            .collect()
+    }
+
     /// A function lowering made, `body` with `parameters` as its locals.
     fn made<'p>(
         &self,
@@ -694,7 +697,17 @@ impl Compiler<'_> {
         let join = if last {
             None
         } else {
-            let live = live_in(&rest, local);
+            let mut live = live_in(&rest, local);
+            // A round's lines that go on to the next round or leave the
+            // loop hand on what its round or the lines after it read, which
+            // the join point must be given.
+            if exits_loop(&rest) {
+                for read in self.exit_reads() {
+                    if !live.contains(&read) {
+                        live.push(read);
+                    }
+                }
+            }
             let mut parameters = vec![construct.value.ty.clone()];
             parameters.extend(live.iter().map(|(_, ty)| ty.clone()));
             let made = self.joins.made.get();
@@ -1882,6 +1895,17 @@ fn leaves(expression: &Expr) -> bool {
                 | ExprKind::Loop(_)
         );
     });
+    found
+}
+
+/// Whether a `continue` or a `break` is anywhere in `body`.
+fn exits_loop(body: &d::Body) -> bool {
+    let mut found = false;
+    for expression in body.exprs() {
+        expression.for_each_within(&mut |inner| {
+            found |= matches!(inner.kind, ExprKind::Continue(_) | ExprKind::Break(_));
+        });
+    }
     found
 }
 

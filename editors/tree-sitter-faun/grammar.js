@@ -307,12 +307,13 @@ module.exports = grammar({
       ')',
     ),
 
-    _block_line: $ => choice(
+    _block_line: $ => choice($._statement_line, $._expression),
+
+    _statement_line: $ => choice(
       $.binding,
       $.else_line,
       $.if_line,
       $.loop_line,
-      $._expression,
     ),
 
     // A block's line: leave where the condition holds, else go on.
@@ -344,11 +345,15 @@ module.exports = grammar({
     // apiece. Arms no `is` takes are refused after parsing.
     arms: $ => seq('(', $.arm, repeat(seq($._block_newline, $.arm)), ')'),
 
+    // Its value after `then`, or how it leaves, as an `if`'s condition
+    // takes either.
     arm: $ => seq(
       field('pattern', $._expression),
       optional(seq('if', field('guard', $._expression))),
-      '->',
-      field('value', $._expression),
+      choice(
+        seq('then', field('value', $._expression)),
+        field('leave', choice($.return_expression, $.leave)),
+      ),
     ),
 
     _operand: $ => choice($.unary_expression, $.equal_pattern, $._postfix),
@@ -440,12 +445,15 @@ module.exports = grammar({
 
     tuple: $ => seq('(', commaSep1($._expression), ')'),
 
-    // Lines, as a loop's body's are; that the last is its answer is told
-    // after parsing.
+    // Lines, as a loop's body's are, answering the last where it is a
+    // value and `{}` where it is not; one line is a block only where it is
+    // no value, which would be grouped.
     block: $ => seq(
       '(',
-      $._block_line,
-      repeat1(seq($._block_newline, $._block_line)),
+      choice(
+        seq($._block_line, repeat1(seq($._block_newline, $._block_line))),
+        $._statement_line,
+      ),
       ')',
     ),
 

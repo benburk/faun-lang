@@ -38,10 +38,10 @@ batch!(files, names) -> (
 # What `name` holds, or nothing where it cannot be opened or read.
 read_back! : (Files, Str) -> List(U8)
 read_back!(files, name) -> files.open!(name, Read) is (
-  Ok(file) -> (
+  Ok(file) then (
     read = file.read_to_end!()
     closed = file.close!()
     if read is Ok(bytes) then bytes else []
   )
-  Err(_) -> []
+  Err(_) then []
 )

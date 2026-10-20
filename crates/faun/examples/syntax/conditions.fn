@@ -118,10 +118,10 @@ Reading : [Celsius(Nat), Kelvin(Nat), Missing]
 
 described : Reading -> Str
 described(reading) -> reading is (
-  Celsius(0) -> "freezing"
-  Celsius(c) if c > 30 -> "hot"
-  Celsius(c) | Kelvin(c) -> "${c} degrees"
-  Missing -> (
+  Celsius(0) then "freezing"
+  Celsius(c) if c > 30 then "hot"
+  Celsius(c) | Kelvin(c) then "${c} degrees"
+  Missing then (
     note = "no reading"
     note
   )
@@ -129,6 +129,46 @@ described(reading) -> reading is (
 
 expect described(Celsius(0)) == "freezing" & described(Celsius(35)) == "hot"
 expect described(Kelvin(300)) == "300 degrees" & described(Missing) == "no reading"
+
+# An arm may leave in place of `then`, as an `if` line does.
+warmest : List(Reading) -> Result(Nat, [Unreadable])
+warmest(readings) -> (
+  best = 0
+  for reading in readings do (
+    c = reading is (
+      Celsius(c) then c
+      Kelvin(k) if k < 273 continue
+      Kelvin(k) then k - 273
+      Missing return Err(Unreadable)
+    )
+    if c <= best continue
+    best = c
+  )
+  Ok(best)
+)
+
+expect warmest([Celsius(12), Kelvin(300), Kelvin(100)]) == Ok(27)
+expect warmest([Celsius(12), Missing]) == Err(Unreadable)
+
+# Arms on a line of their own go on with nothing: each that does not leave
+# answers `{}`.
+Outcome : [Done, Skipped, Failed]
+
+completed : List(Outcome) -> Result(Nat, [Failed])
+completed(outcomes) -> (
+  count = 0
+  for outcome in outcomes do (
+    outcome is (
+      Skipped continue
+      Failed return Err(Failed)
+      Done then {}
+    )
+    count = count + 1
+  )
+  Ok(count)
+)
+
+expect completed([Done, Skipped, Done]) == Ok(2) & completed([Done, Failed]) == Err(Failed)
 
 # A binding naming a name in scope assigns it, from there on: past the
 # branch it was assigned in, and below a line's `else`.
