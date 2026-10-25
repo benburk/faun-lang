@@ -122,7 +122,7 @@ pub(super) fn pure(program: &Program, recognised: &Recognised) -> Vec<bool> {
 /// further back than itself. Asking instead whether each definition reaches
 /// each other was a search per pair, and the pairs are the square of the
 /// program.
-fn rounds(calls: &[Vec<FnId>]) -> Vec<Vec<FnId>> {
+pub(super) fn rounds(calls: &[Vec<FnId>]) -> Vec<Vec<FnId>> {
     let mut state = Rounds {
         calls,
         reached: vec![usize::MAX; calls.len()],

@@ -112,8 +112,10 @@ mod normalize;
 mod optimize;
 mod pretty;
 mod program;
+mod relations;
 mod sequence;
 mod specialize;
+mod stops;
 mod sweep;
 mod terms;
 mod types;
@@ -148,6 +150,7 @@ pub use optimize::optimize;
 pub(crate) use program::shape;
 pub use program::{Program, type_shape};
 pub(crate) use program::{single_field, single_field_constant};
+pub use stops::{UNREACHED, Unproved, unproved};
 pub use types::TypeShape;
 pub use validate::{Refusal, validate};
 
@@ -166,5 +169,7 @@ mod library_tests;
 mod normalization_tests;
 #[cfg(test)]
 mod optimization_tests;
+#[cfg(test)]
+mod stops_tests;
 #[cfg(test)]
 mod tests;

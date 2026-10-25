@@ -558,7 +558,7 @@ impl<'a> Lowerer<'a> {
         }
         for list in &self.unreachables {
             let id = self.output.declare(
-                "unreachable",
+                barb::UNREACHED,
                 &[self.type_ids[list]],
                 self.type_ids[&Type::empty()],
             );
@@ -569,7 +569,8 @@ impl<'a> Lowerer<'a> {
     /// Each function a way no value takes calls: itself, so it never
     /// answers, and as `[]`, so its call may answer an arm of any type. It
     /// takes the list split above that way, which is not known where the
-    /// way is left in, so folding never runs it.
+    /// way is left in, so folding never runs it. Its name, which no written
+    /// name can be, tells whether a program stops not to ask of it.
     fn define_unreachables(&mut self) {
         for id in self.unreachable_ids.values().copied() {
             self.output

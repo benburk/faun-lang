@@ -12,6 +12,8 @@ use crate::{NATIVE, TARGETS};
 pub(crate) enum Command {
     Check {
         target: &'static dyn Target,
+        /// Whether to say which definitions nothing shows stop.
+        totality: bool,
         source: PathBuf,
     },
     Build {
@@ -63,11 +65,18 @@ pub(crate) fn parse() -> Command {
 
 fn check() -> impl Parser<Command> {
     let target = target();
+    let totality = long("totality")
+        .help("Also list every round of calls nothing shows stops")
+        .switch();
     let source = positional::<PathBuf>("PATH").help("The source file to check");
-    construct!(Command::Check { target, source })
-        .to_options()
-        .descr("Check a Faun program against the selected machine's host")
-        .command("check")
+    construct!(Command::Check {
+        target,
+        totality,
+        source
+    })
+    .to_options()
+    .descr("Check a Faun program against the selected machine's host")
+    .command("check")
 }
 
 fn build() -> impl Parser<Command> {

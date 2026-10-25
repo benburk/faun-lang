@@ -48,7 +48,11 @@ fn main() -> ExitCode {
 /// Do what `command` says, and say what went wrong where anything did.
 fn answer(command: Command) -> ExitCode {
     let outcome = match command {
-        Command::Check { target, source } => check(&source, target).map(|()| ExitCode::SUCCESS),
+        Command::Check {
+            target,
+            totality,
+            source,
+        } => check(&source, target, totality),
         Command::Build {
             target,
             source,
@@ -86,11 +90,36 @@ fn tell(diagnostic: Diagnostic) {
     eprintln!("{diagnostic}");
 }
 
-/// Check a package against the target's host by lowering it as far as Barb.
-fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
+/// Check a package against the target's host by lowering it as far as Barb,
+/// and, asked about `totality`, list each round of calls nothing shows
+/// stops, failing where a pure one is among them. A round reaching the host
+/// is listed but not failed: whether it stops is the world's to say. The
+/// rounds are read in the package as its expectations lower it, since a
+/// definition generic over a constraint is lowered only where something
+/// calls it at a type.
+fn check(source: &Path, target: &dyn Target, totality: bool) -> Result<ExitCode, Diagnostic> {
     faun::lower_to_barb(source, target)?;
     println!("checked {}", source.display());
-    Ok(())
+    if !totality {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let barb = faun::lower_tests_to_barb(source, target)?.barb;
+    let unproved = barb::unproved(&barb);
+    for round in &unproved {
+        let mut names: Vec<&str> = Vec::new();
+        for id in &round.functions {
+            let name = barb.name(barb.function(*id).name);
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        let kind = if round.pure { "pure" } else { "effectful" };
+        println!("not shown to stop ({kind}): {}", names.join(", "));
+    }
+    if unproved.iter().any(|round| round.pure) {
+        return Ok(ExitCode::FAILURE);
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Compile an application and write its image to `output`. A library has

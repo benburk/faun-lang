@@ -174,7 +174,7 @@ impl Program {
 
     /// The same, for a reader: what was kept where it still holds, and
     /// otherwise worked out afresh and not kept.
-    fn recognition(&self) -> Cow<'_, Recognised> {
+    pub(super) fn recognition(&self) -> Cow<'_, Recognised> {
         if self.recognition_kept() {
             Cow::Borrowed(&self.recognised.0)
         } else {

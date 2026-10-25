@@ -117,6 +117,12 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `calls.rs`: the call graph, the rounds it goes in (its strongly connected
   components), the loop breakers inlining keeps whole, and the order
   folding reads definitions in, each after what it calls.
+- `stops.rs`: whether each round of calls stops, which only `faun check
+  --totality` asks: size-change termination over the rounds, reading sizes,
+  the gaps between naturals and what calls answer. `relations.rs` carries
+  what a comparison says to where its answer is taken apart. Nothing that
+  validates or optimizes reads either, and a frontend's definition a way no
+  value takes calls, named `UNREACHED`, is not asked about.
 - `claim.rs`: what a claimed float is -- a natural in one-field wrappers,
   taken and answered at one type -- and answering a claimed call from its
   operands' patterns with the host's arithmetic (`crate::float`). A claimed
