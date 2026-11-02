@@ -8,9 +8,9 @@
 # stated in key order, which any ordered representation can honour — swapping
 # the tree for a B-tree is this file's business alone.
 #
-# `equals` is deliberately absent: two maps with the same contents may have
-# different shapes (insertion order decides), so structural equality would be
-# wrong. Compare maps by `to_list` when the need arises.
+# `equals` compares contents, by `to_list`: two maps with the same entries
+# may have different shapes (insertion order decides), so the trees
+# themselves are never compared.
 
 export {SortedMap}
 

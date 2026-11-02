@@ -10,10 +10,10 @@
 //! arguments in place of the function parameter, so no function value is
 //! left for the program to hold.
 //!
-//! The call graph that remains says exactly which definition calls which,
-//! which is what termination checking reads: `bytes.count(|b| vowels.contains(b))`
-//! goes round through the lambda only as far as `contains` goes on its own
-//! list, rather than through one `apply` shared by every function of a type.
+//! The call graph that remains says exactly which definition calls which:
+//! in `bytes.count(|b| vowels.contains(b))` the lambda's body is called
+//! directly, rather than through one `apply` shared by every function of a
+//! type, so inlining and range analysis read the callback's own code.
 //!
 //! What cannot be made finitely is refused: a recursive call that wraps the
 //! callback it was handed in a lambda of its own and hands that on, so each

@@ -19,6 +19,10 @@ left to one, so none is lost.
 - **An effect's answer dropped** where it is a `Result`: a `write!(…)` on
   a line of its own, neither bound nor passed on with `?`. See
   [discarded answers](proposals/rejected/discarded-answers.md).
+- **A clause or arm no value reaches,** one after others that already
+  cover every value, `area(_) -> 1` after `area(Dot)` and `area(Square(n))`,
+  or one an earlier catch-all covers. Rust, OCaml and Haskell warn of it;
+  the compiler, which has no warnings, accepts it.
 - **A file name some host cannot create,** `CON`, `aux.txt`, a trailing
   dot, warned about on every host. See [files](effects/files.md).
 

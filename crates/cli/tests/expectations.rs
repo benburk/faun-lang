@@ -445,7 +445,7 @@ fn a_float_is_read_from_standard_input() {
 fn floats_keep_the_ieee_contract() {
     let floats =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/floats");
-    for (entry, count) in [("f32.fn", 101), ("f64.fn", 71)] {
+    for (entry, count) in [("f32.fn", 105), ("f64.fn", 75)] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
             .arg("test")
             .arg(floats.join(entry))

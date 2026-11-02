@@ -142,7 +142,8 @@ does not stand for its constructors in modules that import it.
 Faun specializes from the types checking recorded rather than inferring each
 specialization again, so where a closed row is answered as a signature's
 wider one, a caller's, the value is rebuilt in the wider row. Tag rows have
-no written tail, as in Ori; a tag used as a function value is not here yet.
+no written tail, as in Ori. A constructor may be passed as a callback,
+`[1, 2].map(Found)`, as any function may.
 
 A closed row has `equals` and `to_str` without declaring them, as in Ori:
 two values are equal where they are one tag with equal fields, and a tag is
@@ -178,8 +179,9 @@ cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn
 A key says what it is made of through `hash_into : (T, h) -> h`, generic over
 any hasher: `Hasher(h)` is the alias for a type with `write_u64` and
 `write_bytes`, and nothing more, so a key can feed a hasher but never read a
-digest out. The numbers, `Bool`, `Str` and `List` define it; a tuple or a
-closed record has its own, feeding its members in order. `Map` and `Set`
+digest out. The numbers, `Bool`, `Str` and `List` define it; a tuple has its own,
+feeding its members in order, and a closed record its own, feeding its fields
+in one order fixed by its type. `Map` and `Set`
 feed the library's own `Mixer` (`mixer.fn`) and keep their entries in
 insertion order, so no program observes the mixing. The package exports
 `Mixer` as a type alone, for a generic signature over a map to bound its
@@ -217,7 +219,7 @@ no `equals` of its own, and one that does is refused. Barb answers
 
 Generic code that uses a method has a `where` bound, as in Ori: structural,
 met by any type having the member, with no trait and no runtime dictionary.
-A signature writes them after `where`, each member on a line of its own:
+A signature writes them after `where`, parted by commas, often a member to a line:
 `sum : List(a) -> a where` over `a.zero : a` and `a.add : (a, a) -> a`, a
 value member named on the type as `a.zero`; an unsigned definition
 infers them, so `double(x) -> x.mul(2)` serves every type with a `mul`. Where
@@ -511,10 +513,10 @@ A guard's `|` is tried as an `|` among a clause's parameters is: where the
 left holds and what follows it fails, the right is tried.
 
 `is` binds tighter than `&` and looser than a comparison; a test tested
-again, `x is A is B`, or compared, `x is 3 == y`, is refused. A test binds
-names of its own: `r is Ok(limit)`, with `limit` a name already, would bind
-a new one where a comparison was meant, so it is refused, offering
-`Ok(==limit)`. `?` on the right of `&` or `|` is refused, since that side may
+again, `x is A is B`, or compared, `x is 3 == y`, is refused. A name in a
+test's pattern always binds, as `=` does, even one already in scope: `r is
+Ok(limit)` binds `limit` again where it holds, and `Ok(==limit)` compares
+with it instead. `?` on the right of `&` or `|` is refused, since that side may
 not be worked out. A test of a value holding a file takes it apart as the
 host's resources say. Not yet: a type taken apart by its own name, as
 `U8(…)`.
@@ -768,8 +770,8 @@ expect (
 )
 ```
 
-An expectation is checked as any definition is, typed, exhaustive and seen to
-stop, whenever its package is. No program can name one. `faun test PATH`
+An expectation is checked as any definition is, typed and exhaustive,
+whenever its package is. No program can name one. `faun test PATH`
 builds the package at `PATH` with an entry of its own in place of any `main!`,
 which is checked all the same: the entry asks every expectation of every module in the package, those of the
 standard library and of packages it depends on aside, and prints the number
@@ -820,9 +822,11 @@ count alone and makes no list, and one that reads neither is handed nothing.
 `host.stdout.write_all!(bytes)`. Only the host leaves a definition without
 clauses: a target answers one by its spelling alone, so one written in any
 other module, as a program's own `fd_put!`, would reach the routine at
-whatever type it claimed and with no capability in hand, and is refused. A program orders its effects by threading `Host` through
-them. Barb calls each routine with the `Host` it was handed, as the source
-says, and keeps the order and number of calls to anything bodyless. A routine
+whatever type it claimed and with no capability in hand, and is refused. `Host` is the authority
+a program needs to ask for an effect, not what orders them: its effects
+happen in the order they are written. Barb calls each routine with the
+`Host` it was handed, as the source says, and keeps the order and number of
+calls to anything bodyless. A routine
 asked with authority reads nothing of it, so machine lowering hands nothing
 for it, and passing `Host` along is not reading what it carries: a program
 that never reads `host.args` makes its target produce nothing.

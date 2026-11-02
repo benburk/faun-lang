@@ -17,7 +17,7 @@ expr = x
 - Constructor fields become the next locals in an arm.
 - Functions may have a body or only a declaration.
 - Declaration-only functions are interpreted by downstream consumers.
-- Programs reaching this IR are well-typed, exhaustive, and total.
+- Programs reaching this IR are well-typed and exhaustive. They need not stop.
 
 ## The API
 

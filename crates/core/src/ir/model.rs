@@ -35,9 +35,9 @@ pub enum Class {
     /// An immutable algebraic value. Ownership is tracked for this class;
     /// its object address and layout remain private to legalization.
     Cell,
-    /// Where a sequence's elements live. A sequence is a buffer and a
-    /// length, and the length says which of the buffer's elements it holds:
-    /// the last that many. Ownership is tracked; layout is legalization's.
+    /// Where a sequence's elements live. A sequence is a buffer, where in
+    /// it the sequence starts, and how many elements it has. Ownership is
+    /// tracked; layout is legalization's.
     Buffer,
     /// An arbitrary-precision nonnegative integer. Never a wrapping word.
     Natural,

@@ -63,8 +63,11 @@ walks, as `map` does, into one that replaces each element where it lies.
 So in n-body, five bodies stepped five million times, a step builds no list
 at all.
 
-Cells are not written in place. A cell whose fields are its only readers
-is not built at all: each field is read where it was made.
+Cells are not written in place yet: building a cell as one of the same
+size dies, as a tree's insert does, frees one and allocates the other.
+Writing the new cell into the old one, touching only the fields that
+change, is planned. A cell whose fields are its only readers is not built
+at all: each field is read where it was made.
 
 ## Rationale
 
