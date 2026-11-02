@@ -65,9 +65,9 @@ A row written in a signature is closed for the body and open to callers.
 The body may answer only those tags: `first([]) -> Err(Nope)` under
 `[Empty]` is refused with `` `Nope` is not among the tags of `[Empty]` ``.
 A caller may still join `first`'s row with its own. A row in a parameter is
-what the definition handles, and stays closed. Clauses that take a row apart
-with no catch-all close it too, so after `f(A) -> 1` and `f(B) -> 2`, the
-call `f(C)` is refused.
+what the definition handles, and stays closed. Clauses, or an `is`'s arms,
+that take a row apart with no catch-all close it too, so after `f(A) -> 1`
+and `f(B) -> 2`, the call `f(C)` is refused.
 
 A signature may write `_` for a row it leaves to its `?`s:
 `parse_pair : (Str, Str) -> Result((Nat, Nat), _)` answers whatever its

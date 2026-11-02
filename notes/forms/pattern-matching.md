@@ -114,8 +114,10 @@ error: this `is` does not cover every case
 ```
 
 A numeral on `Nat` stands for its constructors, so `0` and `Succ(n)` cover a
-`Nat`; numerals alone never do. Clauses that take a tag row apart with no
-catch-all close it, so a caller cannot hand them a tag no clause matches.
+`Nat`; numerals alone never do. Clauses, or an `is`'s arms, that take a tag row
+apart with no catch-all close it, so a caller cannot hand them a tag nothing
+matches. An `if … is … then … else` closes nothing, since its `else` takes
+everything the test does not match.
 
 ## Comparing in a pattern
 
@@ -230,7 +232,7 @@ did not give up saying what every match does.
   group of clauses, and its diagnostic names the value missed.
 - **It is the alarm when a type grows.** A constructor added later breaks
   every match that does not handle it. A `_` opts out, and says so.
-- **Rows depend on it.** Clauses with no catch-all close a tag row, so
+- **Rows depend on it.** Clauses or arms with no catch-all close a tag row, so
   callers may not pass them a tag nothing matches.
 
 The cost is writing a case that cannot happen. The recourse is a type that

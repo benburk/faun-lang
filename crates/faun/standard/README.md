@@ -110,8 +110,8 @@ join it with their own. A closed row a body answers where its signature's
 row stands is rebuilt in that row, however the body came by it: bound by a
 pattern, answered by a call such as `results.get_or(0, Err(Gone))`, or read
 from a field. A row in a parameter is what a definition handles
-and stays closed. Clauses that take a row apart with no catch-all close it,
-so a caller cannot hand them a tag no clause matches. A closed row answered
+and stays closed. Clauses, or an `is`'s arms, that take a row apart with no
+catch-all close it, so a caller cannot hand them a tag nothing matches. A closed row answered
 where a wider one is still being worked out joins it, as in Ori: a definition
 answering `Bad(message)` in one clause and another's closed
 `[Absent, Found(Nat)]` in the next answers all three, the closed value
