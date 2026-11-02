@@ -1,0 +1,9 @@
+import std.host {Host}
+
+f(r) -> r is (
+  A then 1
+  B then 2
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(f(C)))

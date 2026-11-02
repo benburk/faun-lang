@@ -48,6 +48,20 @@ const RUNNING: &[(&str, &str, u32)] = &[
         11,
     ),
     (
+        "unsigned arms with no catch-all close their row as clauses do, and a test does not",
+        "describe(r) -> r is (
+           Ok(n) then n
+           Err(Empty) then 10
+           Err(Zero) then 20
+         )
+
+         tested(r) -> if r is Err(Empty) then 1 else 2
+
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(describe(Ok(3)) + describe(Err(Empty)) + describe(Err(Zero)) + tested(Err(Other))))",
+        35,
+    ),
+    (
         "a closed row answered where a caller widens it is widened",
         "same : [A, B] -> [A, B]
          same(x) -> x

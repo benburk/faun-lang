@@ -14,7 +14,7 @@
 //! closed row answered where such a row is wanted is subsumed, and the
 //! expression is recorded as widened; what an answer or a `?` waits on is
 //! settled first, so a row a call or a field hands back meets it as its own.
-//! Clauses taking a row apart without a catch-all close it. A word a declaration claims waits, as a method does,
+//! Clauses or an `is`'s arms taking a row apart without a catch-all close it. A word a declaration claims waits, as a method does,
 //! for its position's type to choose between the tag and the constructor.
 //!
 //! `where` bounds are structural. A signed body meets its written bounds at
@@ -1244,6 +1244,18 @@ impl Checker<'_> {
                     self.unify_at(module, arm.body.span, &answered, &answer)
                         .map_err(|error| error.note("every arm of an `is` answers one type"))?;
                 }
+                // Arms close the row they take apart as clauses do; a test
+                // alone does not, since what it does not match goes on.
+                let rows = arms
+                    .iter()
+                    .map(|arm| (arm.pattern.clone(), arm.guard.is_some()))
+                    .collect();
+                self.pending_closings.push(PendingClosing {
+                    module,
+                    span: value.span,
+                    ty: tested,
+                    rows,
+                });
                 Ok(answer)
             }
             // Its branches answer one type, the one the `if` answers.

@@ -1,0 +1,5 @@
+error: `C` is not among the tags of `[A, B]`, which admits no others
+ --> arms_naming_every_tag_close_their_row_to_callers.fn:9:39
+  |
+9 | main!(host) -> host.exit!(U8.of_nat(f(C)))
+  |                                       ^
