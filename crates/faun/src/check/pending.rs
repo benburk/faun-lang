@@ -17,6 +17,20 @@ use crate::diagnostic::{Advised, Refusal, counted};
 use crate::hir as h;
 use crate::{ModuleId, Symbol};
 
+/// How far a pass over pending methods goes with one whose receiver is
+/// not yet known.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// Partway through a definition: it waits, as what follows may say
+    /// what the receiver is.
+    Waiting,
+    /// Before a numeral takes its default: it is the one type in scope
+    /// whose method fits, unless the receiver is generic.
+    Choosing,
+    /// The last: what is left is chosen, a bound, or refused.
+    Final,
+}
+
 impl Checker<'_> {
     /// A claimed word at a position whose type will decide its reading.
     pub(super) fn defer_tag(
@@ -262,7 +276,18 @@ impl Checker<'_> {
     /// [`Self::finish_pending`]'s settling, before what it built is looked at.
     fn settle_pending(&mut self, marks: Marks, finish: Finish<'_>) -> Result<(), Refusal> {
         let (method_start, numeral_start) = (marks.methods, marks.numerals);
-        self.settle(marks)?;
+        // Once its definition is done, a receiver nothing typed is the one
+        // type in scope whose method fits, before anything takes a default,
+        // so `'a'.is_digit()` reads its numeral as a `U8`; a generic one
+        // stays open, and is a bound. A binding leaves it to its definition.
+        let (pass, open) = match finish {
+            Finish::Binding => (Pass::Waiting, HashSet::new()),
+            Finish::Signed => (Pass::Choosing, HashSet::new()),
+            Finish::Unsigned(types, names) => {
+                (Pass::Choosing, self.generic_variables(types, names))
+            }
+        };
+        self.settle_by(marks, pass, &open)?;
         // A word nothing decided takes its one declared reading, before a
         // numeral does its default: `W(3)` builds a `W`, whatever `3` is.
         // One at a time, since reading one may prove another's position a
@@ -274,7 +299,7 @@ impl Checker<'_> {
             let pending = self.pending_tags[index].clone();
             self.settle_nominal(&pending)?;
             self.pending_tags[index].resolved = true;
-            self.settle(marks)?;
+            self.settle_by(marks, pass, &open)?;
         }
         if let Some(pending) = self.pending_tags[marks.tags..]
             .iter()
@@ -282,17 +307,17 @@ impl Checker<'_> {
         {
             return Err(self.ambiguous(pending));
         }
-        if !matches!(finish, Finish::Binding) && self.settle_bare(true)? {
-            self.settle(marks)?;
-        }
         if matches!(finish, Finish::Binding) {
             return self.finish_binding(marks);
+        }
+        if self.settle_bare(true)? {
+            self.settle_by(marks, pass, &open)?;
         }
         let generic = match finish {
             Finish::Unsigned(types, names) => {
                 let generic = self.generic_variables(types, names);
                 self.link_shapes(method_start, &generic);
-                self.settle(marks)?;
+                self.settle_by(marks, pass, &generic)?;
                 generic
             }
             _ => HashSet::new(),
@@ -358,7 +383,7 @@ impl Checker<'_> {
                 (false, _) => Ty::Named(self.prelude.nat, Rc::default()),
             };
             self.unify_at(module, span, &ty, &default)?;
-            self.settle(marks)?;
+            self.settle_by(marks, pass, &generic)?;
         }
         for index in numeral_start..self.pending_numerals.len() {
             let numeral = self.pending_numerals[index].clone();
@@ -367,7 +392,7 @@ impl Checker<'_> {
                 self.pending_numerals[index].resolved = true;
             }
         }
-        self.settle_methods(method_start, true, &generic)?;
+        self.settle_methods(method_start, Pass::Final, &generic)?;
         for index in numeral_start..self.pending_numerals.len() {
             let numeral = self.pending_numerals[index].clone();
             if numeral.resolved {
@@ -702,8 +727,19 @@ impl Checker<'_> {
     /// method's answer can decide a word's position, and a word's reading
     /// a method's receiver.
     pub(super) fn settle(&mut self, marks: Marks) -> Result<(), Refusal> {
+        self.settle_by(marks, Pass::Waiting, &HashSet::new())
+    }
+
+    /// The same, as far as `pass` goes with a receiver not yet known, the
+    /// `generic` variables being those a bound may hold.
+    fn settle_by(
+        &mut self,
+        marks: Marks,
+        pass: Pass,
+        generic: &HashSet<u32>,
+    ) -> Result<(), Refusal> {
         loop {
-            self.settle_methods(marks.methods, false, &HashSet::new())?;
+            self.settle_methods(marks.methods, pass, generic)?;
             if !self.settle_tags(marks.tags)? {
                 return Ok(());
             }
@@ -923,15 +959,16 @@ impl Checker<'_> {
     fn settle_methods(
         &mut self,
         start: usize,
-        final_pass: bool,
+        pass: Pass,
         generic: &HashSet<u32>,
     ) -> Result<(), Refusal> {
+        let final_pass = pass == Pass::Final;
         let mut generic = generic.clone();
         let mut unresolved: Vec<_> = (start..self.pending_methods.len())
             .filter(|index| !self.pending_methods[*index].resolved)
             .collect();
         loop {
-            if final_pass {
+            if pass != Pass::Waiting {
                 self.spread_generic(start, &mut generic);
             }
             let mut progress = false;
@@ -970,12 +1007,22 @@ impl Checker<'_> {
                 let may_be_field = pending.reach == Reach::Bare
                     && pending.arguments.is_empty()
                     && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_));
+                // A receiver not yet known is taken for a type in scope
+                // whose method fits only once its definition is done, as
+                // what follows may make it a type not in scope with such a
+                // method of its own, as `host.stdout` is; and a generic one
+                // never is, owing the method as a bound.
+                let unknown = matches!(self.infer.resolve(&pending.receiver), Ty::Var(_));
+                let generic_receiver = matches!(
+                    self.infer.resolve(&pending.receiver),
+                    Ty::Var(variable) if generic.contains(&variable)
+                );
+                let waits = unknown && (pass == Pass::Waiting || generic_receiver);
                 // The one method the receiver has is applied whether or not
                 // it fits, which says why where it does not; on a receiver
                 // not yet known, only once nothing else will say it, as the
                 // call that answers it may have no such method itself.
-                let unknown = matches!(self.infer.resolve(&pending.receiver), Ty::Var(_));
-                let candidates: Vec<_> = if may_be_field {
+                let candidates: Vec<_> = if may_be_field || waits {
                     Vec::new()
                 } else if let [only] = owned.as_slice()
                     && (final_pass || !unknown)
@@ -997,10 +1044,6 @@ impl Checker<'_> {
                         && pending.arguments.is_empty()
                         && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_)) =>
                     {
-                        let generic_receiver = matches!(
-                            self.infer.resolve(&pending.receiver),
-                            Ty::Var(variable) if generic.contains(&variable)
-                        );
                         if final_pass && !generic_receiver {
                             let projection = Self::projection(pending.name);
                             self.apply_field(&pending, &projection)?;

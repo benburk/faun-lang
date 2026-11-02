@@ -77,6 +77,45 @@ fn streams_answer_what_they_moved_or_what_they_met() {
     }
 }
 
+/// A helper is handed a host stream or a scripted fake having the same
+/// method, unsigned or bounded by `where`, in one program: `Stdout` is not
+/// in scope, and the fake's is the only `write_all!` that is. The fake's
+/// writes come where its calls are, among the stream's.
+#[test]
+fn a_helper_takes_a_host_stream_or_a_fake_with_its_method() {
+    let package = support::Package::new(
+        "fake-stream",
+        "Marked : [Marked(Host, Nat)].(
+           write_all! : (Marked, List(U8)) -> Result(Nat, [Full])
+           write_all!(Marked(_, room), bytes) if bytes.len() > room -> Err(Full)
+           write_all!(Marked(host, _), bytes) -> (
+             printed = host.print!(\"<${Str.from_utf8(bytes).ok_or(\"\")}>\")
+             Ok(bytes.len())
+           )
+         )
+
+         say!(out, text) -> out.write_all!(text.to_utf8())
+
+         shout! : (o, Str) -> Result(Nat, e) where
+           o.write_all! : (o, List(U8)) -> Result(Nat, e)
+         shout!(out, text) -> out.write_all!(\"${text}!\".to_utf8())
+
+         main! : Host -> []
+         main!(host) -> (
+           a = say!(host.stdout, \"a\")
+           b = say!(Marked(host, 9), \"b\")
+           c = shout!(host.stdout, \"c\")
+           d = shout!(Marked(host, 9), \"d\")
+           full = say!(Marked(host, 1), \"too long\")
+           host.exit!(if full == Err(Full) & a == Ok(1) & d == Ok(2) then 0 else 1)
+         )",
+    );
+    assert_eq!(
+        support::run_file(&package.entry(), b""),
+        (0, "a<b>c!<d!>".to_owned())
+    );
+}
+
 /// A pure program run by the host: what it answers printed and a line's
 /// end, a `Result` saying which it was, and status nought either way. An
 /// app reads the fields it declares, and the rest are handed all the same.

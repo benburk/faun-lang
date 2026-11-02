@@ -161,6 +161,54 @@ fn files_in_a_record_are_used_up_field_by_field() {
     assert_eq!(left["b.txt"], b"hi");
 }
 
+/// A fake holding a file is lent to a generic helper that writes through
+/// it, between writes to standard output, and closed once after: what it
+/// wrote is in the file, in the order written.
+#[test]
+fn a_fake_holding_a_file_is_lent_to_a_generic_helper() {
+    let package = Package::new(
+        "logged",
+        "import std.host {Host, File, Mode.*}
+
+         Logged : [Logged(File)].(
+           write_all! : (Logged, List(U8)) -> Result(Nat, [Lost])
+           write_all!(Logged(file), bytes) -> (
+             wrote = file.write_all!(bytes)
+             if wrote is Ok(n) then Ok(n) else Err(Lost)
+           )
+
+           close! : Logged -> Nat
+           close!(Logged(file)) -> (
+             closed = file.close!()
+             if closed is Ok(_) then 0 else 1
+           )
+         )
+
+         say!(out, text) -> (
+           wrote = out.write_all!(text.to_utf8())
+           n = wrote?
+           Ok(n)
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           opened = host.files.open!(\"log.txt\", Overwrite)
+           if opened is Ok(file) then logging!(host, Logged(file)) else host.exit!(2)
+         )
+
+         logging!(host, log) -> (
+           a = say!(log, \"one \")
+           b = say!(host.stdout, \"two\")
+           c = say!(log, \"three\")
+           closed = log.close!()
+           host.exit!(U8.of_nat(closed))
+         )",
+    );
+    let (status, written, left) = support::run_among(&package.entry(), Directory::new());
+    assert_eq!((status, written.as_str()), (0, "two"));
+    assert_eq!(left["log.txt"], b"one three");
+}
+
 /// A name holding a nought byte is refused before the target is asked,
 /// which would read it as ending there: nothing named by its front is made.
 #[test]

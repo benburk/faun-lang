@@ -2580,6 +2580,26 @@ mod tests {
         assert_eq!(cx.symbols.text(scheme.bounds[0].member), "not");
     }
 
+    /// So is a method only one type in scope has: a type out of scope may
+    /// have it too, as `Stdout` has `write_all!` where only `Host` is
+    /// imported, and `say!` is generic over both.
+    #[test]
+    fn a_method_one_type_in_scope_has_is_a_bound() {
+        let fixture = Fixture::new();
+        let (program, mut cx) = fixture.load(
+            "Fake : [Fake].(write_all! : (Fake, Nat) -> Nat\nwrite_all!(_, n) -> n)\nsay!(out, n) -> out.write_all!(n)\n",
+        );
+        let checked = crate::checked(program, &mut cx).unwrap();
+        let scheme = &checked
+            .functions
+            .iter()
+            .find(|function| cx.symbols.text(function.name).ends_with("$$say!"))
+            .unwrap()
+            .scheme;
+        assert_eq!(scheme.bounds.len(), 1);
+        assert_eq!(cx.symbols.text(scheme.bounds[0].member), "write_all!");
+    }
+
     #[test]
     fn methods_of_unexposed_types_are_not_candidates() {
         let fixture = Fixture::new();
@@ -2587,7 +2607,11 @@ mod tests {
             "hidden.fn",
             "export {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper = 0\n",
         );
-        let (program, mut cx) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
+        // The receiver is nothing generic: what `anything` answers, which
+        // nothing else says of, is the one type in scope having a `not`.
+        let (program, mut cx) = fixture.load(
+            "import hidden {helper}\nanything(n) -> anything(n)\nchoose(n) -> anything(n).not()\n",
+        );
         let checked = crate::checked(program, &mut cx).unwrap();
         assert!(methods(&checked).contains(&cx.prelude.bool_not));
     }
