@@ -340,6 +340,7 @@ impl<'a> Checker<'a> {
                     associated,
                     bare: false,
                     through,
+                    numeral: false,
                 });
                 progress = true;
             }

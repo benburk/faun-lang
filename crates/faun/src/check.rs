@@ -208,6 +208,10 @@ struct Bound {
     bare: bool,
     /// The alias whose application wrote it, where one of one parameter did.
     through: Option<Symbol>,
+    /// Whether a numeral of the type asks it, its `of_nat`, `of_decimal`
+    /// or `neg`: where a use leaves the type undecided, the numeral takes
+    /// its default there.
+    numeral: bool,
 }
 
 impl Bound {
@@ -219,6 +223,7 @@ impl Bound {
             associated: self.associated,
             bare: self.bare,
             through: self.through,
+            numeral: self.numeral,
         }
     }
 }
@@ -258,6 +263,8 @@ struct PendingMethod {
     owed: Option<(Symbol, Option<Symbol>)>,
     /// The pending method whose implementation owes this, where one does.
     owing: Option<usize>,
+    /// Whether a numeral of the receiver asks it; see [`Bound::numeral`].
+    numeral: bool,
 }
 
 /// How a member is reached.

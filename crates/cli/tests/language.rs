@@ -909,6 +909,26 @@ const RUNNING: &[(&str, &str, u32)] = &[
         149,
     ),
     (
+        "a value's numeral used where nothing types it takes its default",
+        "t = 200
+         n = -3
+         half = 0.5
+
+         byte : U8
+         byte = t + 0
+         nat : Nat
+         nat = t + 0
+
+         said = (t + t).to_str().len()
+
+         main! : Host -> []
+         main!(host) -> (
+           both = if byte.to_nat() + nat == 400 then 100 else 0
+           host.exit!(U8.of_nat(said + (n + n).to_str().len() * 10 + (half + half).to_str().len() * 40 + both))
+         )",
+        3 + 20 + 120 + 100,
+    ),
+    (
         "values say themselves as text",
         "main! : Host -> []
          main!(host) -> host.exit!(U8.of_nat(1234.to_str().len() + (-56).to_str().len() * 10 + True.to_str().concat(\"x\").len() * 100))",

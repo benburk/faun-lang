@@ -112,6 +112,7 @@ impl Checker<'_> {
             resolved: false,
             owed: None,
             owing: None,
+            numeral: false,
         });
         result
     }
@@ -161,6 +162,7 @@ impl Checker<'_> {
                 resolved: false,
                 owed: Some((definition, bound.through)),
                 owing: self.obliging,
+                numeral: bound.numeral,
             });
         }
         Ok(())
@@ -262,7 +264,10 @@ impl Checker<'_> {
         // A numeral nothing typed takes its default one at a time, a
         // negative one first since only `Int` holds it, and what that
         // settles may type the rest: in `-2 < 1` the `1` is compared with an
-        // `Int`, so it is one.
+        // `Int`, so it is one. A numeral a definition used here carries in
+        // is owed as its type's `of_nat`, `of_decimal` or `neg`, and takes
+        // its default as a written one does: `t = 200` used where nothing
+        // types it is a `Nat`.
         loop {
             let undecided = |negative: bool| {
                 (numeral_start..self.pending_numerals.len()).find(|&index| {
@@ -273,23 +278,49 @@ impl Checker<'_> {
                         && !is_generic(self, &numeral.ty)
                 })
             };
-            let Some(index) = undecided(true).or_else(|| undecided(false)) else {
+            let owed = |negative: bool| {
+                (method_start..self.pending_methods.len()).find(|&index| {
+                    let pending = &self.pending_methods[index];
+                    pending.numeral
+                        && !pending.resolved
+                        && (self.symbols.text(pending.name) == "neg") == negative
+                        && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_))
+                        && !is_generic(self, &pending.receiver)
+                })
+            };
+            // Where it stands, its type, and whether it is a decimal.
+            let next = |negative: bool| {
+                let written = undecided(negative).map(|index| {
+                    let numeral = &self.pending_numerals[index];
+                    let decimal = numeral.scale.is_some();
+                    (numeral.module, numeral.span, numeral.ty.clone(), decimal)
+                });
+                let carried = || {
+                    let pending = &self.pending_methods[owed(negative)?];
+                    let ty = pending.receiver.clone();
+                    let decimal = self.owes_decimal(method_start, &ty);
+                    Some((pending.module, pending.span, ty, decimal))
+                };
+                written.or_else(carried)
+            };
+            let negative = next(true);
+            let negated = negative.is_some();
+            let Some((module, span, ty, decimal)) = negative.or_else(|| next(false)) else {
                 break;
             };
-            let numeral = self.pending_numerals[index].clone();
-            let default = match (numeral.scale, self.prelude.floats.first()) {
-                (Some(_), Some(float)) => Ty::Named(float.ty, Rc::default()),
-                (Some(_), None) => {
+            let default = match (decimal, self.prelude.floats.first()) {
+                (true, Some(float)) => Ty::Named(float.ty, Rc::default()),
+                (true, None) => {
                     return Err(failure(
-                        numeral.module,
-                        numeral.span,
+                        module,
+                        span,
                         "a decimal numeral is a float, and no float is in the prelude",
                     ));
                 }
-                (None, _) if numeral.negative => Ty::Named(self.prelude.int, Rc::default()),
-                (None, _) => Ty::Named(self.prelude.nat, Rc::default()),
+                (false, _) if negated => Ty::Named(self.prelude.int, Rc::default()),
+                (false, _) => Ty::Named(self.prelude.nat, Rc::default()),
             };
-            self.unify_at(numeral.module, numeral.span, &numeral.ty, &default)?;
+            self.unify_at(module, span, &ty, &default)?;
             self.settle(marks)?;
         }
         for index in numeral_start..self.pending_numerals.len() {
@@ -314,6 +345,17 @@ impl Checker<'_> {
                 .map_err(|message| failure(closing.module, closing.span, message))?;
         }
         Ok(())
+    }
+
+    /// Whether a numeral a definition used here carries in at `receiver`
+    /// is a decimal, owing its `of_decimal`: its default is a float.
+    fn owes_decimal(&self, start: usize, receiver: &Ty) -> bool {
+        let receiver = self.infer.resolve(receiver);
+        self.pending_methods[start..].iter().any(|pending| {
+            pending.numeral
+                && self.symbols.text(pending.name) == "of_decimal"
+                && self.infer.resolve(&pending.receiver) == receiver
+        })
     }
 
     /// A numeral at the type its position gave it: a natural, or a call of
@@ -540,6 +582,7 @@ impl Checker<'_> {
             resolved: false,
             owed: None,
             owing: None,
+            numeral: true,
         });
         if numeral.negative {
             let neg = self.method_symbol(numeral.module, numeral.span, "neg")?;
@@ -555,6 +598,7 @@ impl Checker<'_> {
                 resolved: false,
                 owed: None,
                 owing: None,
+                numeral: true,
             });
         }
         if let Some(site) = numeral.site {
@@ -587,14 +631,15 @@ impl Checker<'_> {
                 parameters.insert(0, owner.clone());
             }
             let ty = Ty::Function(parameters.into(), Rc::new(pending.result.clone()));
-            match bounds.iter().find(|bound| {
+            match bounds.iter().position(|bound| {
                 bound.member == pending.name
                     && bound.associated == (pending.reach == Reach::Type)
                     && bound.bare == (pending.reach == Reach::Bare)
                     && self.infer.resolve(&bound.owner) == owner
             }) {
-                Some(existing) => {
-                    let existing = existing.ty.clone();
+                Some(at) => {
+                    bounds[at].numeral |= pending.numeral;
+                    let existing = bounds[at].ty.clone();
                     self.unify_at(pending.module, pending.span, &ty, &existing)?;
                 }
                 None => bounds.push(Bound {
@@ -604,6 +649,7 @@ impl Checker<'_> {
                     associated: pending.reach == Reach::Type,
                     bare: pending.reach == Reach::Bare,
                     through: None,
+                    numeral: pending.numeral,
                 }),
             }
             if let Some(site) = pending.site {
@@ -1245,6 +1291,7 @@ impl Checker<'_> {
                 resolved: false,
                 owed: None,
                 owing: None,
+                numeral: false,
             });
         }
         if let Some(site) = pending.site {
