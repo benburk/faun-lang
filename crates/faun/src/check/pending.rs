@@ -985,6 +985,14 @@ impl Checker<'_> {
                     // Said on the final pass, when what the call answers is
                     // known too, so the bound the refusal suggests is whole.
                     [] if !final_pass => next.push(index),
+                    // A declared type's field that does not fit is still
+                    // the field read, so what it answers is told against
+                    // what is wanted rather than the field said missing.
+                    [] if let Some(field) = self.declared_field(&pending) => {
+                        self.apply_field(&pending, &field)?;
+                        self.pending_methods[index].resolved = true;
+                        progress = true;
+                    }
                     [] => {
                         let name = self.symbols.text(pending.name);
                         let refused = match self.infer.resolve(&pending.receiver) {
@@ -1147,6 +1155,20 @@ impl Checker<'_> {
             })
             .map(|field| field.scheme.clone())
             .collect()
+    }
+
+    /// The field `pending` reads off a declared type having one of that
+    /// name, whether or not it fits.
+    fn declared_field(&self, pending: &PendingMethod) -> Option<Scheme> {
+        if pending.reach != Reach::Bare || !pending.arguments.is_empty() {
+            return None;
+        }
+        let Ty::Named(owner, _) = self.infer.resolve(&pending.receiver) else {
+            return None;
+        };
+        let fields = self.fields.get(&pending.name)?;
+        let field = fields.iter().find(|field| field.owner == owner)?;
+        Some(field.scheme.clone())
     }
 
     /// Add to `generic` what a member of a receiver holding a generic

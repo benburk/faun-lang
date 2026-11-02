@@ -1,0 +1,10 @@
+import std.host {Host}
+
+count : List(Nat) -> Nat
+count(xs) -> xs.len()
+
+main! : Host -> []
+main!(host) -> (
+  n = count(host.args)
+  host.exit!(U8.of_nat(n))
+)
