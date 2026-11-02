@@ -141,11 +141,14 @@ have `&`, `|`, `^`, `!`, `shift_left`, `shift_right`, `rotate_left` and
 operations. `of_nat` wraps; `from_nat` refuses instead, `U8.from_nat(256)`
 being `Err(TooBig)`; and widening, `U64.of_u8`, cannot wrap.
 
-On x86-64 each word is held in a machine word, and a `U32`'s sums and
-products fit it, so they are word instructions. `U64`'s bitwise operations
-are too, but its `+` and `*` are today worked out as naturals and then
-reduced, since the exact answer can pass 64 bits: wrapping 64-bit
-multiplication is not yet one instruction.
+Each word is held in machine words, and so is its arithmetic. A `U32`'s
+sums and products are worked out at 64 bits and narrowed after. A `U64`'s
+exact sum or product can pass 64 bits, but its low 64 bits are the sum or
+product of its operands' low bits, so the compiler recognizes the
+remainder by 2^64 and works it out at 64 bits, wrapping: one `add` or
+`imul` on x86-64, and the same words carried on wasm32 and the 6502. A
+hash loop of `U64` multiplications that took 2.6 s as naturals takes
+0.01 s.
 
 ## Rationale
 
