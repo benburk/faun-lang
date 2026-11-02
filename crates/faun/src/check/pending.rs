@@ -216,14 +216,51 @@ impl Checker<'_> {
             numerals: self.pending_numerals.len(),
             tags: self.pending_tags.len(),
             closings: self.pending_closings.len(),
+            handings: self.handings.len(),
         }
     }
 
+    /// Settle what the stretch since `marks` left pending, as `finish`
+    /// asks. A value it built that stores a function is refused first,
+    /// whatever else settling found: a function stored and never called
+    /// leaves its own types undecided, which is no fault of its own.
     pub(super) fn finish_pending(
         &mut self,
         marks: Marks,
         finish: Finish<'_>,
     ) -> Result<(), Refusal> {
+        let finished = self.settle_pending(marks, finish);
+        self.stored_function(marks.handings)?;
+        finished
+    }
+
+    /// The first expression since `handings` handed a function that builds
+    /// a value holding one: a record, tuple, list or tag written with it,
+    /// or what a generic definition answers from it. A function answered
+    /// is left to specialization, which also catches one whose type is
+    /// known only there.
+    fn stored_function(&self, handings: usize) -> Result<(), Refusal> {
+        for handing in &self.handings[handings..] {
+            let resolved = self.infer.resolve(&handing.ty);
+            if matches!(resolved, Ty::Function(..)) || !holds_function(&resolved) {
+                continue;
+            }
+            let handed_function = handing
+                .handed
+                .iter()
+                .any(|ty| matches!(self.infer.resolve(ty), Ty::Function(..)));
+            if !handed_function {
+                continue;
+            }
+            let message = format!("`{}` holds a function", show(&resolved, self.symbols));
+            return Err(Refusal::at(handing.module, handing.span, message)
+                .note("data may not store functions; a function is passed into a call"));
+        }
+        Ok(())
+    }
+
+    /// [`Self::finish_pending`]'s settling, before what it built is looked at.
+    fn settle_pending(&mut self, marks: Marks, finish: Finish<'_>) -> Result<(), Refusal> {
         let (method_start, numeral_start) = (marks.methods, marks.numerals);
         self.settle(marks)?;
         // A word nothing decided takes its one declared reading, before a
@@ -1426,5 +1463,24 @@ impl Checker<'_> {
             )?;
         }
         Ok(())
+    }
+}
+
+/// Whether an inferred type holds a function anywhere, itself included.
+fn holds_function(ty: &Ty) -> bool {
+    match ty {
+        Ty::Function(..) => true,
+        Ty::Var(_) | Ty::Rigid(_) => false,
+        Ty::Named(_, parts) | Ty::Tuple(parts) => parts.iter().any(holds_function),
+        Ty::Variants(tags, tail) => tags
+            .iter()
+            .flat_map(|(_, fields)| fields.iter())
+            .chain(tail.as_deref())
+            .any(holds_function),
+        Ty::Record(fields, tail) => fields
+            .iter()
+            .map(|(_, field)| field)
+            .chain(tail.as_deref())
+            .any(holds_function),
     }
 }

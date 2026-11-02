@@ -50,6 +50,7 @@ impl<'a> Checker<'a> {
             current_names: HashMap::new(),
             bound_sites: Vec::new(),
             expression_types: Vec::new(),
+            handings: Vec::new(),
             clause_types: Vec::new(),
             widenings: Vec::new(),
             checked: Facts::default(),

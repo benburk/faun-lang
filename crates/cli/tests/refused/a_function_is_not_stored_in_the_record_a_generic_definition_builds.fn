@@ -1,0 +1,11 @@
+import std.host {Host}
+
+keep(f, name) -> {call: f, name: name}
+
+increment(n) -> n + 1
+
+main! : Host -> []
+main!(host) -> (
+  kept = keep(increment, "increment")
+  host.exit!(U8.of_nat(kept.name.len()))
+)

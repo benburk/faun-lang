@@ -324,6 +324,19 @@ struct Marks {
     numerals: usize,
     tags: usize,
     closings: usize,
+    handings: usize,
+}
+
+/// An expression handed a name or a lambda, which may be a function: a
+/// record, tuple or list written with it, or a call handed it, which may
+/// answer what it builds from it.
+#[derive(Clone, Debug)]
+struct Handing {
+    module: ModuleId,
+    span: super::ast::Span,
+    ty: Ty,
+    /// The type of each function value it is handed.
+    handed: Vec<Ty>,
 }
 
 #[derive(Clone, Debug)]
@@ -351,6 +364,21 @@ fn first_order(ty: &h::Type) -> bool {
         h::Type::Record(fields, _) => fields.iter().all(|(_, field)| first_order(field)),
         h::Type::Tuple(members) => members.iter().all(first_order),
     }
+}
+
+/// Whether `kind` is one that may stand for a function: a name, or a
+/// lambda.
+const fn names_a_function(kind: &h::ExprKind) -> bool {
+    matches!(
+        kind,
+        h::ExprKind::Local(_)
+            | h::ExprKind::Global(_)
+            | h::ExprKind::Constructor(_)
+            | h::ExprKind::Tag(_)
+            | h::ExprKind::Associated(..)
+            | h::ExprKind::Dual(_)
+            | h::ExprKind::Lambda(..)
+    )
 }
 
 /// Whether a written type leaves some part of itself to be worked out.
@@ -431,6 +459,9 @@ struct Checker<'a> {
     /// carries, innermost last.
     loops: Vec<Vec<Ty>>,
     expression_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
+    /// Each expression handed a name or a lambda, in the order checked,
+    /// for [`Self::stored_function`] to look at once types are known.
+    handings: Vec<Handing>,
     clause_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Vec<Bound>)>,
     widenings: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
     checked: Facts,
@@ -1124,10 +1155,53 @@ impl Checker<'_> {
         expression: &h::Expr,
         locals: &mut Vec<Option<Scheme>>,
     ) -> Result<Ty, Refusal> {
+        let children = self.expression_types.len();
         let ty = self.infer_expr(module, expression, locals)?;
+        self.note_handing(module, expression, &ty, children);
         self.expression_types
             .push((module, expression.span, expression.site, ty.clone()));
         Ok(ty)
+    }
+
+    /// Note `expression` as a [`Handing`] where it is handed a name or a
+    /// lambda, whose types are among those its children noted since
+    /// `children`.
+    fn note_handing(&mut self, module: ModuleId, expression: &h::Expr, ty: &Ty, children: usize) {
+        let handed: Vec<&h::Expr> = match &expression.kind {
+            h::ExprKind::List(elements, rest) => elements.iter().chain(rest.as_deref()).collect(),
+            h::ExprKind::Record(fields) | h::ExprKind::Update(_, fields) => {
+                fields.iter().map(|(_, value)| value).collect()
+            }
+            h::ExprKind::Tuple(members) => members.iter().collect(),
+            h::ExprKind::Call(_, arguments) => arguments.iter().collect(),
+            h::ExprKind::Method(receiver, _, arguments) => std::iter::once(receiver.as_ref())
+                .chain(arguments)
+                .collect(),
+            _ => return,
+        };
+        let noted = &self.expression_types[children..];
+        let mut handed_types = Vec::new();
+        for child in handed {
+            if !names_a_function(&child.kind) {
+                continue;
+            }
+            let found = noted
+                .iter()
+                .rev()
+                .find(|(_, _, site, _)| *site == child.site);
+            if let Some((_, _, _, ty)) = found {
+                handed_types.push(ty.clone());
+            }
+        }
+        if handed_types.is_empty() {
+            return;
+        }
+        self.handings.push(Handing {
+            module,
+            span: expression.span,
+            ty: ty.clone(),
+            handed: handed_types,
+        });
     }
 
     fn infer_expr(
@@ -2442,6 +2516,32 @@ mod tests {
             "{}",
             failure.message
         );
+    }
+
+    /// Data a generic definition builds from a function it is handed holds
+    /// that function, though nothing it writes says so: refused at the
+    /// call, whether a record, a tuple, a list or a tag holds it.
+    #[test]
+    fn a_function_is_not_stored_in_data_a_generic_definition_builds() {
+        let builders = [
+            "keep(f) -> {call: f}",
+            "keep(f) -> (f, True)",
+            "keep(f) -> [f]",
+            "keep(f) -> Some(f)",
+        ];
+        for builder in builders {
+            let fixture = Fixture::new();
+            let source = format!(
+                "increment : Nat -> Nat\nincrement(n) -> n + 1\n{builder}\nkept : Bool\nkept = (\n  held = keep(increment)\n  True\n)\n"
+            );
+            let (program, mut cx) = fixture.load(&source);
+            let failure = crate::checked(program, &mut cx).unwrap_err();
+            assert!(
+                failure.message.contains("holds a function"),
+                "{builder}: {}",
+                failure.message
+            );
+        }
     }
 
     #[test]

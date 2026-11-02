@@ -1,0 +1,7 @@
+error: `{name: Str, call: _ -> _}` holds a function
+ --> a_function_is_not_stored_in_the_record_a_generic_definition_builds.fn:9:10
+  |
+9 |   kept = keep(increment, "increment")
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: data may not store functions; a function is passed into a call
