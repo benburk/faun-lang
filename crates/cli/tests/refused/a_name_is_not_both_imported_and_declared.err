@@ -7,4 +7,4 @@ error: value `double` is both imported and declared
 3 | double : Nat -> Nat
   | ^^^^^^ declared here
   |
-  = help: import it under another name, as `{double: Other}`
+  = help: import it under another name, as `{double: helpers_double}`

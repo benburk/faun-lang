@@ -1,0 +1,4 @@
+export {boxed}
+
+boxed : Nat -> List(Nat)
+boxed(n) -> [n]

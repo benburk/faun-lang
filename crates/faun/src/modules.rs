@@ -438,12 +438,17 @@ impl Loader {
             };
             (declared.text(source) == name).then_some(declared.0)
         });
+        // Where it is imported, and the last part of the module it is
+        // imported from.
         let imported = syntax.items.iter().find_map(|item| match item {
-            Item::Import(import) => import
-                .exposures
-                .iter()
-                .find(|exposure| exposure.local.text(source) == name)
-                .map(|exposure| exposure.local.0),
+            Item::Import(import) => {
+                let exposure = import
+                    .exposures
+                    .iter()
+                    .find(|exposure| exposure.local.text(source) == name)?;
+                let module = import.path.last().map_or("other", |part| part.text(source));
+                Some((exposure.local.0, module))
+            }
             _ => None,
         });
         let diagnostic = match imported {
@@ -455,11 +460,20 @@ impl Loader {
         };
         let diagnostic = diagnostic.at(file, declared).label("declared here");
         match imported {
-            Some(imported) => diagnostic
-                .secondary(file, imported, "imported here")
-                .help(format!(
-                    "import it under another name, as `{{{name}: Other}}`"
-                )),
+            Some((imported, module)) => {
+                // A renamed name keeps its case, so a value's new name is
+                // lowercase and a type's capitalised.
+                let renamed = if kind == "value" {
+                    format!("{module}_{name}")
+                } else {
+                    "Other".to_owned()
+                };
+                diagnostic
+                    .secondary(file, imported, "imported here")
+                    .help(format!(
+                        "import it under another name, as `{{{name}: {renamed}}}`"
+                    ))
+            }
             None => diagnostic
                 .note("every module sees the prelude's types and values")
                 .help("name it something else"),
@@ -883,6 +897,7 @@ fn expose_import(
 ) -> Result<(), Diagnostic> {
     let source = file.text();
     for exposure in &import.exposures {
+        renamed_alike(exposure, file)?;
         let exported = symbols.intern(exposure.exported.text(source));
         let local = symbols.intern(exposure.local.text(source));
         let mut found = false;
@@ -945,6 +960,36 @@ fn expose_import(
         }
     }
     Ok(())
+}
+
+/// Refuse a rename that changes whether a name is capitalised: a
+/// capitalised word is a type's or a constructor's and a lowercase one a
+/// value's, so a renamed name keeps the case it was exported with.
+fn renamed_alike(exposure: &super::ast::Exposure, file: &Source) -> Result<(), Diagnostic> {
+    let source = file.text();
+    let exported = exposure.exported.text(source);
+    let local = exposure.local.text(source);
+    let capitalised = |name: &str| name.starts_with(|c: char| c.is_ascii_uppercase());
+    if capitalised(exported) == capitalised(local) {
+        return Ok(());
+    }
+    let mut characters = local.chars();
+    let first = characters.next().unwrap_or_default();
+    let rest = characters.as_str();
+    let (wanted, label, first) = if capitalised(exported) {
+        let label = "a type or constructor is named in capitals";
+        ("capitalised", label, first.to_ascii_uppercase())
+    } else {
+        let label = "a value or function is named in lowercase";
+        ("lowercase", label, first.to_ascii_lowercase())
+    };
+    let suggested = format!("{first}{rest}");
+    let message = format!("`{exported}` is imported as `{local}`, which is not {wanted}");
+    Err(Diagnostic::new(message)
+        .at(file, exposure.local.0)
+        .label(label)
+        .note("a capitalised word names a type or constructor, and a lowercase one a value or function")
+        .help(format!("rename it as `{{{exported}: {suggested}}}`")))
 }
 
 fn merge_map(

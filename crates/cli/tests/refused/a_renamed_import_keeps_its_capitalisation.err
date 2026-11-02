@@ -1,0 +1,8 @@
+error: `boxed` is imported as `Make`, which is not lowercase
+ --> a_renamed_import_keeps_its_capitalisation/main.fn:1:23
+  |
+1 | import shapes {boxed: Make}
+  |                       ^^^^ a value or function is named in lowercase
+  |
+  = note: a capitalised word names a type or constructor, and a lowercase one a value or function
+  = help: rename it as `{boxed: make}`
