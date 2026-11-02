@@ -968,7 +968,7 @@ impl Checker<'_> {
             .filter(|index| !self.pending_methods[*index].resolved)
             .collect();
         loop {
-            if pass != Pass::Waiting {
+            if pass != Pass::Waiting && self.may_spread(&unresolved, &generic) {
                 self.spread_generic(start, &mut generic);
             }
             let mut progress = false;
@@ -1249,6 +1249,20 @@ impl Checker<'_> {
         let fields = self.fields.get(&pending.name)?;
         let field = fields.iter().find(|field| field.owner == owner)?;
         Some(field.scheme.clone())
+    }
+
+    /// Whether spreading `generic` could say anything of these: only a
+    /// receiver not yet known, and not yet held generic, asks it. Each
+    /// spread walks every pending method, and a pass may go round once
+    /// for each it resolves.
+    fn may_spread(&self, unresolved: &[usize], generic: &HashSet<u32>) -> bool {
+        !generic.is_empty()
+            && unresolved.iter().any(|&index| {
+                matches!(
+                    self.infer.resolve(&self.pending_methods[index].receiver),
+                    Ty::Var(variable) if !generic.contains(&variable)
+                )
+            })
     }
 
     /// Add to `generic` what a member of a receiver holding a generic
