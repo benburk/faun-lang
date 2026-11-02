@@ -89,7 +89,7 @@ root module.
 - Only a package's root module has a header; one in an inner module is
   refused, and so is a name depended on twice.
 - A dependency is a path that must name a module: there is no fetching, no
-  version and no lock file. A URL is read as a path, and is not found.
+  version and no lock file. A URL is refused as one: a dependency is a path to a package's root module.
 
 Whether a package is an application is whether its entry defines `main!`.
 

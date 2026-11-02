@@ -23,7 +23,8 @@ or one alone, `Nat -> Nat`. Without a signature the type is inferred, `where`
 bounds and all; [types](../types.md) owns inference and `_` in signatures.
 
 Calls are uncurried: a call hands over every argument at once. `add(1)` for
-an `add` of two parameters is refused as a type error, and `n.max(2, 3)` says
+an `add` of two parameters says "`add` takes 2 arguments, but 1 was given",
+with help that there is no partial application, and `n.max(2, 3)` says
 "`max` takes 1 argument, but 2 were given". There are no default, named or
 variadic arguments: `add(a: 1, b: 2)` does not parse.
 
