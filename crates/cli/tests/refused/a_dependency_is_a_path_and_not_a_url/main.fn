@@ -1,0 +1,6 @@
+package {shapes: "https://example.com/shapes"}
+
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

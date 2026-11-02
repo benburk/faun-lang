@@ -501,6 +501,14 @@ impl Loader {
                         })
                         .collect::<Result<_, _>>()
                         .map_err(|message| Diagnostic::new(message).at(text, dependency.span))?;
+                    if let Some(scheme) = url_scheme(&written) {
+                        return Err(Diagnostic::new(format!(
+                            "dependency `{name}` is a `{scheme}://` URL, not a path"
+                        ))
+                        .at(text, dependency.span)
+                        .note("a dependency is a path to a package's root module")
+                        .help("fetching packages is not supported: put the package beside this one and name its path"));
+                    }
                     let module =
                         module_base(directory, &directory.join(&written)).map_err(|error| {
                             Diagnostic::new(format!("dependency `{name}` {}", error.message))
@@ -556,6 +564,17 @@ fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, Diagnostic> {
         .fold(root.to_path_buf(), |path, part| path.join(part));
     module_base(root, &joined)
         .map_err(|error| Diagnostic::new(format!("import `{}` {}", parts.join("."), error.message)))
+}
+
+/// The scheme of `written` where it is a URL, as `https` of
+/// `https://example.com/foo`: letters, then letters, digits, `+`, `-` or
+/// `.`, before `://`.
+fn url_scheme(written: &str) -> Option<&str> {
+    let (scheme, _) = written.split_once("://")?;
+    let mut characters = scheme.chars();
+    let first = characters.next()?;
+    let rest_fits = characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    (first.is_ascii_alphabetic() && rest_fits).then_some(scheme)
 }
 
 /// The module at the base `joined`: `joined.fn`, or `name.fn` in the

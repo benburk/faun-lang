@@ -1,0 +1,8 @@
+error: dependency `shapes` is a `https://` URL, not a path
+ --> a_dependency_is_a_path_and_not_a_url/main.fn:1:10
+  |
+1 | package {shapes: "https://example.com/shapes"}
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: a dependency is a path to a package's root module
+  = help: fetching packages is not supported: put the package beside this one and name its path
