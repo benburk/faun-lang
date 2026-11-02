@@ -31,9 +31,34 @@ const SYS_RT_SIGACTION: u64 = 13;
 const SIGPIPE: u64 = 13;
 /// What `rt_sigaction` reads the signal set's size as: one word.
 const SIGSET_BYTES: u64 = 8;
+const SYS_SIGALTSTACK: u64 = 131;
+/// What the kernel raises for an address the program may not touch, such
+/// as one past the end of its stack.
+const SIGSEGV: u64 = 11;
+/// `sa_flags`: hand the handler where the fault was, run it on the stack
+/// `sigaltstack` names, and return through `sa_restorer`, which x86-64
+/// insists on even for a handler that never returns.
+const SA_SIGINFO_ONSTACK_RESTORER: u64 = 0x4 | 0x0800_0000 | 0x0400_0000;
+/// The stack a fault is handled on: room for the frame the kernel writes,
+/// which holds every register state the processor saves, and for the
+/// handler's two words.
+const SIGNAL_STACK_BYTES: u32 = 16 * 1024;
+/// Where `siginfo_t` holds the address that faulted, and where `ucontext_t`
+/// holds the `rsp` it faulted at.
+const SIGINFO_ADDRESS: i32 = 16;
+const UCONTEXT_RSP: i32 = 160;
+/// How far a fault may lie above the stack pointer and still be the stack
+/// running out, as a power of two: a frame's slots lie above where `rsp`
+/// was moved to.
+const STACK_FAULT_REACH_BITS: u8 = 16;
+/// What a program whose stack ran out says, and the status it ends with:
+/// the one after the heap's, two.
+const STACK_OVERFLOW_MESSAGE: &[u8; 16] = b"stack overflow\n\0";
+const STACK_OVERFLOW_STATUS: u64 = 3;
 const SYS_EXIT: u64 = 60;
 const STDIN: u64 = 0;
 const STDOUT: u64 = 1;
+const STDERR: u64 = 2;
 const PROT_READ_WRITE: u64 = 0x3;
 const MAP_PRIVATE_ANONYMOUS: u64 = 0x22;
 pub(super) const COPY_SCRATCH: Reg = Reg::R11;
@@ -64,6 +89,9 @@ struct Lowering<'a> {
     function_labels: Vec<Option<Label>>,
     known: [Option<Known>; 32],
     argument_count_in_rbx: bool,
+    /// How many bytes the program's start leaves on the stack above the
+    /// entry's frame, below the count of arguments.
+    started: u32,
     pending_condition: Option<(VReg, Condition)>,
     exit_epilogue: Option<Label>,
     final_block: Option<BlockId>,
@@ -147,6 +175,7 @@ impl<'a> Lowering<'a> {
             function_labels,
             known: [None; 32],
             argument_count_in_rbx: false,
+            started: 0,
             pending_condition: None,
             exit_epilogue: None,
             final_block: None,
@@ -164,6 +193,7 @@ impl<'a> Lowering<'a> {
         self.configure_program(entry);
         self.saved = self.kept_for_callers(entry);
         self.frames = self.layout_frames()?;
+        self.report_stack_overflow();
         self.ignore_broken_pipes();
         for (at, layout) in self.liveness.blocks.iter().enumerate() {
             let block = self.selected.blocks[layout.block];
@@ -224,7 +254,7 @@ impl<'a> Lowering<'a> {
     /// inside the write. A program that never writes pays nothing.
     /// `rt_sigaction` reads the kernel's `struct sigaction` from the stack:
     /// the handler, `SIG_IGN`, then flags, restorer and mask, all nought.
-    /// Nothing is live yet, and the stack is as the kernel left it once the
+    /// Nothing is live yet, and the stack is as the start left it once the
     /// four words are popped, which matters only to a program reading what
     /// the kernel left there: the arguments. One that does not leaves the
     /// words where they are, still sixteen-byte aligned. A program that
@@ -255,9 +285,137 @@ impl<'a> Lowering<'a> {
         self.known.fill(None);
     }
 
+    /// Whether some function can call itself, directly or through others,
+    /// so that how deep calls go rests on what the program is handed. Every
+    /// function calling nothing is taken away, then every caller that leaves
+    /// calling nothing, until none does; what stands at the end calls round.
+    fn recurses(&self) -> bool {
+        let count = self.function_labels.len();
+        let mut calls = vec![0usize; count];
+        let mut callers = vec![Vec::new(); count];
+        for block in &self.selected.blocks {
+            for &id in &self.selected.order[block.instructions.range()] {
+                let inst = self.selected.instructions[id];
+                if let (Opcode::Call, Immediate::Function(callee)) = (inst.opcode, inst.immediate) {
+                    calls[block.owner.index()] += 1;
+                    callers[callee.index()].push(block.owner.index());
+                }
+            }
+        }
+        let mut leaves: Vec<usize> = (0..count).filter(|&at| calls[at] == 0).collect();
+        let mut taken = 0;
+        while let Some(leaf) = leaves.pop() {
+            taken += 1;
+            for &caller in &callers[leaf] {
+                calls[caller] -= 1;
+                if calls[caller] == 0 {
+                    leaves.push(caller);
+                }
+            }
+        }
+        taken < count
+    }
+
+    /// Before anything else runs in a program whose calls can go round,
+    /// have a fault at the end of the stack say `stack overflow` on
+    /// standard error and end the program with status 3, rather than end it
+    /// with `SIGSEGV` and nothing said. A program whose calls cannot go round
+    /// pays nothing, and one that can pays nothing until the fault.
+    ///
+    /// The fault is handled on a stack of its own, since the program's has
+    /// no room left: the top of the program's own, which calls going deep
+    /// reach last. `sigaltstack` reads the kernel's `stack_t` from the
+    /// stack: where it starts, flags, and its size. `push rsp` pushes where
+    /// the stack was before it, so the handler's stack starts at the flags
+    /// and holds them and the size, which nothing reads again. The
+    /// program's stack goes on below, sixteen-byte aligned as it was.
+    ///
+    /// Then `rt_sigaction` reads the handler, flags, restorer and mask from
+    /// the stack too. The handler is written just after a call that steps
+    /// over it, so the call pushes the handler's address. The restorer is
+    /// never reached, as the handler never returns.
+    fn report_stack_overflow(&mut self) {
+        if !self.recurses() {
+            return;
+        }
+        // The handler's stack, then the `stack_t` naming it.
+        self.asm.open_frame(SIGNAL_STACK_BYTES / 8 - 1);
+        self.materialize(Reg::Rax, u64::from(SIGNAL_STACK_BYTES));
+        self.asm.push_reg(Reg::Rax);
+        // Nought is the flags, and where no old stack is to be written.
+        self.materialize(Reg::Rsi, 0);
+        self.asm.push_reg(Reg::Rsi);
+        self.asm.push_reg(Reg::Rsp);
+        self.asm.mov_reg(Reg::Rdi, Reg::Rsp, RegisterWidth::Word);
+        self.materialize(Reg::Rax, SYS_SIGALTSTACK);
+        self.asm.syscall();
+        self.forget_call_clobbers();
+
+        // The mask and the restorer are the nought `rsi` still holds, which
+        // `syscall` leaves alone.
+        self.asm.push_reg(Reg::Rsi);
+        self.asm.push_reg(Reg::Rsi);
+        self.materialize(Reg::Rax, SA_SIGINFO_ONSTACK_RESTORER);
+        self.asm.push_reg(Reg::Rax);
+        let install = self.asm.label();
+        self.asm.call(install);
+        self.handle_stack_fault();
+        self.asm.bind(install);
+        self.known.fill(None);
+        self.asm.mov_reg(Reg::Rsi, Reg::Rsp, RegisterWidth::Word);
+        self.materialize(Reg::Rdi, SIGSEGV);
+        // Nought is also where no old action is to be written.
+        self.materialize(Reg::Rdx, 0);
+        self.materialize(Reg::R10, SIGSET_BYTES);
+        self.materialize(Reg::Rax, SYS_RT_SIGACTION);
+        self.asm.syscall();
+        self.known.fill(None);
+        // What was opened, the three words of `stack_t`, then the action's
+        // four.
+        self.started = SIGNAL_STACK_BYTES - 8 + 3 * 8 + 4 * 8;
+    }
+
+    /// The handler, run with the `siginfo_t` in `rsi` and the `ucontext_t`
+    /// in `rdx`. A fault where the stack ends lies just below the `rsp` it
+    /// faulted at, where a call or push writes, or a little above it, in a
+    /// frame just opened. Any other fault is no fault of the stack, and
+    /// says nothing: the handler faults in turn, with `SIGSEGV` held back
+    /// while it runs, so the kernel ends the program with it as before.
+    fn handle_stack_fault(&mut self) {
+        self.known.fill(None);
+        let other = self.asm.label();
+        self.asm
+            .load(MemoryWidth::Word, Reg::Rax, Reg::Rsi, SIGINFO_ADDRESS);
+        self.asm
+            .load(MemoryWidth::Word, Reg::Rcx, Reg::Rdx, UCONTEXT_RSP);
+        self.asm.alu(Alu::Subtract, Reg::Rax, Reg::Rcx, 64);
+        self.asm.alu_immediate(Alu::Add, Reg::Rax, 8, 64);
+        self.asm
+            .shift(ShiftDirection::Right, Reg::Rax, STACK_FAULT_REACH_BITS, 64);
+        self.asm.jump_if(Condition::NotEqual, other);
+        let (first, second) = STACK_OVERFLOW_MESSAGE.split_at(8);
+        for word in [second, first] {
+            let word = u64::from_le_bytes(word.try_into().expect("eight bytes"));
+            self.materialize(Reg::Rax, word);
+            self.asm.push_reg(Reg::Rax);
+        }
+        self.asm.mov_reg(Reg::Rsi, Reg::Rsp, RegisterWidth::Word);
+        self.materialize(Reg::Rdi, STDERR);
+        let length = STACK_OVERFLOW_MESSAGE.len() - 1;
+        self.materialize(Reg::Rdx, u64::try_from(length).expect("a short message"));
+        self.materialize(Reg::Rax, SYS_WRITE);
+        self.asm.syscall();
+        self.forget_call_clobbers();
+        self.materialize(Reg::Rdi, STACK_OVERFLOW_STATUS);
+        self.materialize(Reg::Rax, SYS_EXIT);
+        self.asm.syscall();
+        self.asm.bind(other);
+        self.asm.halt();
+    }
+
     fn enter_function(&mut self, function: FunctionId, entry: FunctionId) {
         if function == entry && self.argument_count_in_rbx {
-            self.asm.load_stack(Reg::Rbx, 0);
+            self.asm.load_stack(Reg::Rbx, self.started);
         }
     }
 
@@ -817,20 +975,21 @@ impl<'a> Lowering<'a> {
                     let displacement = self
                         .frame(owner)
                         .checked_mul(8)
+                        .and_then(|bytes| bytes.checked_add(self.started))
                         .ok_or_else(|| "x86 entry frame displacement overflows".to_owned())?;
                     self.asm.load_stack(dst, displacement);
                     self.forget(dst);
                 }
             }
             (Opcode::ArgumentVector, Immediate::None) => {
-                // The count lies just above the entry's frame, and the
-                // addresses just above the count.
+                // The count lies just above the entry's frame and what the
+                // start left, and the addresses just above the count.
                 let dst = result()?;
                 let owner = self.owner_at(points.late);
                 let displacement = self
                     .frame(owner)
                     .checked_mul(8)
-                    .and_then(|bytes| bytes.checked_add(8))
+                    .and_then(|bytes| bytes.checked_add(self.started + 8))
                     .ok_or_else(|| "x86 entry frame displacement overflows".to_owned())?;
                 self.mov_reg(dst, Reg::Rsp, RegisterWidth::Word);
                 self.materialize(Reg::Rcx, u64::from(displacement));

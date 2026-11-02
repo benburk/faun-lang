@@ -276,6 +276,39 @@ fn a_needed_call_that_never_comes_back_hangs_the_program() {
     assert!(running, "the program exited rather than hanging");
 }
 
+/// A call going deeper than the stack has room for ends the program saying
+/// so on standard error, with a status of its own, rather than with a fault
+/// and nothing said. The stack is held to eight megabytes, as a shell
+/// usually starts it, so the call runs out of room wherever this runs.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn a_call_too_deep_for_the_stack_says_so() {
+    let package = support::Package::new(
+        "deep",
+        "again : Nat -> Nat
+         again(0) -> 0
+         again(Succ(n)) -> again(n) + 1
+
+         main!(host) -> (
+           host.println!(again(1000000 + host.args.len()).to_str())
+           host.exit!(0)
+         )",
+    );
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("ulimit -s 8192 && exec \"$0\" run \"$1\"")
+        .arg(env!("CARGO_BIN_EXE_faun"))
+        .arg(package.entry())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "stack overflow\n"
+    );
+    assert_eq!(output.status.code(), Some(3));
+}
+
 /// The standard-input runner reads the input to its end and hands it to the
 /// program beside the arguments.
 #[test]

@@ -267,6 +267,9 @@ pub(crate) enum Inst {
         right: Option<Reg>,
     },
     Syscall,
+    /// `hlt`, which a program may not run: the processor faults, and the
+    /// kernel ends the program with `SIGSEGV`.
+    Halt,
     LoadStack {
         dst: Reg,
         displacement: u32,
@@ -380,6 +383,7 @@ impl Inst {
             | Self::PushImmediate(_)
             | Self::Divide
             | Self::Syscall
+            | Self::Halt
             | Self::Call { .. }
             | Self::Return
             | Self::Jump { .. } => true,
@@ -631,6 +635,10 @@ impl AllocatedBuilder {
         self.push(Inst::Syscall);
     }
 
+    pub(crate) fn halt(&mut self) {
+        self.push(Inst::Halt);
+    }
+
     /// Drop a narrowing to a byte just before the exit, which keeps only
     /// the status's low byte anyway. A narrower one takes more off than the
     /// exit does, so it stays.
@@ -692,6 +700,15 @@ impl AllocatedBuilder {
 
     pub(crate) fn alu(&mut self, op: Alu, dst: Reg, src: Reg, bits: u16) {
         self.push(Inst::Alu { op, dst, src, bits });
+    }
+
+    pub(crate) fn alu_immediate(&mut self, op: Alu, dst: Reg, immediate: i32, bits: u16) {
+        self.push(Inst::AluImmediate {
+            op,
+            dst,
+            immediate,
+            bits,
+        });
     }
 
     pub(crate) fn fold_alu_immediate(&mut self, op: Alu, dst: Reg, src: Reg, bits: u16) -> bool {

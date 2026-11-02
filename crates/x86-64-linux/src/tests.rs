@@ -27,6 +27,10 @@ const RUNNER: Option<&str> = None;
 // to a closed pipe answers `BrokenPipe` as it does on every other target:
 // 21 bytes on every such program, and 4 more to put the stack back where
 // it reads its arguments.
+// A program whose calls can go round handles the fault at the end of its
+// stack, saying `stack overflow` and exiting with status 3 rather than
+// ending with `SIGSEGV` and nothing said: 129 bytes on every such program,
+// 25 of them telling that fault from any other.
 // An exit status is a `U8`, so an example whose status is worked out from a
 // `Nat` takes it modulo 256; where the arm that bounds it is not seen to,
 // that is real work.
@@ -48,7 +52,7 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("two and two", 131),
     ("hello world", 179),
     ("a call", 143),
-    ("recursion", 182),
+    ("recursion", 311),
     ("values across a call", 252),
     ("the heap", 178),
     ("a byte", 208),

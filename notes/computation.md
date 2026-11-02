@@ -76,7 +76,10 @@ comes back hangs the program there, after every host effect written before
 it and before any written after. Replace `ignored` above with
 `host.println!(spin(0).to_str())` and the program hangs. Recursion that
 exhausts the stack is the target running out of room, outside what a
-program means.
+program means. On x86-64 Linux the program says `stack overflow` on
+standard error and exits with status 3; under wasmtime the engine stops it
+with a trap. The 6502 holds 128 return addresses, and a call deeper than
+that is not caught.
 
 Nothing about stopping is refused. The decision, its measurements and its
 costs are in the [termination proposal](proposals/approved/termination.md).

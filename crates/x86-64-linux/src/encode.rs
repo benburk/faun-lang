@@ -86,6 +86,7 @@ pub(crate) fn encode(program: &Allocated) -> Code {
             } => asm.float(float, dst, left, right),
             Inst::Divide => asm.divide(),
             Inst::Syscall => asm.syscall(),
+            Inst::Halt => asm.halt(),
             Inst::LoadStack { dst, displacement } => asm.load_slot(dst, displacement),
             Inst::LoadStackNarrow {
                 dst,
@@ -670,6 +671,11 @@ impl RawEncoder {
     fn syscall(&mut self) {
         self.step();
         self.emit(&[0x0F, 0x05]);
+    }
+
+    fn halt(&mut self) {
+        self.step();
+        self.emit(&[0xF4]);
     }
 
     /// A `ModRM` `rm` of 100 means a SIB byte follows; 0x24 is rsp as the
