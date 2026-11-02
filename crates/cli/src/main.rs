@@ -110,16 +110,35 @@ fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), Diagno
     Ok(())
 }
 
-/// Compile for the machine this runs on, run it, and answer how it exited:
-/// failure where a signal stopped it.
+/// Compile for the machine this runs on, run it, and answer how it exited.
+/// Where a signal stopped it, say which, and answer as a shell does,
+/// 128 and the signal's number.
 fn run(source: &Path, target: &dyn Target, args: &[String]) -> Result<ExitCode, Diagnostic> {
     runs_here(target)?;
     let image = faun::compile_to_image(source, target)?;
     let status = execute(target, &image, |program| program.args(args).status())?;
+    if let Some(signal) = stopping_signal(status) {
+        eprintln!("the program was stopped by signal {signal}");
+        let shell = 128 + signal;
+        let byte = u8::try_from(shell).unwrap_or(u8::MAX);
+        return Ok(ExitCode::from(byte));
+    }
     let code = status.code();
     let byte = code.and_then(|code| u8::try_from(code).ok());
     let exit = byte.map_or(ExitCode::FAILURE, ExitCode::from);
     Ok(exit)
+}
+
+/// The signal that stopped a program, where one did.
+#[cfg(unix)]
+fn stopping_signal(status: std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn stopping_signal(_status: std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 /// Build a package's expectations for the machine this runs on, run them,
