@@ -1458,9 +1458,16 @@ impl Checker<'_> {
                 }
                 // A known function is held to its arguments one at a time,
                 // so what does not fit is told where it is written.
-                if let Ty::Function(parameters, result) = self.infer.resolve(&head_type)
-                    && parameters.len() == arguments.len()
-                {
+                if let Ty::Function(parameters, result) = self.infer.resolve(&head_type) {
+                    if parameters.len() != arguments.len() {
+                        return Err(self.miscounted_call(
+                            module,
+                            expression.span,
+                            head,
+                            parameters.len(),
+                            arguments.len(),
+                        ));
+                    }
                     let given = arguments.iter().zip(&argument_types);
                     for ((argument, ty), parameter) in given.zip(parameters.iter()) {
                         self.unify_at(module, argument.span, ty, parameter)?;
@@ -1841,6 +1848,48 @@ impl Checker<'_> {
         }
         self.bound_sites.push((module, span, site, owner, member));
         Ok(Rc::unwrap_or_clone(result))
+    }
+
+    /// A call handing a known function more or fewer arguments than it
+    /// takes. One handed fewer is not a function of the rest, as there is no
+    /// partial application, so the help writes the lambda that would be.
+    fn miscounted_call(
+        &self,
+        module: ModuleId,
+        span: super::ast::Span,
+        head: &h::Expr,
+        taken: usize,
+        handed: usize,
+    ) -> Refusal {
+        let name = match head.kind {
+            h::ExprKind::Global(global) => Some(self.symbols.spelling(global)),
+            _ => None,
+        };
+        let called = name.map_or_else(
+            || "the function called".to_owned(),
+            |name| format!("`{name}`"),
+        );
+        let message = format!(
+            "{called} takes {}, but {} given",
+            counted(taken, "argument"),
+            given(handed)
+        );
+        let refusal = failure(module, span, message);
+        if handed == 0 || handed > taken {
+            return refusal;
+        }
+        // The arguments left out, `x` alone or `x1, x2, …`.
+        let missing = taken - handed;
+        let rest: Vec<String> = if missing == 1 {
+            vec!["x".to_owned()]
+        } else {
+            (1..=missing).map(|at| format!("x{at}")).collect()
+        };
+        let rest = rest.join(", ");
+        let lambda = format!("|{rest}| {}(…, {rest})", name.unwrap_or("f"));
+        refusal.help(format!(
+            "there is no partial application: to take the rest later, write a lambda, as `{lambda}`"
+        ))
     }
 
     /// `value?`: what an `Ok` holds, where the clause or lambda it is written

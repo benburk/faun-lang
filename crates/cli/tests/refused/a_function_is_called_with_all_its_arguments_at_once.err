@@ -1,0 +1,7 @@
+error: `add` takes 2 arguments, but 1 was given
+ --> a_function_is_called_with_all_its_arguments_at_once.fn:8:15
+  |
+8 |   increment = add(1)
+  |               ^^^^^^
+  |
+  = help: there is no partial application: to take the rest later, write a lambda, as `|x| add(…, x)`
