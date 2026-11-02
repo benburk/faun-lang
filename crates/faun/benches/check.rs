@@ -119,12 +119,13 @@ fn nested_calls(depth: usize) -> String {
 
 /// One body binding `count` names, each from the one before.
 fn binding_chain(count: usize) -> String {
-    let mut source = String::from("chain : Nat -> Nat\nchain(x0) ->\n");
+    let mut source = String::from("chain : Nat -> Nat\nchain(x0) -> (\n");
     for i in 1..count {
         let before = i - 1;
         writeln!(source, "  x{i} = x{before} + 1").unwrap();
     }
     writeln!(source, "  x{}", count - 1).unwrap();
+    source.push_str(")\n");
     source
 }
 
@@ -135,7 +136,7 @@ fn doubling_types(depth: usize) -> String {
     let mut source = String::from("pair(a) -> (a, a)\n\np0 = 0\n");
     for i in 1..=depth {
         let before = i - 1;
-        writeln!(source, "p{i}() -> pair(p{before}())").unwrap();
+        writeln!(source, "p{i} = pair(p{before})").unwrap();
     }
     source
 }
@@ -145,7 +146,7 @@ fn wide_record(count: usize) -> String {
     let fields: Vec<String> = (0..count).map(|i| format!("f{i}: {i}")).collect();
     let reads: Vec<String> = (0..count).map(|i| format!("r.f{i}")).collect();
     format!(
-        "record = {{{}}}\n\nsum : Nat\nsum =\n  r = record\n  {}\n",
+        "record = {{{}}}\n\nsum : Nat\nsum = (\n  r = record\n  {}\n)\n",
         fields.join(", "),
         reads.join(" + ")
     )
@@ -177,11 +178,12 @@ fn list_literal(count: usize) -> String {
 
 /// An application writing one line `count` times, each its own statement.
 fn print_statements(count: usize) -> String {
-    let mut source = String::from("import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n");
+    let mut source =
+        String::from("import std.host {Host}\n\nmain! : Host -> []\nmain!(host) -> (\n");
     for _ in 0..count {
         source.push_str("  host.println!(\"hello\")\n");
     }
-    source.push_str("  host.exit!(0)\n");
+    source.push_str("  host.exit!(0)\n)\n");
     source
 }
 

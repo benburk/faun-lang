@@ -46,8 +46,9 @@ it and may use only what it says: `flip : a -> a` with `flip(x) -> x.not()`
 is refused, with the help "write `a.not : a -> a` in the signature's
 `where`".
 
-A signature can also choose a type that nothing else would. A numeral that
-nothing types is a `Nat`, so the signature here changes the answer:
+A signature can also choose a type that nothing else would. An unsigned
+value's numeral stays generic, and is a `Nat` wherever a use leaves its type
+open, so the signature here changes the answer:
 
 ```ruby
 t = 200
