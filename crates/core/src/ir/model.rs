@@ -59,6 +59,8 @@ pub enum Class {
     /// they could be before anything said how wide to hold them, and taking
     /// one modulo a width is what [`Op::Convert`] is for -- a program
     /// asking, rather than a machine deciding.
+    ///
+    /// Except at sixty-four bits: see [`Self::wraps`].
     Held(Facts),
     Address,
 }
@@ -100,7 +102,8 @@ pub enum Binary {
     /// operands', which are only required to be alike, as a comparison's are.
     /// A target works it out at the operands' width, where the borrow is.
     Monus,
-    /// Product. A fixed result is a fit requirement, not a modulus.
+    /// Product. A fixed result is a fit requirement, not a modulus, except
+    /// at a class that [wraps](Class::wraps).
     Mul,
     /// Unsigned quotient, with `Div(x, 0) = 0`.
     Div,
@@ -350,7 +353,7 @@ pub enum Op {
     ///
     /// The class is a fit requirement, exactly as `Binary`'s is: a shift up
     /// past what the class holds is a program saying something untrue, not a
-    /// modulus.
+    /// modulus, except at a class that [wraps](Class::wraps).
     Shift {
         direction: Direction,
         value: ValueId,
@@ -514,6 +517,30 @@ impl Class {
             Self::Held(facts) => facts.width(),
             Self::Cell | Self::Buffer | Self::Natural | Self::Word | Self::Address => None,
         }
+    }
+
+    /// Whether a sum, a difference, a product or an [`Op::Shift`] up written
+    /// at this class answers modulo two to its width rather than having to
+    /// fit it: where it is sixty-four bits wide.
+    ///
+    /// Not a [`Binary::ShiftUp`], whose distance is worked out while the
+    /// program runs and may be the width or more: a machine takes that
+    /// modulo its word, so a target is handed one in one instruction only
+    /// because a value moved that far fits only where it is nought.
+    ///
+    /// Nothing is held wider. A sum or a product of two such numbers taken
+    /// modulo 2^64, which is what a `U64`'s are, has nowhere wider to be
+    /// worked out and narrowed after, as a `U32`'s is; without this it is
+    /// worked out as a natural, a heap object and a division. And it costs
+    /// no target anything: each holds a number this wide in exactly as many
+    /// bits, a register on x86-64 and words on narrower machines, kept to as
+    /// many as the class has, and its instructions answer the same modulo
+    /// that. What is known of the least such a value can be says nothing
+    /// once it may have wrapped, so a class written for one says only its
+    /// width.
+    #[must_use]
+    pub fn wraps(self) -> bool {
+        matches!(self, Self::Held(_)) && self.width() == Some(64)
     }
 
     /// Whether a value of this class can be read as one of `wanted` without

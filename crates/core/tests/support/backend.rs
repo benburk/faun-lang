@@ -2034,6 +2034,39 @@ fn guarded_argc_expressions_fold_constants_but_compute_runtime_inputs() {
     }
 }
 
+/// A `U64`'s sum, difference and product are taken modulo 2^64, and the
+/// exact answer of each can pass sixty-four bits: they are worked out at
+/// sixty-four bits all the same, wrapping, with no natural anywhere, and
+/// answer what the ring does on every target. One argument and three: a
+/// product past the word, and a difference below nought, each answering
+/// its top six bits, which every bit below carries into.
+#[test]
+fn a_sixty_four_bit_words_arithmetic_wraps_in_the_machine() {
+    let program = read(
+        "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) -> (
+           n = U64.of_nat(host.args.len())
+           state = n * 0x5851f42d4c957f2d + 0x14057b7ef767814f
+           below = n - 2
+           mixed = (state ^ below) * 0x100000001b3 - state
+           host.exit!(mixed.shift_right(58).to_u8())
+         )",
+    )
+    .expect("a program of words");
+    assert!(
+        (0..program.values_count()).all(|at| program.class(ValueId::at(at)) != Class::Natural),
+        "a word's arithmetic should not need runtime naturals"
+    );
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers = execute_counts(&program, &[1, 3]);
+    let statuses: Vec<_> = answers.iter().map(|(status, _)| *status).collect();
+    assert_eq!(statuses, [31, 18]);
+}
+
 fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId])]) -> bool {
     let mut constants = vec![false; program.values_count()];
     for (op, results) in instructions {

@@ -676,6 +676,61 @@ fn a_conversion_that_takes_nothing_off_is_not_written() {
     assert_eq!(returns(&held), BigUint::from(5u8));
 }
 
+/// A sum, a difference and a product of two sixty-four-bit numbers, each
+/// worked out as a natural and taken modulo 2^64 as a `U64`'s are, are
+/// worked out at sixty-four bits, wrapping, with no natural left: the
+/// product past the top, the sum past it, and the difference below nought.
+#[test]
+fn a_words_arithmetic_worked_out_as_a_natural_wraps_at_sixty_four_bits() {
+    let (a, c) = (0xffff_ffff_ffff_fff1_u64, 0x0100_0000_01b3_u64);
+    let cases = [
+        (Binary::Mul, a, c, a.wrapping_mul(c)),
+        (Binary::Add, a, c, a.wrapping_add(c)),
+        (Binary::Sub, c, a, c.wrapping_sub(a)),
+    ];
+    for (op, left, right, expected) in cases {
+        let held = settled(&exact_then_low(op, left, right));
+        assert_eq!(
+            count_at(&held, |_, class| class == Class::Natural),
+            0,
+            "{op:?}"
+        );
+        assert_eq!(
+            count_at(&held, |held, class| class.wraps()
+                && matches!(*held, Op::Binary { op: done, .. } if done == op)),
+            1,
+            "{op:?}"
+        );
+        assert_eq!(returns(&held), BigUint::from(expected), "{op:?}");
+    }
+}
+
+/// `left op right` worked out as naturals and taken modulo 2^64, as a
+/// `U64`'s arithmetic is written, answered as a word. A difference is
+/// `(left + 2^64 - right) % 2^64`, so that it never stops at nought.
+fn exact_then_low(op: Binary, left: u64, right: u64) -> Program {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let wide = Class::fixed(64);
+        let left = unknown(b, wide, left);
+        let right = unknown(b, wide, right);
+        let left = b.convert(Class::Natural, left);
+        let right = b.convert(Class::Natural, right);
+        let modulus = b.natural(&(BigUint::from(1u8) << 64));
+        let exact = if op == Binary::Sub {
+            let lifted = b.binary(Binary::Add, left, modulus);
+            b.binary(Binary::Monus, lifted, right)
+        } else {
+            b.binary(op, left, right)
+        };
+        let low = b.binary(Binary::Mod, exact, modulus);
+        let answer = b.convert(wide, low);
+        let answer = b.convert(Class::Word, answer);
+        b.ret(&[answer]);
+    });
+    p
+}
+
 /// `value % by`, answered as a word.
 fn remainder(by: u64, value: u64) -> Program {
     let (mut p, main) = Program::new("main");

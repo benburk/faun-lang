@@ -766,14 +766,16 @@ impl<H: Host> Machine<'_, H> {
             Binary::Sub | Binary::Monus if left >= *right => left.sub(right),
             Binary::Sub if class == Class::Natural => Number::ZERO,
             Binary::Monus => Number::ZERO,
-            // Both fit the word, so the difference wraps within one.
-            Binary::Sub if class == Class::Word => match (left.small(), right.small()) {
-                (Some(left), Some(right)) => Number::from(left.wrapping_sub(right)),
-                _ => return Err(Error::DoesNotFit(class)),
-            },
+            // Both fit the word, so the difference wraps within one; and
+            // the same at a class that wraps, which a word holds.
+            Binary::Sub if class == Class::Word || class.wraps() => {
+                wrapping_sub(class, &left, right)?
+            }
             Binary::Sub => return Err(Error::DoesNotFit(class)),
         };
-        if class == Class::Word {
+        // A shift by a worked-out distance is a fit requirement even where
+        // the class wraps: see `Class::wraps`.
+        if class == Class::Word || (class.wraps() && op != Binary::ShiftUp) {
             self.convert(class, value)
         } else {
             self.fit(class, &value)?;
@@ -795,7 +797,7 @@ impl<H: Host> Machine<'_, H> {
             Direction::Up => value.shl(by),
             Direction::Down => value.shr(by),
         };
-        if class == Class::Word {
+        if class == Class::Word || class.wraps() {
             self.convert(class, held)
         } else {
             self.fit(class, &held)?;
@@ -1206,6 +1208,14 @@ impl<H: Host> Machine<'_, H> {
         };
         self.signature(classes, &result)?;
         Ok(Answer::Return(result))
+    }
+}
+
+/// `left - right` modulo the word both fit.
+fn wrapping_sub(class: Class, left: &Number, right: &Number) -> Result<Number, Error> {
+    match (left.small(), right.small()) {
+        (Some(left), Some(right)) => Ok(Number::from(left.wrapping_sub(right))),
+        _ => Err(Error::DoesNotFit(class)),
     }
 }
 

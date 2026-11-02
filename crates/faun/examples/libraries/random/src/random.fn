@@ -12,10 +12,9 @@ export {Random}
 Random : U64.(
   # One advance of `increment + value`: advancing from zero is `0·m + i = i`,
   # so PCG's usual seed-then-advance-twice collapses to the constant already
-  # written below. The multiply-and-add is spelled here and in `next` rather
-  # than shared through a helper: `*` and `+` on a `U64` are recognised word
-  # operations wherever they appear, but a call to a helper wrapping them is
-  # a uniform boundary the 64-bit state boxes to cross.
+  # written below. `*` and `+` on a `U64` wrap modulo 2^64 and are worked out
+  # in machine words wherever they appear, as the 64-bit state is held in
+  # them, across calls too.
   seed : Nat -> Random
   seed(value) -> Random(
     (U64.of_nat(value) + 0x14057b7ef767814f) * 0x5851f42d4c957f2d + 0x14057b7ef767814f

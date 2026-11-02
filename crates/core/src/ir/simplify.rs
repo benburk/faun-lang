@@ -28,6 +28,14 @@
 //! nought: that is asking whether one number is no more than another, which
 //! is one comparison rather than a subtraction and a test.
 //!
+//! And the same for a word's arithmetic worked out as a natural. A sum or a
+//! product of two sixty-four-bit words taken modulo 2^64, which is what a
+//! `U64`'s is, has nowhere narrower than a natural to be worked out before
+//! the remainder, as a `U32`'s is worked out at sixty-four bits. But the
+//! low bits of a sum or a product are the sum or product of the low bits,
+//! so read at sixty-four bits it is worked out there, at a class that
+//! wraps, and the natural and its remainder go.
+//!
 //! And the same for arithmetic on numbers known before the program runs,
 //! which legalization writes a great deal of: an offset is a count of words
 //! times a word's bytes, plus a header, plus which leaf. Two known numbers
@@ -36,6 +44,8 @@
 //! program whose layout is bound says how wide it is; a class that is a fit
 //! requirement is worked out exactly, and left alone where the answer would
 //! not fit it.
+
+use num_bigint::BigUint;
 
 use crate::facts::Facts;
 
@@ -52,6 +62,11 @@ use super::{
 /// else entirely, so a distance this tier cannot vouch for is left as the
 /// product or quotient it was.
 const WORD_FLOOR: u16 = 16;
+
+/// How deep [`Simplify::low`] looks under a conversion: deeper than any
+/// expression a program writes on one line, and shallow enough that a long
+/// chain of sums does not recurse without end.
+const LOW_DEPTH: u8 = 32;
 
 /// Rebuild `source` with those shapes read as what they mean.
 ///
@@ -151,7 +166,8 @@ impl rewrite::Pass for Simplify {
             }
             Op::Convert { value } => {
                 let class = rebuild.source().class(results[0]);
-                self.widened(rebuild, b, class, value, results[0])
+                self.wrapping(rebuild, b, class, value, results[0])
+                    || self.widened(rebuild, b, class, value, results[0])
             }
             Op::Binary {
                 op: Binary::Add,
@@ -455,6 +471,11 @@ impl Simplify {
         if self.number(left) != Some(1) || !b.class(by).fits(class) {
             return false;
         }
+        // A product at a class that wraps may lose its top bits, which a
+        // shift by a worked-out distance may not.
+        if op == Binary::ShiftUp && class.wraps() {
+            return false;
+        }
         let moved = b.binary_at(class, op, rebuild.value(value), by);
         rebuild.stands_for(result, moved);
         true
@@ -488,6 +509,186 @@ impl Simplify {
         let class = Class::fixed(bits);
         rebuild.stands_for(result, b.convert(class, rebuild.value(left)));
         true
+    }
+
+    /// A natural sum, difference or product read as a machine number,
+    /// worked out at sixty-four bits instead.
+    ///
+    /// What a conversion to sixty-four bits keeps of a sum is the sum of
+    /// what it keeps of each side, modulo 2^64, and the same for a product,
+    /// and for a difference whose right side is never the larger. So the
+    /// arithmetic under one goes to a class that [wraps](Class::wraps),
+    /// down to what is already held as a machine number, what a natural
+    /// conversion widened, a remainder by a power of two at least as large,
+    /// which keeps every bit read here, or a natural known before the
+    /// program runs. Anything else is read at sixty-four bits where it
+    /// stands, which is what the conversion did to all of it.
+    ///
+    /// Read narrower, it is the same at sixty-four bits narrowed after. A
+    /// `U32`'s arithmetic is a machine's already, worked out wide enough and
+    /// narrowed after; it is only that nothing is held wider than sixty-four
+    /// bits that leaves a natural, and only a natural is read this way.
+    fn wrapping(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        class: Class,
+        value: ValueId,
+        result: ValueId,
+    ) -> bool {
+        if !matches!(class, Class::Held(_)) || !self.computed(rebuild.source(), value) {
+            return false;
+        }
+        let Some(low) = self.low(rebuild, b, value, LOW_DEPTH) else {
+            return false;
+        };
+        // Narrower, what the conversion keeps of that is what it kept of
+        // the whole.
+        let low = if b.class(low).fits(class) {
+            low
+        } else {
+            b.convert(class, low)
+        };
+        rebuild.stands_for(result, low);
+        true
+    }
+
+    /// Whether a natural was worked out by arithmetic this carries to
+    /// sixty-four bits. A natural that was not is read where it stands.
+    fn computed(&self, source: &Program, value: ValueId) -> bool {
+        let Some((Op::Binary { op, left, right }, Class::Natural, _)) = self.wrote.0[value.index()]
+        else {
+            return false;
+        };
+        op == Binary::Mod && self.keeps_low(source, right)
+            || self.carried(source, op, left, right).is_some()
+    }
+
+    /// What a natural `op` of `left` and `right` is at a class that wraps,
+    /// where it is the same there: a sum or a product, and a difference
+    /// that never stops at nought.
+    fn carried(
+        &self,
+        source: &Program,
+        op: Binary,
+        left: ValueId,
+        right: ValueId,
+    ) -> Option<Binary> {
+        match op {
+            Binary::Add | Binary::Mul => Some(op),
+            Binary::Monus if self.no_less(source, left, right) => Some(Binary::Sub),
+            _ => None,
+        }
+    }
+
+    /// What `value` is modulo 2^64, as something written here: see
+    /// [`Self::wrapping`]. Nothing where it is not a number. `depth` bounds
+    /// how far down it looks, past which a value is read where it stands.
+    fn low(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        value: ValueId,
+        depth: u8,
+    ) -> Option<ValueId> {
+        let source = rebuild.source();
+        let class = source.class(value);
+        let wide = Class::fixed(64);
+        match class {
+            Class::Held(_) => return Some(rebuild.value(value)),
+            Class::Word => return Some(b.convert(wide, rebuild.value(value))),
+            Class::Natural => {}
+            Class::Cell | Class::Buffer | Class::Address => return None,
+        }
+        let stands = |b: &mut Builder| Some(b.convert(wide, rebuild.value(value)));
+        let Some(depth) = depth.checked_sub(1) else {
+            return stands(b);
+        };
+        let Some((op, ..)) = self.wrote.0[value.index()] else {
+            return stands(b);
+        };
+        match op {
+            // A machine number widened: what it was is every bit kept here.
+            Op::Convert { value: from } if source.class(from) != Class::Natural => {
+                self.low(rebuild, b, from, depth)
+            }
+            Op::NaturalConstant(_) | Op::Constant { .. } => {
+                let digits = self.known(source, value)?.to_u64_digits();
+                let number = digits.first().copied().unwrap_or(0);
+                Some(b.constant(Class::Held(Facts::at(number)), number))
+            }
+            Op::Binary {
+                op: Binary::Mod,
+                left,
+                right,
+            } if self.keeps_low(source, right) => self.low(rebuild, b, left, depth),
+            Op::Binary { op, left, right } => match self.carried(source, op, left, right) {
+                Some(op) => {
+                    let left = self.low(rebuild, b, left, depth)?;
+                    let right = self.low(rebuild, b, right, depth)?;
+                    Some(b.binary_at(wide, op, left, right))
+                }
+                None => stands(b),
+            },
+            _ => stands(b),
+        }
+    }
+
+    /// Whether `left` is never less than `right`, so that a monus of them
+    /// never stops at nought: where `left` was written as something plus a
+    /// number known before the program runs that is at least the most
+    /// `right` can be.
+    fn no_less(&self, source: &Program, left: ValueId, right: ValueId) -> bool {
+        let Some((
+            Op::Binary {
+                op: Binary::Add,
+                left: one,
+                right: other,
+            },
+            ..,
+        )) = self.wrote.0[left.index()]
+        else {
+            return false;
+        };
+        let Some(most) = self.most(source, right) else {
+            return false;
+        };
+        [one, other]
+            .into_iter()
+            .filter_map(|side| self.known(source, side))
+            .any(|added| added >= most)
+    }
+
+    /// The most a value can be, where its class or the machine number a
+    /// natural widened says.
+    fn most(&self, source: &Program, value: ValueId) -> Option<BigUint> {
+        let held = match self.wrote.0[value.index()] {
+            Some((Op::Convert { value: from }, Class::Natural, _)) => source.class(from),
+            _ => source.class(value),
+        };
+        held.facts()?.high.map(BigUint::from)
+    }
+
+    /// The number a value is, natural or not, where it is known before the
+    /// program runs.
+    fn known(&self, source: &Program, value: ValueId) -> Option<BigUint> {
+        match self.wrote.0[value.index()]? {
+            (Op::NaturalConstant(data), ..) => {
+                Some(BigUint::from_bytes_le(source.datum_bytes(data)))
+            }
+            (Op::Constant { value }, ..) => Some(BigUint::from(value)),
+            (Op::Convert { value: from }, Class::Natural, _) => {
+                self.number(from).map(BigUint::from)
+            }
+            _ => self.number(value).map(BigUint::from),
+        }
+    }
+
+    /// Whether a remainder by `modulus` keeps every bit below 2^64: where it
+    /// is a power of two at least that, known before the program runs.
+    fn keeps_low(&self, source: &Program, modulus: ValueId) -> bool {
+        self.known(source, modulus)
+            .is_some_and(|number| number.count_ones() == 1 && number.bits() > 64)
     }
 
     /// A step past a step is one step.
