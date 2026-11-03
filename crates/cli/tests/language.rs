@@ -929,6 +929,19 @@ const RUNNING: &[(&str, &str, u32)] = &[
         3 + 20 + 120 + 100,
     ),
     (
+        "a field's numeral a generic definition answers takes its default where nothing types it",
+        "make(n) -> {n: n, k: 1, low: -2, half: 0.5}
+         keep(f) -> {call: f, k: 1}
+
+         main! : Host -> []
+         main!(host) -> (
+           x = make(3)
+           y = keep(4)
+           host.exit!(U8.of_nat(x.n + y.call + x.low.to_str().len() * 10 + x.half.to_str().len() * 40))
+         )",
+        3 + 4 + 20 + 120,
+    ),
+    (
         "values say themselves as text",
         "main! : Host -> []
          main!(host) -> host.exit!(U8.of_nat(1234.to_str().len() + (-56).to_str().len() * 10 + True.to_str().concat(\"x\").len() * 100))",
