@@ -2067,6 +2067,56 @@ fn a_sixty_four_bit_words_arithmetic_wraps_in_the_machine() {
     assert_eq!(statuses, [31, 18]);
 }
 
+/// A narrower word's `of_nat` takes a natural modulo a power of two, and
+/// keeping the bits below it is reading the natural's low word: no
+/// remainder is left to work out, and the words answer what the ring does
+/// on every target, for a natural below 2^64 and one past it. The status
+/// is halved, since wasmtime refuses one past 125.
+#[test]
+fn a_narrower_words_of_nat_reads_the_low_bits() {
+    let program = read(
+        "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) -> (
+           n = (host.args.len() - 1) * 0x1000000000000000000 + 0xfedcba9876543210 + host.args.len()
+           small = U8.of_nat(n).to_nat() + U16.of_nat(n).to_nat()
+           word = U32.of_nat(n).shift_right(24).to_nat() + U64.of_nat(n).shift_right(56).to_nat()
+           host.exit!(U8.of_nat(small + word).shift_right(1))
+         )",
+    )
+    .expect("a program of words");
+    let body = program.function(program.entry()).body().expect("a body");
+    let remainders = program
+        .every(body)
+        .filter(|op| {
+            matches!(
+                op,
+                Op::Binary {
+                    op: Binary::Mod,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(remainders, 0, "keeping the low bits should not divide");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers = execute_counts(&program, &[1, 3]);
+    let statuses: Vec<_> = answers.iter().map(|(status, _)| *status).collect();
+    let expected: Vec<_> = [1u128, 3]
+        .iter()
+        .map(|&count| {
+            let n = (count - 1) * (1 << 72) + 0xfedc_ba98_7654_3210 + count;
+            let small = n % (1 << 8) + n % (1 << 16);
+            let word = ((n % (1 << 32)) >> 24) + ((n % (1 << 64)) >> 56);
+            i32::try_from(((small + word) % 256) >> 1).expect("a byte")
+        })
+        .collect();
+    assert_eq!(statuses, expected);
+}
+
 fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId])]) -> bool {
     let mut constants = vec![false; program.values_count()];
     for (op, results) in instructions {

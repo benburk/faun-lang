@@ -731,6 +731,86 @@ fn exact_then_low(op: Binary, left: u64, right: u64) -> Program {
     p
 }
 
+/// A natural taken modulo a power of two no more than 2^64, as a narrower
+/// word's `of_nat` takes one, is its low bits: no remainder is left,
+/// whether the power is a machine number converted to a natural or a
+/// natural, the remainder is read as a machine number or as a natural, and
+/// the natural is past sixty-four bits or below.
+#[test]
+fn a_natural_modulo_a_power_of_two_is_its_low_bits() {
+    let values = [
+        BigUint::from(0xfedc_ba98_7654_3210_u64),
+        (BigUint::from(0xabcd_u16) << 64) + 0x0123_4567_89ab_cdef_u64,
+    ];
+    for bits in [8u16, 16, 32, 64] {
+        for value in &values {
+            for as_natural in [false, true] {
+                let held = settled(&natural_remainder(bits, value, as_natural));
+                let divides = count(&held, |op| {
+                    matches!(
+                        *op,
+                        Op::Binary {
+                            op: Binary::Mod,
+                            ..
+                        }
+                    )
+                });
+                assert_eq!(
+                    divides, 0,
+                    "{value} mod 2^{bits}, as a natural: {as_natural}"
+                );
+                let expected = if as_natural {
+                    BigUint::from(1u8)
+                } else {
+                    value % (BigUint::from(1u8) << bits)
+                };
+                assert_eq!(returns(&held), expected, "{value} mod 2^{bits}");
+            }
+        }
+    }
+}
+
+/// `value % 2^bits` for a natural no pass can see, the power written as
+/// lowering writes it, and the remainder read at as many bits and answered
+/// as a word, or compared as a natural with what it should be.
+fn natural_remainder(bits: u16, value: &BigUint, as_natural: bool) -> Program {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let zero = b.constant(Class::Word, 0);
+        let one = b.constant(Class::Word, 1);
+        let test = b.compare(Relation::Less, zero, one);
+        let held = b.if_(
+            test,
+            &[Class::Natural],
+            |b| {
+                let held = b.natural(value);
+                b.yield_(&[held]);
+            },
+            |b| {
+                let held = b.natural(value);
+                b.yield_(&[held]);
+            },
+        )[0];
+        let modulus = if bits < 64 {
+            let power = b.constant(Class::fixed(bits + 1), 1 << bits);
+            b.convert(Class::Natural, power)
+        } else {
+            b.natural(&(BigUint::from(1u8) << bits))
+        };
+        let low = b.binary(Binary::Mod, held, modulus);
+        if as_natural {
+            let expected = b.natural(&(value % (BigUint::from(1u8) << bits)));
+            let same = b.compare(Relation::Equal, low, expected);
+            b.ret(&[same]);
+            return;
+        }
+        let answer = b.convert(Class::fixed(bits), low);
+        let answer = b.convert(Class::Word, answer);
+        b.ret(&[answer]);
+    });
+    p
+}
+
 /// `value % by`, answered as a word.
 fn remainder(by: u64, value: u64) -> Program {
     let (mut p, main) = Program::new("main");

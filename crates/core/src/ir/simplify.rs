@@ -487,6 +487,11 @@ impl Simplify {
     /// This is how a language whose only number counts without a last step
     /// says a machine word. Left as a remainder it is a division: on a
     /// machine with no divide instruction, a loop over every bit of it.
+    ///
+    /// The power may be a natural, as a narrower word's `of_nat` divides
+    /// by one, so long as it is no more than 2^64: what is kept of a
+    /// natural is then a machine number, read as a natural again for
+    /// whatever reads the remainder as one.
     fn remainder(
         &self,
         rebuild: &rewrite::Rebuild<'_>,
@@ -495,19 +500,22 @@ impl Simplify {
         right: ValueId,
         result: ValueId,
     ) -> bool {
-        let Some(by) = self.number(right) else {
+        let Some(bits) = self.kept(rebuild.source(), right) else {
             return false;
         };
-        if !by.is_power_of_two() {
-            return false;
-        }
-        let Ok(bits) = u16::try_from(by.trailing_zeros()) else {
+        let Some(bits) = u16::try_from(bits).ok().filter(|&bits| bits <= 64) else {
             return false;
         };
         // Narrower than what the remainder was worked out at, which is what
         // taking a remainder does and what anything reading it allows.
         let class = Class::fixed(bits);
-        rebuild.stands_for(result, b.convert(class, rebuild.value(left)));
+        let low = b.convert(class, rebuild.value(left));
+        let answer = if rebuild.source().class(result) == Class::Natural {
+            b.convert(Class::Natural, low)
+        } else {
+            low
+        };
+        rebuild.stands_for(result, answer);
         true
     }
 
@@ -519,10 +527,11 @@ impl Simplify {
     /// and for a difference whose right side is never the larger. So the
     /// arithmetic under one goes to a class that [wraps](Class::wraps),
     /// down to what is already held as a machine number, what a natural
-    /// conversion widened, a remainder by a power of two at least as large,
-    /// which keeps every bit read here, or a natural known before the
-    /// program runs. Anything else is read at sixty-four bits where it
-    /// stands, which is what the conversion did to all of it.
+    /// conversion widened, a remainder by a power of two, which keeps the
+    /// bits below it and so every bit read here where it is at least 2^64,
+    /// or a natural known before the program runs. Anything else is read
+    /// at sixty-four bits where it stands, which is what the conversion did
+    /// to all of it.
     ///
     /// Read narrower, it is the same at sixty-four bits narrowed after. A
     /// `U32`'s arithmetic is a machine's already, worked out wide enough and
@@ -560,7 +569,7 @@ impl Simplify {
         else {
             return false;
         };
-        op == Binary::Mod && self.keeps_low(source, right)
+        op == Binary::Mod && self.kept(source, right).is_some()
             || self.carried(source, op, left, right).is_some()
     }
 
@@ -617,21 +626,43 @@ impl Simplify {
                 let number = digits.first().copied().unwrap_or(0);
                 Some(b.constant(Class::Held(Facts::at(number)), number))
             }
-            Op::Binary {
-                op: Binary::Mod,
-                left,
-                right,
-            } if self.keeps_low(source, right) => self.low(rebuild, b, left, depth),
-            Op::Binary { op, left, right } => match self.carried(source, op, left, right) {
-                Some(op) => {
-                    let left = self.low(rebuild, b, left, depth)?;
-                    let right = self.low(rebuild, b, right, depth)?;
-                    Some(b.binary_at(wide, op, left, right))
+            Op::Binary { op, left, right } => {
+                if op == Binary::Mod
+                    && let Some(bits) = self.kept(source, right)
+                {
+                    return self.low_kept(rebuild, b, left, bits, depth);
                 }
-                None => stands(b),
-            },
+                let Some(op) = self.carried(source, op, left, right) else {
+                    return stands(b);
+                };
+                let left = self.low(rebuild, b, left, depth)?;
+                let right = self.low(rebuild, b, right, depth)?;
+                Some(b.binary_at(wide, op, left, right))
+            }
             _ => stands(b),
         }
+    }
+
+    /// What a remainder of `value` by 2^`bits` is modulo 2^64: that many
+    /// of the low bits of `value`, or every one of them where the power is
+    /// at least 2^64.
+    fn low_kept(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        value: ValueId,
+        bits: u64,
+        depth: u8,
+    ) -> Option<ValueId> {
+        let low = self.low(rebuild, b, value, depth)?;
+        let Some(bits) = u16::try_from(bits).ok().filter(|&bits| bits < 64) else {
+            return Some(low);
+        };
+        let kept = Class::fixed(bits);
+        if b.class(low).fits(kept) {
+            return Some(low);
+        }
+        Some(b.convert(kept, low))
     }
 
     /// Whether `left` is never less than `right`, so that a monus of them
@@ -684,11 +715,11 @@ impl Simplify {
         }
     }
 
-    /// Whether a remainder by `modulus` keeps every bit below 2^64: where it
-    /// is a power of two at least that, known before the program runs.
-    fn keeps_low(&self, source: &Program, modulus: ValueId) -> bool {
-        self.known(source, modulus)
-            .is_some_and(|number| number.count_ones() == 1 && number.bits() > 64)
+    /// How many bits a remainder by `modulus` keeps, where it is a power of
+    /// two known before the program runs: the power.
+    fn kept(&self, source: &Program, modulus: ValueId) -> Option<u64> {
+        let number = self.known(source, modulus)?;
+        (number.count_ones() == 1).then(|| number.bits() - 1)
     }
 
     /// A step past a step is one step.
