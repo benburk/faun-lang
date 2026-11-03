@@ -1,0 +1,7 @@
+import std.host {Host}
+
+small : Result(Nat, [Gone]) -> Bool
+small(r) -> (r is Ok(v)).and(v < 100)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

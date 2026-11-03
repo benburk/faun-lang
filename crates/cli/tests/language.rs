@@ -942,6 +942,23 @@ const RUNNING: &[(&str, &str, u32)] = &[
         3 + 4 + 20 + 120,
     ),
     (
+        "a method's receiver is read before its arguments, as a call's first argument is",
+        "assigned(n) -> (
+           x = n
+           (x = 5
+           x).add(x)
+         )
+         called(n) -> (
+           x = n
+           Nat.add((x = 5
+           x), x)
+         )
+
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(assigned(1) + called(1) * 10))",
+        110,
+    ),
+    (
         "values say themselves as text",
         "main! : Host -> []
          main!(host) -> host.exit!(U8.of_nat(1234.to_str().len() + (-56).to_str().len() * 10 + True.to_str().concat(\"x\").len() * 100))",

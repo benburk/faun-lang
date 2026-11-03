@@ -1487,6 +1487,8 @@ fn resolve_clause(
         choosing: false,
         matching: false,
         hidden: HashMap::new(),
+        tested: Vec::new(),
+        handed: Vec::new(),
         merged: Vec::new(),
         lambda_outer: None,
         conditional: 0,
@@ -1593,6 +1595,11 @@ struct ClauseResolver<'a> {
     /// Names out of sight here, bound by a test not known to have held, or
     /// in a loop's round: what a use of one is told.
     hidden: HashMap<Symbol, Hidden>,
+    /// Each name a test hid, in the order it was hidden.
+    tested: Vec<Symbol>,
+    /// The names a test in an earlier part of a call being read hid, its
+    /// receiver or an argument before: what a use of one is told besides.
+    handed: Vec<Symbol>,
     /// While a clause's head or a test's pattern is resolved, each
     /// `==name` in it, and in a head each name bound again, outside any
     /// `|`. Elsewhere, a pattern compares nothing.
@@ -1636,6 +1643,9 @@ impl ClauseResolver<'_> {
         for (name, local) in &self.locals {
             if before.get(name) != Some(local) {
                 self.hidden.insert(*name, by);
+                if matches!(by, Hidden::Tested) {
+                    self.tested.push(*name);
+                }
             }
         }
     }
@@ -1995,6 +2005,31 @@ impl ClauseResolver<'_> {
         branches
     }
 
+    /// A call's parts in order, a method's receiver first. What a test in
+    /// one binds is seen by none of the others, and a use there of a name
+    /// it hid is told that a call's arguments are no `&`.
+    fn parts<'e>(
+        &mut self,
+        parts: impl IntoIterator<Item = &'e s::Expr>,
+    ) -> Result<Vec<h::Expr>, Refusal> {
+        let outer = self.handed.len();
+        let mut resolved = Vec::new();
+        let mut read = Ok(());
+        for part in parts {
+            let mark = self.tested.len();
+            match self.expr(part) {
+                Ok(part) => resolved.push(part),
+                Err(refusal) => {
+                    read = Err(refusal);
+                    break;
+                }
+            }
+            self.handed.extend_from_slice(&self.tested[mark..]);
+        }
+        self.handed.truncate(outer);
+        read.map(|()| resolved)
+    }
+
     /// The two sides of an `|`, the right binding as the same locals the
     /// names the left bound. A name both bind is seen past the `|`, where
     /// one side or the other held; one only a side binds is hidden.
@@ -2020,6 +2055,7 @@ impl ClauseResolver<'_> {
                 self.locals.insert(*name, *local);
             } else {
                 self.hidden.insert(*name, Hidden::Tested);
+                self.tested.push(*name);
             }
         }
         Ok((left, right))
@@ -2490,13 +2526,8 @@ impl ClauseResolver<'_> {
                 if matches!(head.kind, s::ExprKind::Name(_)) && self.used_value(&applied.kind) {
                     return Err(self.called_value(head.span));
                 }
-                h::ExprKind::Call(
-                    Box::new(applied),
-                    arguments
-                        .iter()
-                        .map(|argument| self.expr(argument))
-                        .collect::<Result<_, _>>()?,
-                )
+                let arguments = self.parts(arguments)?;
+                h::ExprKind::Call(Box::new(applied), arguments)
             }
             s::ExprKind::Member(head, member) => {
                 if let Some(found) = self.static_member(head, *member) {
@@ -2512,16 +2543,13 @@ impl ClauseResolver<'_> {
                 }
             }
             s::ExprKind::Method(head, member, arguments) => {
-                let arguments = arguments
-                    .iter()
-                    .map(|argument| self.expr(argument))
-                    .collect::<Result<Vec<_>, _>>()?;
                 if let Some(found) = self.static_member(head, *member) {
                     let found = found?;
                     if matches!(found, h::ExprKind::Global(global) if self.values.contains(&global))
                     {
                         return Err(self.called_value(head.span.through(member.0)));
                     }
+                    let arguments = self.parts(arguments)?;
                     h::ExprKind::Call(
                         Box::new(h::Expr {
                             site: self.sites.fresh(),
@@ -2532,6 +2560,7 @@ impl ClauseResolver<'_> {
                     )
                 } else if let Some(variable) = self.type_variable(head) {
                     // `a.of_nat(n)`: a member a `where` bound on `a` names.
+                    let arguments = self.parts(arguments)?;
                     h::ExprKind::Call(
                         Box::new(h::Expr {
                             site: self.sites.fresh(),
@@ -2544,8 +2573,14 @@ impl ClauseResolver<'_> {
                         arguments,
                     )
                 } else {
+                    // The receiver is read first, as it is written.
+                    let mut parts = self.parts(std::iter::once(&**head).chain(arguments))?;
+                    let arguments = parts.split_off(1);
+                    let receiver = parts
+                        .pop()
+                        .expect("a method's receiver is one of its parts");
                     h::ExprKind::Method(
-                        Box::new(self.expr(head)?),
+                        Box::new(receiver),
                         self.symbols.intern(member.text(self.source)),
                         arguments,
                     )
@@ -2774,7 +2809,7 @@ impl ClauseResolver<'_> {
         }
         match self.hidden.get(&spelling) {
             Some(Hidden::Tested) => {
-                return Err(error(
+                let refused = error(
                     self.module,
                     name.0,
                     format!(
@@ -2782,8 +2817,15 @@ impl ClauseResolver<'_> {
                         name.text(self.source)
                     ),
                 )
-                .label("not known to hold here")
-                .help("a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below its `else` line, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
+                .label("not known to hold here");
+                let refused = if self.handed.contains(&spelling) {
+                    refused.help(
+                        "a test's names go along `&`, not into a call's arguments: `r is Ok(v) & v < 100`",
+                    )
+                } else {
+                    refused
+                };
+                return Err(refused.help("a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below its `else` line, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
             }
             Some(Hidden::Round) => {
                 let text = name.text(self.source);

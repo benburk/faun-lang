@@ -1,0 +1,10 @@
+import std.host {Host}
+
+pick : (Bool, Nat) -> Nat
+pick(found, n) -> if found then n else 0
+
+first : Result(Nat, [Gone]) -> Nat
+first(r) -> pick(r is Ok(v), v)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)
