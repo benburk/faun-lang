@@ -217,6 +217,7 @@ Whether they do is not decided.
 
 - [Types](types.md): what the type system is, and why it stops at HM
 - [Computation](computation.md): why termination is not checked
+- [Totality](totality.md): what a total language would allow types to do
 - [Termination proposal](proposals/approved/termination.md): the 10 ms goal
 - [Pattern matching](forms/pattern-matching.md): exhaustive matching
 - [Effects](forms/effects.md): linear resources

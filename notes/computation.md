@@ -186,7 +186,7 @@ into a silently wrong answer, 8 to 41% of checking time, and refusals of
 programs that stop, reported as the program's fault. The optimizer needed
 only the rule that unneeded pure work may be left out. The
 [termination proposal](proposals/approved/termination.md) has the
-measurements.
+measurements, and [totality](totality.md) the trade in full.
 
 ### Why not assume forward progress, as C++ does?
 
@@ -203,31 +203,16 @@ miscompile. The cost is the optimizations that need that conclusion:
 pruning must keep a loop that never breaks even when nothing reads its
 answer, since the code after it is reached only if it ends.
 
-### Why did Ori require totality, and what did Faun give up?
+### What did Faun give up by not requiring totality?
 
-Ori admitted only programs it could prove stop. Its reason was the
-optimizer: with every call known to come back, deleting, fusing, moving or
-evaluating pure work at compile time needs no side condition. It made the
-proof a gate rather than an annotation because totality spreads through
-the call graph, so one partial function would quietly disable rewrites in
-every caller. And "every program stops" was a guarantee a user could run
-untrusted input under.
-
-Faun found the optimizer needs less: only that unneeded work may be
-skipped. What it gave up:
-
-- **The guarantee.** A pure call may never come back.
-- **A class of compile-time error.** Recursing on a list instead of its
-  rest was refused; now the program hangs.
-- **Freedom to move needed work.** A call that might not come back keeps
-  its place between the host calls around it.
-- **One kind of determinism.** Unoptimized and optimized builds of a buggy
-  program may differ in whether it hangs.
-
-What it gained: no step limits, `while` loops whose test is partway
-through, as in `while True do ( … if done break … )`, and checking without
-the analysis, whose 2,315 lines are gone. Exhaustive matching stays, for
-its own reason: a pure function answers for every input it can be given
+Mostly simplicity of meaning: with every pure call known to come back, the
+order pure code runs in could not be observed, so the optimizer could move
+work as freely as it skips it, and no function would need a promised
+evaluation order. What it gained: no step limits, `while` loops whose test
+is partway through, as in `while True do ( … if done break … )`, and
+checking without the analysis. [Totality](totality.md) owns the whole
+trade. Exhaustive matching stays, for its own reason: a pure function
+answers for every input it can be given
 ([pattern matching](forms/pattern-matching.md)).
 
 ### Why are `&` and `|` not control flow in the grammar?
@@ -247,6 +232,8 @@ grammar one, which is where the two documents above disagree.
 ## Related
 
 - [Termination proposal](proposals/approved/termination.md): the decision
+- [Totality](totality.md): what requiring every call to come back buys and
+  costs
 - [Loops proposal](proposals/approved/loops.md): loops as tail calls
 - [Effects](forms/effects.md): `!`, `Host` and the order of effects
 - [Operators](forms/operators.md): operators as methods, `&` and `|`

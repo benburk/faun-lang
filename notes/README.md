@@ -16,6 +16,8 @@ not needed.
 
 - [Computation](computation.md): strict, pure evaluation; unneeded work may
   be left out; termination is not checked
+- [Totality](totality.md): what requiring every call to come back makes
+  simple and hard, the designs in between, and why Faun dropped it
 - [Types](types.md): inference, rows, `where` bounds, aliases and
   monomorphization
 - [Dependent types](dependent-types.md): why Faun leaves them out, and what
