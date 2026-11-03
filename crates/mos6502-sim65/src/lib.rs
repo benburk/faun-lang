@@ -5,19 +5,24 @@
 //! Values live in a frame on a software stack, reached through a zero-page
 //! pointer, and a second one 256 bytes on for a frame past what an index
 //! register reaches; the hardware stack carries only return addresses,
-//! which bounds recursion at 128 deep until those move too.
+//! which bounds recursion at 128 deep until those move too. A function in
+//! a call cycle checks the stack pointer on the way in, and a call that
+//! would go deeper says `stack overflow` on standard error and exits with
+//! status 3.
 //!
 //! The image is a twelve-byte header, the data, the globals and the code,
 //! loaded at `$0200`. The platform is the simulator's hooks. Memory past the
 //! image is the heap's and the frames': `grow` bumps the heap up from the
 //! image's end, refusing to pass where the frames have reached, and a
-//! function making a frame leaves with status two where it would reach down
-//! into the heap. Neither has a size of its own; each has what the other
-//! leaves.
+//! function making a frame leaves where it would reach down into the heap:
+//! saying `stack overflow` with status 3 in a program whose calls can go
+//! round, and otherwise with status 2, as a heap with no more room does.
+//! Neither has a size of its own; each has what the other leaves.
 
 #[cfg(test)]
 mod abi_tests;
 mod asm;
+mod calls;
 mod image;
 mod lower;
 #[cfg(test)]

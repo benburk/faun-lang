@@ -24,6 +24,17 @@ const WORD: i32 = 2;
 /// between them with `Y`.
 const MOST_SLOTS: usize = 255;
 
+/// What a program whose calls went too deep says, on standard error, and
+/// the status it ends with: the one after the heap's, two.
+const STACK_OVERFLOW_MESSAGE: &[u8] = b"stack overflow\n";
+const STACK_OVERFLOW_STATUS: u8 = 3;
+const STDERR: u16 = 2;
+
+/// The most calls under way at once where the hardware stack is checked:
+/// a return address for each of 128, and the entry, which the reset routine
+/// may run into rather than call.
+const DEEPEST: u32 = 129;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FrameAction {
     Enter,
@@ -403,18 +414,11 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Result<Code, String> {
                 .map(|body| state.plan(body).expect("accepted frame size"))
         })
         .collect();
+    state.watch_the_stack(heap);
     state.reset(heap, stack);
-    // The entry goes first, so the reset routine runs into it rather than
-    // jumping to it. Everything else follows in the order it was declared.
-    let entry = program.entry();
-    let rest = (0..program.functions().len())
-        .map(FunctionId::at)
-        .filter(|id| id.index() != entry.index());
-    let fallen = stack && !program.comes_back(entry);
-    for id in std::iter::once(entry).chain(rest) {
-        state.function(id, fallen && id.index() == entry.index());
-    }
+    state.functions(stack && !program.comes_back(program.entry()));
     state.emit_pool();
+    state.emit_overflow_message();
 
     let pushes = state.asm.pushes();
     Ok(Code {
@@ -457,6 +461,23 @@ struct Lowering<'a> {
     ifs: Vec<(Vec<ValueId>, Option<super::asm::Label>)>,
     /// Path-local upper bounds established by enclosing comparisons.
     bounds: Vec<(ValueId, u64)>,
+    /// For each function in a call cycle, how much of the hardware stack it
+    /// checks is left on the way in.
+    reserves: Vec<Option<u16>>,
+    /// Where a program whose calls can go round says its stack overflowed.
+    overflow: Option<Overflow>,
+    /// Whether a function making a frame checks that it stays clear of the
+    /// heap, or of the image where nothing grows a heap.
+    measured: bool,
+}
+
+/// The routine saying the stack overflowed, and what it hands the
+/// simulator's `write`: the block of its arguments, and the message.
+#[derive(Clone, Copy)]
+struct Overflow {
+    routine: super::asm::Label,
+    arguments: super::asm::Label,
+    message: super::asm::Label,
 }
 
 impl<'a> Lowering<'a> {
@@ -478,6 +499,9 @@ impl<'a> Lowering<'a> {
             loops: Vec::new(),
             ifs: Vec::new(),
             bounds: Vec::new(),
+            reserves: Vec::new(),
+            overflow: None,
+            measured: false,
         }
     }
 }
@@ -502,10 +526,13 @@ impl Lowering<'_> {
         if grows || self.plans.iter().flatten().any(|plan| plan.frame > 0) {
             self.set_pair(FP, FRAMES_TOP);
         }
-        if grows {
+        // Where frames are measured and nothing grows, the heap stays where
+        // it starts, at the end of the image, and is what they are measured
+        // against.
+        if self.measured {
             self.set_pair(HEAP, heap);
         }
-        self.take_arguments(heap, grows);
+        self.take_arguments(heap, self.measured);
 
         // An entry that leaves through the exit hook itself never comes back
         // here, so there is nothing to write for after it: no result to read
@@ -634,6 +661,45 @@ impl Lowering<'_> {
         }
     }
 
+    /// Every function. The entry goes first, so the reset routine runs into
+    /// it rather than jumping to it, where `fallen`; everything else follows
+    /// in the order it was declared. The stack overflowing is said just
+    /// before the first function after the entry that checks for it, so
+    /// that one reaches it with a short branch back; where only the entry
+    /// checks, it is said after the rest.
+    fn functions(&mut self, fallen: bool) {
+        let entry = self.program.entry();
+        let rest = (0..self.program.functions().len())
+            .map(FunctionId::at)
+            .filter(|id| id.index() != entry.index());
+        let mut said = self.overflow.is_none();
+        for id in std::iter::once(entry).chain(rest) {
+            if !said && id != entry && self.reserves[id.index()].is_some() {
+                self.say_stack_overflow();
+                said = true;
+            }
+            self.function(id, fallen && id.index() == entry.index());
+        }
+        if !said {
+            self.say_stack_overflow();
+        }
+    }
+
+    /// Which functions check the hardware stack, somewhere to say it ran
+    /// out where any does, and whether frames are measured as they are
+    /// made.
+    fn watch_the_stack(&mut self, heap: u16) {
+        self.reserves = super::calls::reserves(self.program);
+        if self.reserves.iter().any(Option::is_some) {
+            self.overflow = Some(Overflow {
+                routine: self.asm.label(),
+                arguments: self.asm.label(),
+                message: self.asm.label(),
+            });
+        }
+        self.measured = self.frames_measured(heap);
+    }
+
     /// `fallen` says the reset routine ran into this one rather than
     /// calling it, which is the one way a body is reached from a place that
     /// knows what it left in the accumulator.
@@ -656,11 +722,14 @@ impl Lowering<'_> {
             .clone();
         self.frame = plan.frame;
         self.homes = plan.homes;
+        if let Some(reserve) = self.reserves[id.index()] {
+            self.check_stack(reserve);
+        }
         let frame = self.frame;
         if frame > 0 {
             self.adjust_frame(frame, FrameAction::Enter);
             self.reach_frame();
-            if self.program.reaches("grow") {
+            if self.measured {
                 self.clear_of_heap();
             }
         }
@@ -701,19 +770,98 @@ impl Lowering<'_> {
         self.asm.sta_zp(FP + 1);
     }
 
-    /// Leave with status two, as a heap with no more room does, where the
-    /// frame just made reaches down into the heap.
+    /// Where the frame just made reaches down into the heap, say the stack
+    /// overflowed, in a program whose calls can go round; in one whose calls
+    /// cannot, how deep the frames go is fixed and the heap took the room,
+    /// so leave with status two, as a heap with no more room does.
     fn clear_of_heap(&mut self) {
-        let clear = self.asm.label();
         self.asm.sec();
         self.asm.lda_zp(FP);
         self.asm.sbc_zp(HEAP);
         self.asm.lda_zp(FP + 1);
         self.asm.sbc_zp(HEAP + 1);
+        if let Some(overflow) = self.overflow {
+            self.asm.branch(Cc::NoCarry, overflow.routine);
+            return;
+        }
+        let clear = self.asm.label();
         self.asm.branch(Cc::Carry, clear);
         self.asm.lda_imm(2);
         self.asm.jmp_abs(HOOK_EXIT);
         self.asm.bind(clear);
+    }
+
+    /// Whether frames have to be measured against the heap as they are made.
+    /// They do where a heap grows toward them. Where none does, the image is
+    /// all that lies below them, and in a program whose calls can go round,
+    /// the hardware stack's check bounds how many frames there are at once:
+    /// they are measured only where that many of the largest could reach
+    /// the image.
+    fn frames_measured(&self, heap: u16) -> bool {
+        if self.program.reaches("grow") {
+            return true;
+        }
+        if self.overflow.is_none() {
+            return false;
+        }
+        let largest = self
+            .plans
+            .iter()
+            .flatten()
+            .map(|plan| plan.frame)
+            .max()
+            .unwrap_or(0);
+        let deepest = DEEPEST * u32::from(largest);
+        let reached = u32::from(heap) + deepest;
+        reached > u32::from(FRAMES_TOP)
+    }
+
+    /// Say the stack overflowed where fewer than `reserve` bytes of the
+    /// hardware stack are left: what this body may push before anything it
+    /// calls checks again. `S` is the next byte a push writes, so `S + 1`
+    /// are left. Six cycles where the branch reaches, and five bytes.
+    fn check_stack(&mut self, reserve: u16) {
+        let overflow = self
+            .overflow
+            .expect("a function that checks has somewhere to say so");
+        let least = reserve.saturating_sub(1);
+        let least = u8::try_from(least).unwrap_or(u8::MAX);
+        self.asm.tsx();
+        self.asm.cpx_imm(least);
+        self.asm.branch(Cc::NoCarry, overflow.routine);
+    }
+
+    /// Write `stack overflow` on standard error and leave with status 3.
+    /// Reached by a branch from wherever the stack ran out, and nothing
+    /// runs into it. The simulator's `write` reads where the message is
+    /// and the descriptor through `CSP`, and its length in `A` and `X`. Its
+    /// `jsr` may push past the stack's end, which only overwrites return
+    /// addresses nothing goes back to.
+    fn say_stack_overflow(&mut self) {
+        let overflow = self.overflow.expect("a routine to write");
+        self.asm.bind_reentered(overflow.routine);
+        self.asm.lda_imm_half(overflow.arguments, Half::Low);
+        self.asm.sta_zp(CSP);
+        self.asm.lda_imm_half(overflow.arguments, Half::High);
+        self.asm.sta_zp(CSP + 1);
+        let length = u8::try_from(STACK_OVERFLOW_MESSAGE.len()).expect("a short message");
+        self.asm.lda_imm(length);
+        self.asm.ldx_imm(0);
+        self.jsr_hook(HOOK_WRITE);
+        self.asm.lda_imm(STACK_OVERFLOW_STATUS);
+        self.asm.jmp_abs(HOOK_EXIT);
+    }
+
+    /// What `write` is handed to say the stack overflowed, after the code.
+    fn emit_overflow_message(&mut self) {
+        let Some(overflow) = self.overflow else {
+            return;
+        };
+        self.asm.bind(overflow.arguments);
+        self.asm.address_word(overflow.message);
+        self.asm.word(STDERR);
+        self.asm.bind(overflow.message);
+        self.asm.bytes(STACK_OVERFLOW_MESSAGE);
     }
 
     /// Point `FQ` 256 bytes past `FP`, where a frame that large has slots

@@ -72,6 +72,7 @@ pub(crate) enum Mnemonic {
     Ora,
     Eor,
     Txs,
+    Tsx,
     Clc,
     Sec,
     Adc,
@@ -330,6 +331,10 @@ enum Inst {
     Half { to: Label, half: Half },
     /// A literal word, for data the target lays down itself.
     Word(u16),
+    /// Where a label stands, as a literal word.
+    Address(Label),
+    /// A literal byte.
+    Byte(u8),
 }
 
 impl Inst {
@@ -355,7 +360,8 @@ impl Inst {
             Self::Absolute { .. } => 3,
             // A branch that reaches, an immediate, and a word: two either
             // way.
-            Self::Branch { .. } | Self::Half { .. } | Self::Word(_) => 2,
+            Self::Branch { .. } | Self::Half { .. } | Self::Word(_) | Self::Address(_) => 2,
+            Self::Byte(_) => 1,
         }
     }
 }
@@ -401,6 +407,7 @@ const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
         (M::Eor, O::Imm(_)) => 0x49,
         (M::Eor, O::Zero(_)) => 0x45,
         (M::Txs, O::Implied) => 0x9A,
+        (M::Tsx, O::Implied) => 0xBA,
         (M::Clc, O::Implied) => 0x18,
         (M::Sec, O::Implied) => 0x38,
         (M::Adc, O::Zero(_)) => 0x65,
@@ -457,7 +464,11 @@ impl Assembler {
     pub(crate) fn pushes(&self) -> bool {
         self.code.insts().iter().any(|inst| match *inst {
             Inst::Op { mnemonic, .. } | Inst::Absolute { mnemonic, .. } => mnemonic.pushes(),
-            Inst::Branch { .. } | Inst::Half { .. } | Inst::Word(_) => false,
+            Inst::Branch { .. }
+            | Inst::Half { .. }
+            | Inst::Word(_)
+            | Inst::Address(_)
+            | Inst::Byte(_) => false,
         })
     }
 
@@ -606,7 +617,7 @@ impl Assembler {
         match (mnemonic, operand) {
             (M::Lda | M::Adc | M::Sbc | M::And | M::Ora | M::Eor, _)
             | (M::Asl | M::Rol | M::Lsr | M::Ror, Operand::Implied) => Some(Reg::A),
-            (M::Ldx | M::Dex | M::Inx, _) => Some(Reg::X),
+            (M::Ldx | M::Dex | M::Inx | M::Tsx, _) => Some(Reg::X),
             (M::Sta | M::Stx | M::Clc | M::Sec | M::Txs | M::Jmp | M::Rts, _) => {
                 self.state.flags.from
             }
@@ -641,6 +652,12 @@ impl Assembler {
                 ..before
             },
             M::Iny => MachineState {
+                flags: before.flags.with_nz(None),
+                ..before
+            },
+            // What the stack pointer is, nothing here follows.
+            M::Tsx => MachineState {
+                x: Register::NOTHING,
                 flags: before.flags.with_nz(None),
                 ..before
             },
@@ -882,6 +899,8 @@ impl Assembler {
                 }
             }
             Inst::Word(held) => bytes.extend_from_slice(&held.to_le_bytes()),
+            Inst::Address(to) => bytes.extend_from_slice(&self.address(at, to).to_le_bytes()),
+            Inst::Byte(held) => bytes.push(held),
             Inst::Absolute { mnemonic, to } => {
                 bytes.push(opcode(mnemonic, Operand::Abs(0)));
                 bytes.extend_from_slice(&self.address(at, to).to_le_bytes());
@@ -1099,6 +1118,20 @@ impl Assembler {
         self.code.push(Inst::Word(value));
     }
 
+    /// Where a label stands, laid down as a word.
+    pub(crate) fn address_word(&mut self, label: Label) {
+        self.state = MachineState::UNKNOWN;
+        self.code.push(Inst::Address(label));
+    }
+
+    /// Literal bytes, for data the target lays down itself.
+    pub(crate) fn bytes(&mut self, values: &[u8]) {
+        self.state = MachineState::UNKNOWN;
+        for &value in values {
+            self.code.push(Inst::Byte(value));
+        }
+    }
+
     pub(crate) fn lda_zp(&mut self, at: u8) {
         self.op(Mnemonic::Lda, Operand::Zero(at));
     }
@@ -1195,6 +1228,10 @@ impl Assembler {
 
     pub(crate) fn txs(&mut self) {
         self.op(Mnemonic::Txs, Operand::Implied);
+    }
+
+    pub(crate) fn tsx(&mut self) {
+        self.op(Mnemonic::Tsx, Operand::Implied);
     }
 
     // Arithmetic and comparison, all through the accumulator.
