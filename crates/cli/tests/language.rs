@@ -1261,6 +1261,44 @@ const RUNNING: &[(&str, &str, u32)] = &[
          )",
         146,
     ),
+    (
+        "`&` and `|` on `Bool` work out their right side only where the left has not decided",
+        "spin : Nat -> Bool
+         spin(n) -> spin(n)
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           yes = n < 100
+           no = !yes
+           a = if yes | spin(0) then 1 else 0
+           b = if no & spin(0) then 0 else 2
+           c = if no & (if n == 0 then spin(n) else spin(n + 1)) then 0 else 4
+           host.exit!(U8.of_nat(a + b + c))
+         )",
+        7,
+    ),
+    (
+        "a generic `&` and `|` is the connective where it is specialized at `Bool`, and its method elsewhere",
+        "spin : Nat -> Bool
+         spin(n) -> spin(n)
+
+         both(a, f) -> a & f(a)
+         either(a, f) -> a | f(a)
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           yes = n < 100
+           a = if either(yes, |_| spin(0)) then 1 else 0
+           b = if both(!yes, |_| spin(0)) then 0 else 2
+           c = both(U8.of_nat(n + 12), |x| x + 6)
+           d = either(U8.of_nat(n + 15), |x| x + 16)
+           host.exit!(U8.of_nat(a + b) + c * 4 + d)
+         )",
+        // 13 & 19 is 1, and 16 | 32 is 48.
+        55,
+    ),
 ];
 
 #[test]

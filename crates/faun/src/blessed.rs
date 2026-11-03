@@ -33,8 +33,10 @@ pub struct PreludeIds {
     pub str_concat: Symbol,
     /// What a string pattern is tested with.
     pub str_equals: Symbol,
-    /// How a clause's tests are joined with its guard. It and `bool_or`
-    /// work out their right side only where the left has not decided.
+    /// The methods `&` and `|` call at `Bool`, where the operator is the
+    /// connective, working out its right side only where the left has not
+    /// decided. A call of either method otherwise spelled is an ordinary
+    /// call.
     pub bool_and: Symbol,
     pub bool_or: Symbol,
     pub u8_constructor: Symbol,

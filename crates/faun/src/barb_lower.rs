@@ -15,7 +15,7 @@ use crate::diagnostic::{Diagnostic, Refusal};
 use crate::first_order::{Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::pattern_compile::{self as p, Decision, Unpack, Value};
-use crate::specialize::{self, FunctionKey, Type};
+use crate::specialize::{self, Connective, FunctionKey, Type};
 use crate::{ModuleId, Symbol};
 
 /// Specialize what `entry`, a monomorphic parameterless function, reaches
@@ -280,6 +280,10 @@ impl<'a> Lowerer<'a> {
                 for field in fields {
                     self.collect_expr(field, answer)?;
                 }
+            }
+            ExprKind::Connective(_, left, right) => {
+                self.collect_expr(left, answer)?;
+                self.collect_expr(right, answer)?;
             }
             ExprKind::Record(fields) => {
                 for (_, field) in fields {
@@ -1147,16 +1151,10 @@ fn emit_expr(
         }
         // `left & right` answers the left where it is `False`, and `left |
         // right` where it is `True`; only otherwise is the right worked out.
-        ExprKind::DirectCall(key, arguments)
-            if key.name == context.prelude.bool_and || key.name == context.prelude.bool_or =>
-        {
-            let [left, right] = arguments.as_slice() else {
-                unreachable!("`and` and `or` take two `Bool`s")
-            };
-            let decided = if key.name == context.prelude.bool_and {
-                context.prelude.bool_false
-            } else {
-                context.prelude.bool_true
+        ExprKind::Connective(connective, left, right) => {
+            let decided = match connective {
+                Connective::And => context.prelude.bool_false,
+                Connective::Or => context.prelude.bool_true,
             };
             let decided = context.constructor_ids[&(decided, left.ty.clone())];
             let left_value = emit_expr(context, builder, left, locals);

@@ -182,3 +182,45 @@ fn a_package_imports_the_root_of_one_it_depends_on() {
     let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert_eq!(tests.expectations.len(), 1);
 }
+
+/// `a & b` and `a | b` on `Bool` are a match on the left, the right side in
+/// the arm where the left has not decided, even where the right has lines
+/// of its own. `a.or(b)` and `Bool.and(a, b)` are calls like any other,
+/// both sides worked out first.
+#[test]
+fn only_the_operators_on_bool_leave_their_right_side_unworked() {
+    let package = Package::new(
+        "connectives",
+        "spin : Nat -> Bool\nspin(n) -> spin(n)\n\n\
+         method : Bool -> Bool\nmethod(a) -> a.or(spin(0))\n\n\
+         named : Bool -> Bool\nnamed(a) -> Bool.and(a, spin(0))\n\n\
+         operator : Bool -> Bool\noperator(a) -> a | spin(0)\n\n\
+         branching : (Bool, Nat) -> Bool\n\
+         branching(a, n) -> a & (if n == 0 then spin(n) else spin(n + 1))\n",
+    );
+    let barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let rendered = barb.render();
+    let body = |name: &str| {
+        let header = format!("\n{name}(");
+        let start = rendered
+            .find(&header)
+            .unwrap_or_else(|| panic!("{rendered}"));
+        let rest = &rendered[start + 1..];
+        let end = rest.find("\n\n").unwrap_or(rest.len());
+        rest[..end].lines().skip(1).collect::<Vec<_>>().join("\n")
+    };
+    assert_eq!(
+        body("method"),
+        "  v1 = 0\n  v2 = spin(v1)\n  Bool.or(v0, v2)"
+    );
+    assert_eq!(
+        body("named"),
+        "  v1 = 0\n  v2 = spin(v1)\n  Bool.and(v0, v2)"
+    );
+    let operator = body("operator");
+    assert!(operator.starts_with("  match v0\n"), "{operator}");
+    assert!(!operator.contains("Bool.or"), "{operator}");
+    let branching = body("branching");
+    assert!(branching.starts_with("  match v0\n"), "{branching}");
+    assert!(!branching.contains("Bool.and"), "{branching}");
+}

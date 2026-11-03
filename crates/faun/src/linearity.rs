@@ -44,7 +44,7 @@ use crate::context::Context;
 use crate::diagnostic::Diagnostic;
 use crate::first_order::{self as d, ExprKind};
 use crate::hir::LocalId;
-use crate::specialize::{FunctionKey, Pattern, Type, surface_type};
+use crate::specialize::{Connective, FunctionKey, Pattern, Type, surface_type};
 use crate::{ModuleId, Symbol, Symbols};
 
 mod shapes;
@@ -179,9 +179,6 @@ struct Facts<'a> {
     /// Which parameter of each routine a target answers for is used up.
     uses_up: Vec<Option<usize>>,
     carries: RefCell<HashMap<Type, bool>>,
-    /// `Bool`'s `&` and `|`, along which a test's names are seen.
-    and: Symbol,
-    or: Symbol,
     /// A list's constructors, which a list pattern is written over.
     list_nil: Symbol,
     list_cons: Symbol,
@@ -228,8 +225,6 @@ impl<'a> Facts<'a> {
             constructors,
             uses_up,
             carries: RefCell::default(),
-            and: prelude.bool_and,
-            or: prelude.bool_or,
             list_nil: prelude.list_nil,
             list_cons: prelude.list_cons,
         }
@@ -1013,6 +1008,13 @@ impl<'f, 'a> Walk<'f, 'a> {
             }
             ExprKind::Widen(receiver) => self.value(receiver),
             ExprKind::DirectCall(callee, arguments) => self.call(expr, callee, arguments),
+            // Worked out for its value, what a test in it binds is seen by
+            // nothing after it: each side only looks.
+            ExprKind::Connective(_, left, right) => {
+                self.lend(left);
+                self.lend(right);
+                Vec::new()
+            }
             // A way the function ends: what is held there is as at any
             // answer, and nothing goes on from it.
             ExprKind::Return(answered) => {
@@ -1409,16 +1411,8 @@ impl<'f, 'a> Walk<'f, 'a> {
     fn condition(&mut self, condition: &d::Expr) -> Outcome {
         match &condition.kind {
             ExprKind::Is(value, rows) => self.test(value, rows),
-            ExprKind::DirectCall(callee, sides)
-                if callee.name == self.facts.and
-                    && let [left, right] = &sides[..] =>
-            {
-                self.both(condition, left, right)
-            }
-            ExprKind::DirectCall(callee, sides)
-                if callee.name == self.facts.or
-                    && let [left, right] = &sides[..] =>
-            {
+            ExprKind::Connective(Connective::And, left, right) => self.both(condition, left, right),
+            ExprKind::Connective(Connective::Or, left, right) => {
                 self.either(condition, left, right)
             }
             _ => {

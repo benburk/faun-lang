@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use num_bigint::BigUint;
 
 use crate::hir::LocalId;
-use crate::specialize::{FunctionKey, Pattern, Type};
+use crate::specialize::{Connective, FunctionKey, Pattern, Type};
 use crate::{ModuleId, Symbol};
 
 /// A specialized program whose values are all data.
@@ -107,6 +107,10 @@ impl Expr {
             | ExprKind::Widen(inner)
             | ExprKind::Try(inner)
             | ExprKind::Return(inner) => visit(inner),
+            ExprKind::Connective(_, left, right) => {
+                visit(left);
+                visit(right);
+            }
             ExprKind::If(condition, yes, no) => {
                 visit(condition);
                 visit(yes);
@@ -196,6 +200,9 @@ pub(crate) enum ExprKind {
     Tuple(Vec<Expr>),
     Project(Box<Expr>, Symbol),
     DirectCall(FunctionKey, Vec<Expr>),
+    /// `left & right` or `left | right` on `Bool`; see
+    /// [`crate::specialize::ExprKind::Connective`].
+    Connective(Connective, Box<Expr>, Box<Expr>),
     /// The value as this expression's wider type; see
     /// [`crate::specialize::ExprKind::Widen`].
     Widen(Box<Expr>),

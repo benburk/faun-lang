@@ -490,6 +490,11 @@ impl<'a> Callbacks<'a> {
                     })
                     .collect::<Result<_, Refusal>>()?,
             ),
+            ExprKind::Connective(connective, left, right) => d::ExprKind::Connective(
+                *connective,
+                Box::new(self.expr(frame, left)?),
+                Box::new(self.expr(frame, right)?),
+            ),
             ExprKind::If(condition, yes, no) => d::ExprKind::If(
                 Box::new(self.expr(frame, condition)?),
                 Box::new(self.expr(frame, yes)?),

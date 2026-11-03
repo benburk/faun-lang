@@ -18,7 +18,7 @@ use crate::declarations::Data;
 use crate::diagnostic::{Diagnostic, Refusal};
 use crate::first_order::{self as d, Expr, ExprKind};
 use crate::hir::LocalId;
-use crate::specialize::{FunctionKey, Instance, Pattern, Signature, Split, Type};
+use crate::specialize::{Connective, FunctionKey, Instance, Pattern, Signature, Split, Type};
 use crate::{ModuleId, Symbol, Symbols};
 
 #[derive(Clone, Debug)]
@@ -126,10 +126,7 @@ fn compiled(
                         .map(|clause| {
                             Ok(Row {
                                 patterns: clause.patterns,
-                                guard: clause
-                                    .guard
-                                    .map(|guard| asked(guard, prelude))
-                                    .unwrap_or_default(),
+                                guard: clause.guard.map(asked).unwrap_or_default(),
                                 body: compiler.tail_body(clause.body, &function.key)?,
                                 locals: HashMap::new(),
                             })
@@ -908,9 +905,7 @@ impl Compiler<'_> {
             for (pattern, guard) in arm.rows {
                 rows.push(Row {
                     patterns: vec![pattern],
-                    guard: guard
-                        .map(|guard| asked(guard, self.prelude))
-                        .unwrap_or_default(),
+                    guard: guard.map(asked).unwrap_or_default(),
                     body: body.clone(),
                     locals: HashMap::new(),
                 });
@@ -1060,19 +1055,18 @@ impl Compiler<'_> {
             if let ExprKind::Is(subject, alternatives) = condition.kind {
                 return self.let_test(first, *subject, alternatives, (rows, subjects), next);
             }
-            if let ExprKind::DirectCall(key, _) = &condition.kind
-                && key.name == self.prelude.bool_or
-                && binds(&condition, self.prelude)
+            if matches!(condition.kind, ExprKind::Connective(Connective::Or, ..))
+                && binds(&condition)
             {
                 // Either side, as an `|` among a clause's patterns is: a row
                 // for each, the left's tried first.
-                let ExprKind::DirectCall(_, sides) = condition.kind else {
+                let ExprKind::Connective(_, left, right) = condition.kind else {
                     unreachable!("matched above")
                 };
                 let mut either = Vec::with_capacity(rows.len() + 1);
-                for side in sides {
+                for side in [*left, *right] {
                     let mut row = first.clone();
-                    row.guard = asked(side, self.prelude)
+                    row.guard = asked(side)
                         .into_iter()
                         .chain(first.guard.iter().cloned())
                         .collect();
@@ -1665,8 +1659,10 @@ impl Compiler<'_> {
 ///
 /// An `if` is bound on its own too, its condition taken out ahead of it and
 /// each branch hoisted into a block of its own, since what a branch works
-/// out is worked out only where it is chosen. `fresh` counts the locals
-/// made so far, across every branch.
+/// out is worked out only where it is chosen. So is `&` or `|` on `Bool`
+/// whose right side has lines to take out: an `if` on its left, the right
+/// side a branch. `fresh` counts the locals made so far, across every
+/// branch.
 fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
     let mut bindings = Vec::with_capacity(body.bindings.len());
     for binding in body.bindings {
@@ -1973,15 +1969,12 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
             );
             return branched(condition, yes, no, prelude);
         }
-        ExprKind::DirectCall(key, arguments)
-            if (key.name == prelude.bool_and || key.name == prelude.bool_or)
-                && arguments.iter().any(|a| binds(a, prelude)) =>
-        {
+        kind @ ExprKind::Connective(..) if binds_within(&kind) => {
             let condition = Expr {
                 module,
                 span,
                 ty,
-                kind: ExprKind::DirectCall(key, arguments),
+                kind,
             };
             let (yes, no) = (
                 boolean(&condition, true, prelude),
@@ -2011,6 +2004,9 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
         ExprKind::Tuple(members) => ExprKind::Tuple(each(members)),
         ExprKind::Project(receiver, field) => ExprKind::Project(one(receiver), field),
         ExprKind::DirectCall(key, arguments) => ExprKind::DirectCall(key, each(arguments)),
+        ExprKind::Connective(connective, left, right) => {
+            ExprKind::Connective(connective, one(left), one(right))
+        }
         ExprKind::Widen(value) => ExprKind::Widen(one(value)),
         ExprKind::Try(value) => ExprKind::Try(one(value)),
         ExprKind::Return(value) => ExprKind::Return(one(value)),
@@ -2073,7 +2069,7 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
         ty: ty.clone(),
         kind,
     };
-    if !binds(&condition, prelude) {
+    if !binds(&condition) {
         let condition = tested(condition, prelude);
         return header(ExprKind::If(
             Box::new(condition),
@@ -2082,8 +2078,8 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
         ));
     }
     let copied = match &condition.kind {
-        ExprKind::DirectCall(key, _) if key.name == prelude.bool_and => Some(&no),
-        ExprKind::DirectCall(key, _) if key.name == prelude.bool_or => Some(&yes),
+        ExprKind::Connective(Connective::And, ..) => Some(&no),
+        ExprKind::Connective(Connective::Or, ..) => Some(&yes),
         _ => None,
     };
     if copied.is_some_and(branches) {
@@ -2097,15 +2093,13 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
             };
             header(ExprKind::If(Box::new(part), Box::new(yes), Box::new(no)))
         }
-        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_and => {
-            sides.into_iter().rev().fold(yes, |answer, side| {
-                branched(side, answer, no.clone(), prelude)
-            })
+        ExprKind::Connective(Connective::And, left, right) => {
+            let answer = branched(*right, yes, no.clone(), prelude);
+            branched(*left, answer, no, prelude)
         }
-        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_or => {
-            sides.into_iter().rev().fold(no, |otherwise, side| {
-                branched(side, yes.clone(), otherwise, prelude)
-            })
+        ExprKind::Connective(Connective::Or, left, right) => {
+            let otherwise = branched(*right, yes.clone(), no, prelude);
+            branched(*left, yes, otherwise, prelude)
         }
         _ => unreachable!("only a test, `&` and `|` bind"),
     }
@@ -2118,7 +2112,7 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
 /// other. Only the tags are copied along the chain.
 fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
     let (module, span) = (condition.module, condition.span);
-    let bound = bound_by(&condition, prelude);
+    let bound = bound_by(&condition);
     let mut read: Vec<(LocalId, Type)> = Vec::new();
     yes.for_each_within(&mut |expression| {
         if let ExprKind::Local(local) = expression.kind
@@ -2195,7 +2189,7 @@ fn branches(expression: &Expr) -> bool {
 
 /// What a condition's tests bind on every way it holds: past an `&`, what
 /// each part binds; past an `|`, what both sides bind.
-fn bound_by(condition: &Expr, prelude: &PreludeIds) -> HashSet<LocalId> {
+fn bound_by(condition: &Expr) -> HashSet<LocalId> {
     match &condition.kind {
         ExprKind::Is(_, alternatives) => {
             let each = alternatives.iter().map(|(pattern, guard)| {
@@ -2204,18 +2198,19 @@ fn bound_by(condition: &Expr, prelude: &PreludeIds) -> HashSet<LocalId> {
                     bound.insert(local);
                 });
                 if let Some(guard) = guard {
-                    bound.extend(bound_by(guard, prelude));
+                    bound.extend(bound_by(guard));
                 }
                 bound
             });
             intersection(each)
         }
-        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_and => sides
-            .iter()
-            .flat_map(|side| bound_by(side, prelude))
-            .collect(),
-        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_or => {
-            intersection(sides.iter().map(|side| bound_by(side, prelude)))
+        ExprKind::Connective(Connective::And, left, right) => {
+            let mut bound = bound_by(left);
+            bound.extend(bound_by(right));
+            bound
+        }
+        ExprKind::Connective(Connective::Or, left, right) => {
+            intersection([bound_by(left), bound_by(right)].into_iter())
         }
         _ => HashSet::new(),
     }
@@ -2228,10 +2223,10 @@ fn intersection(sets: impl Iterator<Item = HashSet<LocalId>>) -> HashSet<LocalId
 
 /// What a guard asks, in turn: the parts of a chain of `&` holding a test,
 /// each asked where those before it held; anything else, asked whole.
-fn asked(guard: Expr, prelude: &PreludeIds) -> Vec<Expr> {
+fn asked(guard: Expr) -> Vec<Expr> {
     let mut parts = Vec::new();
-    if binds(&guard, prelude) {
-        conjuncts(guard, prelude, &mut parts);
+    if binds(&guard) {
+        conjuncts(guard, &mut parts);
     } else {
         parts.push(guard);
     }
@@ -2239,25 +2234,27 @@ fn asked(guard: Expr, prelude: &PreludeIds) -> Vec<Expr> {
 }
 
 /// Whether `expression` is a test, or a chain of `&` and `|` holding one.
-fn binds(expression: &Expr, prelude: &PreludeIds) -> bool {
+fn binds(expression: &Expr) -> bool {
     match &expression.kind {
         ExprKind::Is(..) => true,
-        ExprKind::DirectCall(key, arguments)
-            if key.name == prelude.bool_and || key.name == prelude.bool_or =>
-        {
-            arguments.iter().any(|argument| binds(argument, prelude))
-        }
+        kind => binds_within(kind),
+    }
+}
+
+/// Whether `kind` is a chain of `&` and `|` holding a test.
+fn binds_within(kind: &ExprKind) -> bool {
+    match kind {
+        ExprKind::Connective(_, left, right) => binds(left) || binds(right),
         _ => false,
     }
 }
 
 /// The parts of a chain of `&`, in order.
-fn conjuncts(expression: Expr, prelude: &PreludeIds, parts: &mut Vec<Expr>) {
+fn conjuncts(expression: Expr, parts: &mut Vec<Expr>) {
     match expression.kind {
-        ExprKind::DirectCall(key, arguments) if key.name == prelude.bool_and => {
-            for argument in arguments {
-                conjuncts(argument, prelude, parts);
-            }
+        ExprKind::Connective(Connective::And, left, right) => {
+            conjuncts(*left, parts);
+            conjuncts(*right, parts);
         }
         kind => parts.push(Expr { kind, ..expression }),
     }
@@ -2320,6 +2317,52 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
         ExprKind::Project(receiver, field) => ExprKind::Project(Box::new(lift(*receiver)), field),
         ExprKind::DirectCall(key, arguments) => {
             ExprKind::DirectCall(key, arguments.into_iter().map(&mut lift).collect())
+        }
+        // The right is worked out only where the left has not decided, so
+        // what it would bind on lines of its own goes into a branch: an
+        // `if` on the left, answering the left where it decides.
+        ExprKind::Connective(connective, asked, rest) => {
+            let asked = lift(*asked);
+            let mut within = Vec::new();
+            let rest = lifted(*rest, &mut within, fresh);
+            if within.is_empty() {
+                ExprKind::Connective(connective, Box::new(asked), Box::new(rest))
+            } else {
+                let decided = LocalId(u32::MAX - *fresh);
+                *fresh += 1;
+                let read = Expr {
+                    kind: ExprKind::Local(decided),
+                    ..asked.clone()
+                };
+                bindings.push(d::Binding {
+                    pattern: Pattern::Bind(decided),
+                    value: asked,
+                });
+                let block = |bindings, result: Expr| Expr {
+                    module: result.module,
+                    span: result.span,
+                    ty: result.ty.clone(),
+                    kind: ExprKind::Block(Box::new(d::Body { bindings, result })),
+                };
+                let undecided = block(within, rest);
+                let settled = block(Vec::new(), read.clone());
+                let (yes, no) = match connective {
+                    Connective::And => (undecided, settled),
+                    Connective::Or => (settled, undecided),
+                };
+                let local = LocalId(u32::MAX - *fresh);
+                *fresh += 1;
+                bindings.push(d::Binding {
+                    pattern: Pattern::Bind(local),
+                    value: Expr {
+                        module: expression.module,
+                        span: expression.span,
+                        ty: expression.ty.clone(),
+                        kind: ExprKind::If(Box::new(read), Box::new(yes), Box::new(no)),
+                    },
+                });
+                ExprKind::Local(local)
+            }
         }
         ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(*value))),
         // A branch's answer, which stays where it stands.

@@ -334,6 +334,10 @@ impl Expr {
                 visit(head)?;
                 arguments.iter().try_for_each(visit)
             }
+            ExprKind::Connective(_, left, right) => {
+                visit(left)?;
+                visit(right)
+            }
             ExprKind::If(condition, yes, no) => {
                 visit(condition)?;
                 visit(yes)?;
@@ -432,6 +436,11 @@ pub(crate) enum ExprKind {
     Project(Box<Expr>, Symbol),
     DirectCall(FunctionKey, Vec<Expr>),
     Invoke(Box<Expr>, Vec<Expr>),
+    /// `left & right` or `left | right` on `Bool`: the right worked out
+    /// only where the left has not decided. A call of `Bool.and` or
+    /// `Bool.or` however else it is spelled is a [`ExprKind::DirectCall`],
+    /// both sides worked out first, as for any call.
+    Connective(Connective, Box<Expr>, Box<Expr>),
     /// The source occurrence is stable across specialization and identifies
     /// this lambda independently of any other lambda at its diagnostic span.
     Lambda(h::SiteId, Vec<Pattern>, Box<Expr>),
@@ -459,6 +468,15 @@ pub(crate) enum ExprKind {
     Continue(Vec<Expr>),
     /// `break`; see [`crate::hir::ExprKind::Break`].
     Break(Vec<Expr>),
+}
+
+/// Which of `Bool`'s connectives an [`ExprKind::Connective`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Connective {
+    /// `&`: `False` where the left is, else the right.
+    And,
+    /// `|`: `True` where the left is, else the right.
+    Or,
 }
 
 /// A loop; see [`crate::hir::Loop`].
@@ -897,7 +915,7 @@ impl<'a> Specializer<'a> {
                 self.tested((module, clause.span), pattern, ty, (&mut next, &mut tests))
             })
             .collect::<Result<_, _>>()?;
-        let guard = self.joined(module, clause.span, tests, guard)?;
+        let guard = self.joined(module, clause.span, tests, guard);
         Ok(Clause {
             patterns,
             guard,
@@ -1096,34 +1114,25 @@ impl<'a> Specializer<'a> {
     /// A clause's literal tests and its written guard as one guard, the
     /// tests first.
     fn joined(
-        &mut self,
+        &self,
         module: ModuleId,
         span: crate::ast::Span,
         tests: Vec<Expr>,
         guard: Option<Expr>,
-    ) -> Result<Option<Expr>, Refusal> {
+    ) -> Option<Expr> {
         let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
-        let and = self.method_key(
-            self.prelude.bool_and,
-            &bool_ty,
-            std::slice::from_ref(&bool_ty),
-            &bool_ty,
-        )?;
         let mut conditions = tests.into_iter().chain(guard);
-        let Some(first) = conditions.next() else {
-            return Ok(None);
-        };
-        let mut joined = first;
+        let mut joined = conditions.next()?;
         for condition in conditions {
-            self.request(and.clone());
+            let both = ExprKind::Connective(Connective::And, Box::new(joined), Box::new(condition));
             joined = Expr {
                 module,
                 span,
                 ty: bool_ty.clone(),
-                kind: ExprKind::DirectCall(and.clone(), vec![joined, condition]),
+                kind: both,
             };
         }
-        Ok(Some(joined))
+        Some(joined)
     }
 
     fn body(
@@ -1276,32 +1285,33 @@ impl<'a> Specializer<'a> {
                 ExprKind::Project(Box::new(receiver), *member)
             }
             t::ExprKind::Method(target, arguments) => {
-                let name = match target {
-                    t::Target::Direct(name) => *name,
-                    t::Target::Bound { owner, member, .. } => {
-                        let owner = self.site_type(owner, substitution)?;
-                        self.implementation(&owner, *member)?
-                    }
-                };
+                let name = self.target_name(target, substitution)?;
                 let arguments = arguments
                     .iter()
                     .map(|e| self.expr(module, e, substitution))
                     .collect::<Result<Vec<_>, _>>()?;
-                let key = if let Some((receiver, rest)) = arguments.split_first() {
-                    let types: Vec<_> = rest.iter().map(|arg| arg.ty.clone()).collect();
-                    self.method_key(name, &receiver.ty, &types, &ty)?
+                self.method_call(module, span, &ty, name, arguments)?
+            }
+            // Only once the operator's method is known, here, is it known
+            // to be `Bool`'s: a generic `a & b` is the connective where `a`
+            // is `Bool`, and a call of its method elsewhere.
+            t::ExprKind::Connective(target, left, right) => {
+                let name = self.target_name(target, substitution)?;
+                let left = self.expr(module, left, substitution)?;
+                let right = self.expr(module, right, substitution)?;
+                let connective = if name == self.prelude.bool_and {
+                    Some(Connective::And)
+                } else if name == self.prelude.bool_or {
+                    Some(Connective::Or)
                 } else {
-                    FunctionKey {
-                        name,
-                        signature: Signature {
-                            parameters: Vec::new(),
-                            result: Box::new(ty.clone()),
-                        },
-                        instance: Instance::Written,
-                    }
+                    None
                 };
-                self.request_at(key.clone(), (module, span))?;
-                ExprKind::DirectCall(key, arguments)
+                match connective {
+                    Some(connective) => {
+                        ExprKind::Connective(connective, Box::new(left), Box::new(right))
+                    }
+                    None => self.method_call(module, span, &ty, name, vec![left, right])?,
+                }
             }
             t::ExprKind::Project(receiver, field) => {
                 ExprKind::Project(Box::new(self.expr(module, receiver, substitution)?), *field)
@@ -1323,7 +1333,7 @@ impl<'a> Specializer<'a> {
                     let mut tests = Vec::new();
                     let pattern =
                         self.tested((module, span), &row[0], &value.ty, (&mut next, &mut tests))?;
-                    rows.push((pattern, self.joined(module, span, tests, None)?));
+                    rows.push((pattern, self.joined(module, span, tests, None)));
                 }
                 self.test_locals = next;
                 ExprKind::Is(Box::new(value), rows)
@@ -1347,7 +1357,7 @@ impl<'a> Specializer<'a> {
                             &value.ty,
                             (&mut next, &mut tests),
                         )?;
-                        rows.push((pattern, self.joined(module, span, tests, guard.clone())?));
+                        rows.push((pattern, self.joined(module, span, tests, guard.clone())));
                     }
                     self.test_locals = next;
                     let body = self.expr(module, &arm.body, substitution)?;
@@ -1426,6 +1436,48 @@ impl<'a> Specializer<'a> {
             .find(|(field, _)| *field == name)
             .map(|(_, ty)| ty);
         Ok(field)
+    }
+
+    /// The method `target` calls, as specialized here.
+    fn target_name(
+        &self,
+        target: &t::Target,
+        substitution: &HashMap<TypeVariable, Type>,
+    ) -> Result<Symbol, Refusal> {
+        match target {
+            t::Target::Direct(name) => Ok(*name),
+            t::Target::Bound { owner, member, .. } => {
+                let owner = self.site_type(owner, substitution)?;
+                self.implementation(&owner, *member)
+            }
+        }
+    }
+
+    /// A call of method `name` on `arguments`, the receiver first, answering
+    /// `ty`.
+    fn method_call(
+        &mut self,
+        module: ModuleId,
+        span: crate::ast::Span,
+        ty: &Type,
+        name: Symbol,
+        arguments: Vec<Expr>,
+    ) -> Result<ExprKind, Refusal> {
+        let key = if let Some((receiver, rest)) = arguments.split_first() {
+            let types: Vec<_> = rest.iter().map(|arg| arg.ty.clone()).collect();
+            self.method_key(name, &receiver.ty, &types, ty)?
+        } else {
+            FunctionKey {
+                name,
+                signature: Signature {
+                    parameters: Vec::new(),
+                    result: Box::new(ty.clone()),
+                },
+                instance: Instance::Written,
+            }
+        };
+        self.request_at(key.clone(), (module, span))?;
+        Ok(ExprKind::DirectCall(key, arguments))
     }
 
     /// Which method of `owner` is its `member`.

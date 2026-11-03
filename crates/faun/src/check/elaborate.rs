@@ -382,6 +382,12 @@ impl Elaborator<'_> {
                 h::ExprKind::Unary(_, value) => {
                     t::ExprKind::Method(self.target(site, false), vec![self.expr(*value)])
                 }
+                h::ExprKind::Binary(BinaryOp::And | BinaryOp::Or, left, right) => {
+                    let target = self.target(site, false);
+                    let left = Box::new(self.expr(*left));
+                    let right = Box::new(self.expr(*right));
+                    t::ExprKind::Connective(target, left, right)
+                }
                 h::ExprKind::Binary(operator, left, right) => {
                     let target = self.target(site, false);
                     let arguments = vec![self.expr(*left), self.expr(*right)];

@@ -8,8 +8,8 @@
 //! components are is known only here.
 
 use super::{
-    Body, Clause, Definition, Expr, ExprKind, Function, FunctionKey, Pattern, Specializer, Type,
-    error,
+    Body, Clause, Connective, Definition, Expr, ExprKind, Function, FunctionKey, Pattern,
+    Specializer, Type, error,
 };
 use crate::diagnostic::Refusal;
 use crate::hir as h;
@@ -197,7 +197,8 @@ impl Specializer<'_> {
 
     /// `equals` or `cmp` of two values of one shape: each pair of
     /// components compared by its type's own member, the first deciding
-    /// first, joined by `and` or by `Order.or`.
+    /// first, joined by `&` or by `Order.or`. Past `&` a pair is compared
+    /// only where those before it were equal.
     fn componentwise(
         &mut self,
         member: Symbol,
@@ -216,23 +217,27 @@ impl Specializer<'_> {
             compared.push(self.component(member, at, component, others, answer, sides)?);
         }
         let (join, unit) = if Some(member) == self.prelude.cmp {
-            (self.prelude.order_or, self.prelude.order_eq)
+            (Some(self.prelude.order_or), self.prelude.order_eq)
         } else {
-            (self.prelude.bool_and, self.prelude.bool_true)
+            (None, self.prelude.bool_true)
         };
-        let join = self.method_key(join, answer, std::slice::from_ref(answer), answer)?;
+        let join = join
+            .map(|join| self.method_key(join, answer, std::slice::from_ref(answer), answer))
+            .transpose()?;
         let mut result = expr(at, answer, ExprKind::Construct(unit, Vec::new()));
         if let Some(last) = compared.pop() {
             result = last;
-            self.request(join.clone());
+            if let Some(join) = &join {
+                self.request(join.clone());
+            }
         }
         // From the last position back, so the first decides first.
         while let Some(earlier) = compared.pop() {
-            result = expr(
-                at,
-                answer,
-                ExprKind::DirectCall(join.clone(), vec![earlier, result]),
-            );
+            let joined = match &join {
+                Some(join) => ExprKind::DirectCall(join.clone(), vec![earlier, result]),
+                None => ExprKind::Connective(Connective::And, Box::new(earlier), Box::new(result)),
+            };
+            result = expr(at, answer, joined);
         }
         Ok(clause(vec![shape.pattern(0), shape.pattern(count)], result))
     }

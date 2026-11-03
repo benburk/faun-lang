@@ -132,6 +132,10 @@ impl Expr {
                 visit(head);
                 arguments.iter().for_each(visit);
             }
+            ExprKind::Connective(_, left, right) => {
+                visit(left);
+                visit(right);
+            }
             ExprKind::Lambda(_, inner)
             | ExprKind::Is(inner, _)
             | ExprKind::Project(inner, _)
@@ -205,6 +209,11 @@ pub enum ExprKind {
     Call(Box<Expr>, Vec<Expr>),
     /// Arguments include the receiver, when there is one.
     Method(Target, Vec<Expr>),
+    /// `left & right` or `left | right`: a call of the target, which at
+    /// `Bool` is the connective, the right worked out only where the left
+    /// has not decided. Which it is is known once the target is, where the
+    /// call is specialized.
+    Connective(Target, Box<Expr>, Box<Expr>),
     Project(Box<Expr>, Symbol),
     Widen(Box<Expr>),
     Try(Box<Expr>),
