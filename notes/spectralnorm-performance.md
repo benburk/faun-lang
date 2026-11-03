@@ -62,12 +62,13 @@ entry(i, j) -> (
 )
 ```
 
-Three alternating runs at `n = 1000`, same conditions:
+Three alternating runs at `n = 1000`, same conditions, the exact `of_nat`
+row measured again on 2026-11-03:
 
 | Program                           | Median elapsed |
 | --------------------------------- | -------------: |
 | Faun, `Nat` entry (`9e47e44`)     |         6.31 s |
-| Faun, `Nat` entry, exact `of_nat` |         1.04 s |
+| Faun, `Nat` entry, exact `of_nat` |         0.84 s |
 | Faun, `F64` entry, as now         |       0.0479 s |
 | Scalar C                          |       0.0309 s |
 
@@ -82,14 +83,15 @@ emitted, so a natural of any size would need a new operand kind and a
 software path kept for numbers past a word.
 
 What was left was the `Nat` arithmetic. Single runs at `n = 1000`, each a
-different spelling of the integer version:
+different spelling of the integer version, measured again on 2026-11-03,
+once a `U64`'s arithmetic was worked out in machine words:
 
 | Entry                                           | Elapsed |
 | ----------------------------------------------- | ------: |
-| `Nat`, as above                                 |  1.04 s |
-| `Nat`, guarded by `i < 2³⁰ & j < 2³⁰`, else NaN |  1.19 s |
-| `U64` indices and arithmetic                    |  2.39 s |
-| `F64` indices, the row converted once per entry |  0.27 s |
+| `Nat`, as above                                 |  0.84 s |
+| `Nat`, guarded by `i < 2³⁰ & j < 2³⁰`, else NaN |  1.00 s |
+| `U64` indices and arithmetic                    |  0.11 s |
+| `F64` indices, the row converted once per entry |  0.15 s |
 
 The machine IR says why:
 
@@ -98,10 +100,11 @@ The machine IR says why:
   which nothing ties to the list's length, so it is a `natural`, and every
   sum, product and quotient of it checks for an immediate.
 - A guard narrows nothing: inside `j < 2³⁰` the arithmetic is still
-  `natural`. So is the fast path of `of_nat` itself, whose `n + 0x4330…` is
-  a `natural` add followed by a call to `wrap64` for every entry.
-- `U64.mul` is `(a * b) % 2⁶⁴`, whose product is a `natural` before the
-  remainder: wrapping multiplication is not one instruction yet.
+  `natural`. The fast path of `of_nat` works out its `n + 0x4330…` in
+  words, but passes it to `wrap64` as a `natural`, a call for every entry.
+- `U64.mul` is `(a * b) % 2⁶⁴`, which is one `imul`: the `U64` entry's sum,
+  product and halving are word instructions, and only `F64.of_nat` is a
+  call.
 
 ## Next experiments
 
@@ -124,8 +127,9 @@ For integer programs like the first version, which are common:
 2. **Bound fold counters.** A counter starting at a constant and stepped by
    one per element of a walk is below the start plus the list's length,
    which makes it a word as the row is.
-3. **Recognize wrapping multiplication.** `(a * b) % 2⁶⁴` of two words as
-   one `imul`, as the words' `and`, `or` and `xor` are recognized.
+3. **Recognize wrapping multiplication.** Done: `(a * b) % 2⁶⁴` of two
+   words is one `imul`, as the words' `and`, `or` and `xor` are recognized,
+   and their sums and differences one instruction each.
 
 ## Reproduce
 
