@@ -62,11 +62,16 @@ odd(n) -> n != 0 & even(n - 1)
 ```
 
 At nought `0 - 1` is `0`, so working out the right side would go round
-forever. The compiler finds `Bool.and` and `Bool.or` by name and lowers
-them to a match on the left, a special case no other function has
-([computation](computation.md)). In a total language `and` would be an
-ordinary function, and skipping its right side an optimization nobody
-could see. The same goes for `select` and `Order.or`.
+forever. So Faun promises it: on `Bool`, `&` and `|` work out their right
+side only where the left has not decided
+([operators](forms/operators.md)).
+
+Totality would not have made `&` an ordinary call, only made most of the
+promise invisible. A condition's `&` carries the names an `is` binds to its
+right, `r is Ok(v) & v < 100`, and `v` exists only where the left held, so
+that right side is worked out only there in any language. What totality
+would remove is the need to say so where nothing is bound, and the same
+for `select` and `Order.or`, which stay ordinary calls.
 
 ### Work may move, not only be skipped
 
@@ -218,8 +223,9 @@ change a program that was correct.
   conclude that anything stops, so nothing is derived from a loop that must
   have ended, unlike C++'s forward-progress rule.
 - **Two connectives choose.** `&` and `|` on `Bool` work out their right
-  side only where the left does not decide. Whether that is promised, and
-  how it is described, is open ([computation](computation.md)).
+  side only where the left does not decide, and a program may rely on it.
+  The operators choose; the methods `and` and `or` are ordinary calls
+  ([operators](forms/operators.md)).
 - **Bounded compile-time work.** Constant folding runs within a budget.
 - **Kept refusals.** Exhaustive matching stays, for its own reasons
   ([pattern matching](forms/pattern-matching.md)), and so does refusing a

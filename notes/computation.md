@@ -104,20 +104,9 @@ summed(xs) -> (
 
 ## `&` and `|`
 
-`&` and `|` on `Bool` are calls of ordinary definitions in `bool.fn`:
-
-```ruby
-and : (Bool, Bool) -> Bool
-and(True, True) -> True
-and(_, _) -> False
-```
-
-The grammar reads them as infix operators like any other. The checker
-treats their right side as possibly not worked out: `?`, an effect, and a
-binding of the body's names are each refused there.
-
-Today the compiler works out the right side only where the left has not
-decided. Programs rely on it: this parity check stops only because `|`
+On `Bool`, `&` and `|` are the connectives that conditions are joined
+with, and work out their right side only where the left has not decided.
+A program may rely on that: this parity check stops only because `|`
 skips `odd(n - 1)` at nought, since `0 - 1` is `0` for a `Nat`.
 
 ```ruby
@@ -128,10 +117,15 @@ odd : Nat -> Bool
 odd(n) -> n != 0 & even(n - 1)
 ```
 
-The standard README promises this. The termination proposal says the
-opposite: the right side may be left out where the left decides, a program
-must not rely on it either way, and no operator becomes control flow. The
-two are not yet reconciled.
+The connective is the operator, not the function. `a.or(b)` and
+`Bool.or(a, b)` are ordinary calls of the definitions in `bool.fn`, and
+work out both arguments first, as every call does. On any other type, `&`
+and `|` are ordinary calls of the type's `and` and `or`.
+
+The right side of a connective may be skipped, so `?`, an effect, and a
+binding of the body's names are each refused there, and names a test on
+the left binds are seen on the right only because it runs only where the
+test held.
 
 ## Rationale
 
@@ -215,19 +209,21 @@ trade. Exhaustive matching stays, for its own reason: a pure function
 answers for every input it can be given
 ([pattern matching](forms/pattern-matching.md)).
 
-### Why are `&` and `|` not control flow in the grammar?
+### Why are `&` and `|` on `Bool` a condition form, not calls?
 
-They are methods, as every operator is: `&` is `and`, logical on `Bool`
-and bitwise on the words, and a type gives it meaning by defining the
-method ([operators](forms/operators.md)). Making them control flow in the
-grammar would give two operators an evaluation rule no other call has. The
-forms that choose what runs are `if`, arms and leaving lines.
+Because a condition needs one. In `r is Ok(v) & v < 100` the right side
+reads a `v` that exists only where the left held, so it can be worked out
+only there, in any language, total or not. Once names flow along `&`, it
+chooses what runs, as `if`, arms and leaving lines do. Promising the
+choice where nothing is bound too, as in `even` above, costs nothing more.
 
-Because `?`, effects and bindings are refused on the right side, that side
-is pure and cannot leave. Whether it is worked out changes only how long
-the program takes, and whether a call there that never comes back hangs
-it. That makes short-circuiting an evaluation question rather than a
-grammar one, which is where the two documents above disagree.
+Only the operator chooses. A method call works out its arguments before it
+is made, with no exception, so the rule for a call stays one rule, and the
+special case is visibly syntax. Making `&` strict instead would mean
+giving up names flowing along it, and nesting an `if` for each test, or
+making `&` strict only where its left binds nothing, which is a worse
+special case. The [totality](totality.md) note weighs this against a
+language where the question could not be observed.
 
 ## Related
 

@@ -280,3 +280,18 @@ One limitation remains. Range analysis reads a term nothing ever answers as
 able to hold anything, so a value that never exists, handed to a host call
 that must be proven to fit a word, is refused: `host.exit!(spin(3))` with
 `spin` never coming back. `host.println!(spin(3).to_str())` builds and hangs.
+
+**2026-11-03.** "`&` and `|` stay ordinary definitions" did not hold. When
+`if` was built, on 2026-10-04, `&` and `|` on `Bool` began working out
+their right side only where the left had not decided, and the standard
+README promised it, but this proposal was left saying a program must not
+rely on it. Programs do: `even(n) -> n == 0 | odd(n - 1)` stops only
+because `odd(n - 1)` is skipped at nought, and `r is Ok(v) & v < 100` reads
+a `v` that exists only where the left held.
+
+So it is promised, and belongs to the operators. On `Bool`, `&` and `|` are
+the connectives conditions are joined with, and work out their right side
+only where the left has not decided. `a.and(b)`, `a.or(b)` and
+`Bool.and(a, b)` are ordinary calls, which work out both arguments first,
+as every call does; until now the compiler found the two definitions by
+name, so every spelling skipped. No operator on another type chooses.

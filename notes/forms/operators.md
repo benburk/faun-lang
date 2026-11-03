@@ -9,7 +9,8 @@ precedence. The members behind `==` and `<` are owned by
 ## Operators are methods
 
 Every operator is a method of its left operand's type, found as a dot call
-is:
+is, except that on `Bool`, `&` and `|` also choose whether their right side
+runs (below):
 
 | Written              | Calls                        |
 | -------------------- | ---------------------------- |
@@ -101,9 +102,10 @@ odd(n) -> n != 0 & !odd(n - 1)
 ```
 
 stops at nought, and `1 == 1 | spin(0)` answers `True` even where `spin`
-never comes back. The method call `a.or(b)` on `Bool` is the same call and
-waits too. The compiler makes each a match on the left side, with the right
-side only in the arm that needs it.
+never comes back. The compiler makes the operator a match on the left
+side, with the right side only in the arm that needs it. The method call
+`a.or(b)` is not the operator: it is an ordinary call, and works out both
+arguments first, as every call does.
 
 Three rules follow from the right side perhaps not running. `?` on the
 right of `&` or `|` is refused, since it would leave from a side that may

@@ -480,7 +480,8 @@ branch uses up the other uses up too, unless that one leaves.
 
 On `Bool`, `&` and `|` likewise work out their right side only where the
 left has not decided: `n == 0 | odd(n - 1)` stops at nought. That is
-promised. For any other type, an operator's right side is worked out where
+promised, and belongs to the operators: `a.or(b)` and `Bool.or(a, b)` are
+ordinary calls, working out both before `or` is asked. For any other type, an operator's right side is worked out where
 its definition reads it, which the optimizer arranges where it can and does
 not promise: `Order.or` reads its second order only on a tie, so in
 `a.cmp(b) | slow(x).cmp(slow(y))` the slow comparison runs only where the
