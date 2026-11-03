@@ -13,6 +13,13 @@ Total means every call answers. It does not mean every call answers soon. A
 loop counting to 2^64 is total. So totality is a promise about meaning,
 not about time or memory.
 
+Safety-critical rules ask for more. JPL's "Power of Ten" rules for flight
+software (Holzmann, 2006) forbid recursion, direct or indirect, and require
+every loop to have a fixed upper bound a tool can check; MISRA C forbids
+recursion too. What they want is a bound on time and stack, and they get it
+by restricting forms and writing bounds out, which is fuel everywhere.
+Totality alone would not satisfy them.
+
 There are four ways a language can make the promise:
 
 - **By construction.** Recursion is only through a fixed scheme, such as a
@@ -109,7 +116,7 @@ lengths, never run user code, so they do not need totality.
 
 ## What totality makes hard
 
-### Programs that stop for reasons no analysis sees
+### Programs that stop for reasons a size analysis cannot see
 
 When the check was revived as an experiment in October, on Faun's code as
 written, and fixed until everything it could prove was proved, what was
@@ -125,7 +132,25 @@ invariant of the data, or on what callers pass:
 | the float formatter's `widen`       | callers never start it at nought  |
 | `mine` (Advent of Code 2015, day 4) | an answer exists for that input   |
 
-Dijkstra's algorithm, a worklist over a graph, is the classic case.
+These fall into three kinds, and only the first looks within reach of an
+analysis that needs nothing written:
+
+- **Worklists.** A graph walk, Dijkstra's algorithm among them, stops
+  because each round either visits a node not seen before or takes an item
+  off the worklist, and a graph has finitely many nodes. The textbook proof
+  is a pair compared in order: the number of nodes not yet seen, then the
+  worklist's length. No argument's size shows it; a set's does. An
+  analysis that knew a `seen` set only grows, never past the number of
+  nodes, and grows where an absent key is put in it, could build the pair
+  itself. Faun already recognizes facts of this kind about lists, such as
+  what `put` and `append` do to a length. This is unexplored.
+- **Invariants of the data.** Union-find's `root` stops because parents
+  point to smaller nodes, which the code keeps true but no analysis of the
+  definition can see. It needs a proof, or a type that keeps the
+  invariant.
+- **Searches.** `mine` stops because an answer exists for its input. No
+  analysis can know that; a bound is the honest form.
+
 Interpreters for a language that can loop, and servers, must not stop at
 all; Ori's recourse was to put the loop in the runtime, outside the
 language, with total handlers.
@@ -249,21 +274,42 @@ be told wrong. And it adds a second kind of purity for a reader to track.
 The termination proposal rejected the same idea as "keep the analysis as a
 fact, not a refusal."
 
-### Why not assume progress, as C++ does?
+### Why not assume every call comes back, as C++ does?
 
+It would give the optimizer everything totality gives it, with no checker.
 C++ makes a side-effect-free loop that never ends undefined behaviour, and
 LLVM's `mustprogress` lets the optimizer assume such loops end. From the
 assumption it derives facts about the code after them, and a false
 assumption makes anything possible: the termination proposal shows clang
-falling out of an endless `main` into the next function. Faun's rule only
-permits leaving work out, so a looping bug is a hang, never a miscompile.
+falling out of an endless `main` into the next function.
+
+Faun has no undefined behaviour anywhere: no operation fails, and every
+one answers. Assuming termination would add the one exception, where a
+looping bug could skip a check and run an effect it should not have.
+Faun's rule is the safe half of the assumption: it permits leaving work
+out, and never concluding that anything stops, so a looping bug is a hang,
+never a miscompile.
+
+### Why not use what obviously stops?
+
+Most of what speculation wants is small: straight-line arithmetic with no
+call that can come round again, and a `for` over a list, which stops since
+the list is finite. Both stop with nothing to prove. A fact the compiler
+reads off such code, as LLVM deduces `willreturn` for straight-line code
+and counted loops, would let the optimizer work out both branches of a
+cheap `if`, or hoist a call out of a branch, with no whole-program
+analysis, no refusals and no cost to checking. It would not give pure code
+one meaning, so it would not remove the special case in `&` and `|`. This
+is unexplored.
 
 ### What would change the decision?
 
-- **An analysis that needs nothing written for real code.** The October
-  experiment suggests the remaining cases are worklists, data invariants
-  and searches, which no size analysis reaches. Closing them would take
-  measures, and so annotations.
+- **An analysis that needs nothing written for most real code, and is
+  fast.** The October experiment left worklists, invariants of the data
+  and searches. If a recognized measure for worklists proved the graph
+  library in a few hundred lines and a few milliseconds, requiring totality
+  would ask for a bound only where one is honest: searches, and invariants
+  a type does not keep.
 - **Optimizations that only totality allows.** If speculation, parallel
   evaluation or folding without a budget turn out to matter in Faun's
   benchmarks, the semantic case grows.
