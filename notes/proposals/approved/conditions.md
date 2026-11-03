@@ -14,7 +14,7 @@
 ## Summary
 
 One operator and one line form, as the
-[pattern matching survey](../../pattern-matching.md) decided.
+[pattern matching survey](../../forms/pattern-matching-domain.md) decided.
 
 - **`value is pattern`** is a `Bool` that binds the pattern's names where
   it holds: along the rest of an `&` chain, into an `if`'s `then` branch, a
@@ -472,7 +472,7 @@ The survey compares these as whole designs.
 ## Origin
 
 Discussion of the [branching](../superseded/branching.md) draft's further steps
-(2026-10-03), then the [pattern matching survey](../../pattern-matching.md)
+(2026-10-03), then the [pattern matching survey](../../forms/pattern-matching-domain.md)
 (2026-10-04), which compared five designs and took two ideas from the
 ultimate and penultimate conditional syntaxes. On 2026-10-07 the `expect`
 keyword left the line form, and assignment replaced no-rebinding and the

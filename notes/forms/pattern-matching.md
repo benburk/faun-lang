@@ -4,7 +4,7 @@ This note owns taking values apart: the patterns themselves, where they
 stand, the `is` test and its arms, the leaving lines that go with them, what
 the compiler checks a group of clauses or arms to cover, and how a name in a
 pattern binds. The long exploration that led here is
-[pattern matching](../pattern-matching.md); the decided designs are the
+[pattern matching](pattern-matching-domain.md); the decided designs are the
 [conditions](../proposals/approved/conditions.md),
 [blocks](../proposals/approved/blocks.md) and
 [loops](../proposals/approved/loops.md) proposals.
@@ -287,7 +287,7 @@ binding is a [lint](../lints.md), not yet built. Values have no identity, so
 
 - [Conditions](../proposals/approved/conditions.md): the decided design for
   `is`, arms, leaving lines and binding again, with its errata
-- [Pattern matching, the domain](../pattern-matching.md): the exploration,
+- [Pattern matching, the domain](pattern-matching-domain.md): the exploration,
   other languages' spellings, and the designs weighed
 - [Loops](../proposals/approved/loops.md): `for`, `while`, and names carried
   across rounds

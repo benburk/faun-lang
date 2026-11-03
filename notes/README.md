@@ -40,7 +40,7 @@ not needed.
 
 ### `forms/`: how programs are written
 
-- [Syntax](syntax.md): goals of the grammar, and commas
+- [Syntax](forms/syntax.md): goals of the grammar, and commas
 - [Pattern matching](forms/pattern-matching.md): clauses, `is`, arms,
   leaving lines and coverage
 - [Methods](forms/methods.md): type blocks, derived members and visibility
@@ -54,7 +54,7 @@ not needed.
 
 - [Architecture](machine/architecture.md): the frontend, Barb, the machine
   IR and the three targets
-- [Barb](barb.md): the first-order core's shape
+- [Barb](machine/barb.md): the first-order core's shape
 - [Memory](machine/memory.md): reference counting and in-place reuse
 
 ### Decisions and explorations
@@ -62,7 +62,7 @@ not needed.
 - [Proposals](proposals/README.md): every change to the language, by status.
   An approved proposal records why a decision was made when it was made.
   The concept note above owns what holds now.
-- [Pattern matching, the domain](pattern-matching.md): the exploration
+- [Pattern matching, the domain](forms/pattern-matching-domain.md): the exploration
   behind `is`, arms, leaving lines and loops
 - [Host effects](host-effects.md), the
   [effects brainstorm](effects/README.md) and its

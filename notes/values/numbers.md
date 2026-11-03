@@ -85,7 +85,7 @@ every `a` and `b` of every type, zero included.
 ## How a `Nat` runs
 
 The clauses specify the operations; they are not how they run. Barb, the
-compiler's optimizing tier ([Barb](../barb.md)), recognizes a definition by
+compiler's optimizing tier ([Barb](../machine/barb.md)), recognizes a definition by
 the shape of its equations, checked by induction, and answers a call of it
 as the one operation it is: addition, monus, multiplication, division,
 remainder, comparison, power, and the bitwise walks. It never reads a name.

@@ -3,9 +3,9 @@
 An exploration, not a proposal (2026-10-04). What taking values apart has to
 do, what Faun does today, how other languages spell each part, and a few
 whole designs compared on the same programs. The proposals that come out of
-it are [conditions](proposals/approved/conditions.md),
-[branching](proposals/superseded/branching.md) and
-[loops](proposals/approved/loops.md).
+it are [conditions](../proposals/approved/conditions.md),
+[branching](../proposals/superseded/branching.md) and
+[loops](../proposals/approved/loops.md).
 
 ## Decided
 
@@ -32,7 +32,7 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   clauses by default, arms where the other parameters would repeat on every
   clause. Revised 2026-10-16: an arm's value follows `then`, as an `if`'s
   does, and a leave may stand in its place, `P return x`; see the
-  [conditions](proposals/approved/conditions.md) errata.
+  [conditions](../proposals/approved/conditions.md) errata.
 - **Many ways on a value** are `is` with arms, `x is ( P then … )`, with no
   `match` or `when` keyword. Both fresh designs used `match`; the brief did
   not offer Finch's idea, so that says nothing against it.
@@ -74,7 +74,7 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   `x is 3` written `x == 3`; a two-arm `is` ending in `_` written as an
   `if`; an `else` line before a block's last line written as a ternary; a
   many-way `is` on a bare parameter written as clauses. Gathered in
-  [lints](lints.md).
+  [lints](../lints.md).
 - **Alternatives after `is` are parenthesized,** `x is (A(v) | B(v))`,
   since `|` is also the `Bool` or.
 - **Clauses where the body is the dispatch;** `is` where a test is one step

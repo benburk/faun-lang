@@ -25,4 +25,4 @@
   `add : (Nat, Nat) -> Nat`, and `fib : Nat -> Nat` for one.
 - A tuple has at least two members: `(a)` groups, and `(a,)` is an error.
 
-The case for and against, with measurements, is in [the commas proposal](proposals/approved/commas.md).
+The case for and against, with measurements, is in [the commas proposal](../proposals/approved/commas.md).

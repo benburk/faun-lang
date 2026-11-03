@@ -26,14 +26,17 @@ main!(host) -> ...
   an optional `consume` checked against the inferred contract is the way to make it visible.
 - Resource mutation inside the host implementation is fine. `Buffer.write!`, `Socket.send!`, etc. mutate external state without introducing ordinary source-level mutable values.
 - Explicit consuming operations handle cleanup: `close!`, `destroy!`, etc. No RAII/destructors/finalizers.
-- One plausible root model is:
+- The root as built:
 
   ```ruby
   main! : Host -> []
-  exit! : (consume Host, Nat) -> []
+  exit! : (Host, U8) -> []
   ```
 
-  with ordinary host calls borrowing `Host` and terminal operations consuming it.
+  `Host` is authority, not a resource: it is passed freely and never used up, and
+  effects happen in the order they are written rather than by threading it. A status is a
+  `U8`, since a byte is all of one every target keeps. Consuming `Host` at `exit!` was the
+  earlier idea; linearity is kept for what a target says is used up, such as a `File`.
 
 - Native libraries should be wrapped behind Faun-native host APIs rather than exposing arbitrary C declarations directly.
 - Trusted target/native-extension implementations may call dylibs and deal with pointers, ABI layouts, callbacks, etc., but the API exposed to user code should only contain ordinary values, opaque types, resources, borrow/consume contracts, and explicit effects.

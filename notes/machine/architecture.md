@@ -48,7 +48,7 @@ A type is a name with constructors. `if` is a match on `Bool`, records and
 tuples are one-constructor types, numbers are recursion over constructors.
 A definition with no body is one the target computes, an effect among
 them. Barb's [README](../../crates/core/src/barb/README.md) is its contract;
-[barb](../barb.md) is the short form.
+[barb](barb.md) is the short form.
 
 **Machine IR** (`crates/core/src/ir`) decides how each value is held: as a
 word, a number known to fit some width, an arbitrary-precision natural, a
@@ -192,7 +192,7 @@ instructions such as the 6502, and
 ## Related
 
 - [Memory](memory.md): reference counting and reuse in the machine tier
-- [Barb](../barb.md) and its
+- [Barb](barb.md) and its
   [README](../../crates/core/src/barb/README.md): the core's contract
 - [Types](../types.md): inference, rows and monomorphization in the frontend
 - [Functions](../values/functions.md): second-class callbacks

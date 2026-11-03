@@ -1,8 +1,12 @@
 # N-body performance investigation
 
-The unchanged list-based benchmark is now **4.66× faster** on x86-64, not yet
-10×. Shared register-set constraints and native XMM allocation improve the
-previous local-cache version by **1.14×**. Scalar C remains **5.7× faster**.
+The unchanged list-based benchmark now takes **0.057 s** at 1,000,000 steps
+on x86-64, **17× faster** than the original build's 0.994 s and past the 10×
+goal. Scalar C takes 0.038 s, so it remains **1.5× faster**; auto-vectorized
+C takes 0.041 s. Measured 2026-11-03 with `compare.py` on CPU 10, seven-run
+medians, while other builds were running on the machine. The sections below
+record how it got here; the register-bank measurements, when C was still
+5.7× faster, are under [Comparison with C](#comparison-with-c).
 
 The measurements below predate `kick` pairing bodies through `map_accum`
 rather than a hand-written `pull` counted down by `fuel`. `map_accum` once
