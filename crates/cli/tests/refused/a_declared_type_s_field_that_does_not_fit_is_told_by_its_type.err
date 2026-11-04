@@ -1,4 +1,4 @@
-error: `args` answers List(Str), where List(Nat) is wanted
+error: `args` answers `List(Str)`, where `List(Nat)` is wanted
  --> a_declared_type_s_field_that_does_not_fit_is_told_by_its_type.fn:8:13
   |
 8 |   n = count(host.args)

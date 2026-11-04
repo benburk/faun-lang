@@ -89,7 +89,7 @@ masked(b) -> (b & U8.of_nat(8)) == U8.of_nat(8)
 
 Without the parentheses, `b & U8.of_nat(8) == U8.of_nat(8)` is
 `b & (… == …)`, a `U8` and a `Bool`, and is refused: "argument 1 of `and`
-should be U8, but is Bool".
+should be `U8`, but is `Bool`".
 
 ### On `Bool`, the right side waits
 

@@ -270,7 +270,7 @@ impl Loader {
         let path = match built_in {
             Some(_) => written.to_path_buf(),
             None => written.canonicalize().map_err(|error| {
-                Diagnostic::new(format!("cannot read {}: {error}", written.display()))
+                Diagnostic::new(format!("cannot read `{}`: {error}", written.display()))
             })?,
         };
         if let Some(&id) = self.loaded.get(&path) {
@@ -278,7 +278,7 @@ impl Loader {
         }
         if self.visiting.contains(&path) {
             return Err(Diagnostic::new(format!(
-                "import cycle through {}",
+                "import cycle through `{}`",
                 path.display()
             )));
         }
@@ -290,12 +290,12 @@ impl Loader {
             // Only a file is a module: a device or a pipe may never end.
             None if !path.is_file() => {
                 return Err(Diagnostic::new(format!(
-                    "cannot read {}: not a file",
+                    "cannot read `{}`: not a file",
                     path.display()
                 )));
             }
             None => fs::read_to_string(&path).map_err(|error| {
-                Diagnostic::new(format!("cannot read {}: {error}", path.display()))
+                Diagnostic::new(format!("cannot read `{}`: {error}", path.display()))
             })?,
         };
         let name = self.shown(&path);

@@ -1,0 +1,2 @@
+f : (Nat, Str) -> Nat
+f(n, s) -> n.add(s)

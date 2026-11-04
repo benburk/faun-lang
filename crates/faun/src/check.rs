@@ -2170,7 +2170,7 @@ fn apply_signature(
                 format!("argument {at}")
             };
             format!(
-                "{which} of `{}` should be {}, but is {}",
+                "{which} of `{}` should be `{}`, but is `{}`",
                 symbols.text(pending.name),
                 show(&infer.resolve(parameter), symbols),
                 show(&infer.resolve(argument), symbols)
@@ -2183,7 +2183,7 @@ fn apply_signature(
         .map_err(|reason| match reason {
             Mismatch::NotAmong { .. } => reason.describe(symbols),
             _ => format!(
-                "`{}` answers {}, where {} is wanted",
+                "`{}` answers `{}`, where `{}` is wanted",
                 symbols.text(pending.name),
                 show(&infer.resolve(&result), symbols),
                 show(&wanted, symbols)
