@@ -29,7 +29,10 @@
 //! as a binding takes it; where it fails, the value is as it was, holding
 //! none where the test shows it cannot. A loop's round must end as it began,
 //! what it made used up or handed to the next round in a name the loop
-//! carries, and every way out of the loop must agree.
+//! carries, and every way out of the loop must agree. A branch of type `[]`
+//! where the rest of its `if` or `is` answers never answers: it is a way the
+//! function ends, as a `return` is, so it uses up what it holds there and has
+//! no say in what the branches that answer agree on.
 //!
 //! This reads the first-order program, where every function value has
 //! become the definition it was handed to and every type is known, so a
@@ -349,6 +352,7 @@ impl<'a> Facts<'a> {
                 let still = match leaving {
                     Leaving::Asking => "still held where this `?` leaves".to_owned(),
                     Leaving::Answering => format!("still held where `{name}` answers"),
+                    Leaving::Ending => "still held where this never answers".to_owned(),
                 };
                 (at, still)
             }),
@@ -619,6 +623,8 @@ enum Leaving {
     Answering,
     /// By `?`, with the error.
     Asking,
+    /// Where a branch never answers, as a call answering `[]` does.
+    Ending,
 }
 
 /// Something held that holds a resource: a local, or a part of a value
@@ -1621,13 +1627,29 @@ impl<'f, 'a> Walk<'f, 'a> {
         let outer = std::mem::take(&mut self.left);
         self.set(&outcome.holds);
         let mut answered = self.value(yes);
+        self.never_answered(expr, yes);
         let yes_left = std::mem::take(&mut self.left);
         let taken = self.restored(&outcome.fails);
         answered.extend(self.value(no));
+        self.never_answered(expr, no);
         let no_left = std::mem::take(&mut self.left);
         self.joined(expr, vec![(taken, yes_left)], no_left);
         self.left = outer || (yes_left && no_left);
         answered
+    }
+
+    /// A branch of `join` whose type is `[]` where the join's is not: it
+    /// never answers, so it is a way the function ends, as a `return` is.
+    /// What it holds is held where it ends, and it has no say in what the
+    /// branches that answer agree on. Where every branch is `[]`, they
+    /// agree as any branches do, and the function ends after them.
+    fn never_answered(&mut self, join: &d::Expr, branch: &d::Expr) {
+        let empty = Type::empty();
+        if self.left || branch.ty != empty || join.ty == empty {
+            return;
+        }
+        self.end(&[], (place(answering(branch)), Leaving::Ending));
+        self.left = true;
     }
 
     /// The branches walked, each what it left and whether it left the way
@@ -1684,6 +1706,7 @@ impl<'f, 'a> Walk<'f, 'a> {
                 self.guarded(guard);
             }
             answered.extend(self.value(&arm.body));
+            self.never_answered(expr, &arm.body);
             left = std::mem::take(&mut self.left);
         }
         let every = left && taken.iter().all(|(_, left)| *left);
@@ -2061,6 +2084,10 @@ impl<'f, 'a> Walk<'f, 'a> {
             Leaving::Answering => (
                 format!("still held where `{name}` answers"),
                 "use it up, as `close!` does, or answer it",
+            ),
+            Leaving::Ending => (
+                "still held where this never answers".to_owned(),
+                "use it up before, as `close!` does",
             ),
         };
         Refusal {

@@ -1,0 +1,9 @@
+import std.host {Host}
+
+# Where every branch never answers, the `if` answers `[]`, which no
+# arithmetic takes.
+main! : Host -> []
+main!(host) -> (
+  n = if host.args.len() > 1 then host.exit!(1) else host.exit!(2)
+  host.exit!(U8.of_nat(n + 1))
+)

@@ -1,0 +1,5 @@
+error: `[]` has no field or method `add`
+ --> branches_that_never_answer_answer_the_empty_row.fn:8:24
+  |
+8 |   host.exit!(U8.of_nat(n + 1))
+  |                        ^^^^^

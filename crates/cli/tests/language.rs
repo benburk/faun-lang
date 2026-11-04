@@ -1407,6 +1407,92 @@ const RUNNING: &[(&str, &str, u32)] = &[
          )",
         63,
     ),
+    (
+        "a branch that never answers takes the type of the other, which answers here",
+        "main! : Host -> []
+         main!(host) -> (
+           n = if host.args.len() > 0 then 3 else host.exit!(2)
+           host.exit!(U8.of_nat(n))
+         )",
+        3,
+    ),
+    (
+        "a branch that never answers takes the type of the other, and ends the program",
+        "main! : Host -> []
+         main!(host) -> (
+           n = if host.args.len() > 1 then 3 else host.exit!(2)
+           host.exit!(U8.of_nat(n))
+         )",
+        2,
+    ),
+    (
+        "an arm whose block never answers takes the type of the arm that does",
+        "main! : Host -> []
+         main!(host) -> (
+           text = if host.args.len() > 1 then \"forty\" else \"42\"
+           v = Nat.from_str(text) is (
+             Ok(v) then v
+             Err(_) then (
+               status = 1
+               host.exit!(U8.of_nat(status))
+             )
+           )
+           host.exit!(U8.of_nat(v))
+         )",
+        42,
+    ),
+    (
+        "an arm that never answers ends the program with the status it is given",
+        "main! : Host -> []
+         main!(host) -> (
+           text = if host.args.len() > 0 then \"forty\" else \"42\"
+           v = Nat.from_str(text) is (
+             Ok(v) then v
+             Err(_) then host.exit!(1)
+           )
+           host.exit!(U8.of_nat(v))
+         )",
+        1,
+    ),
+    (
+        "a leaving line returning what never answers meets the clause's answer",
+        "port! : (Host, Str) -> Nat
+         port!(host, text) -> (
+           Nat.from_str(text) is Ok(n) else return host.exit!(2)
+           n
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           good = port!(host, \"8\")
+           bad = port!(host, \"eight\")
+           host.exit!(U8.of_nat(good + bad))
+         )",
+        2,
+    ),
+    (
+        "nested branches that never answer, and a helper that never answers",
+        "fail! : (Host, Nat) -> []
+         fail!(host, status) -> (
+           printed = host.print!(\"failed\")
+           host.exit!(U8.of_nat(status))
+         )
+
+         pick! : (Host, Nat) -> Nat
+         pick!(host, n) -> if n > 3 then n * 10 else if n > 1 then fail!(host, n) else host.exit!(9)
+
+         unsigned!(host, n) -> if n == 0 then fail!(host, 5) else n + 1
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           a = pick!(host, n + 3)
+           b = unsigned!(host, n)
+           c = pick!(host, n + 1)
+           host.exit!(U8.of_nat(a + b + c))
+         )",
+        2,
+    ),
 ];
 
 #[test]

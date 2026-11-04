@@ -38,6 +38,8 @@ impl<'a> Checker<'a> {
             pending_tags: Vec::new(),
             pending_bare: Vec::new(),
             pending_closings: Vec::new(),
+            joins: Vec::new(),
+            pending_ways: Vec::new(),
             answers: Vec::new(),
             clause_marks: None,
             merges: HashMap::new(),

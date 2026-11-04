@@ -231,6 +231,7 @@ impl Checker<'_> {
             tags: self.pending_tags.len(),
             closings: self.pending_closings.len(),
             handings: self.handings.len(),
+            ways: self.pending_ways.len(),
         }
     }
 
@@ -288,6 +289,11 @@ impl Checker<'_> {
             }
         };
         self.settle_by(marks, pass, &open)?;
+        // A way into a join whose type nothing decided answers the join's
+        // type, before anything takes a default.
+        if self.settle_ways(marks, true)? {
+            self.settle_by(marks, pass, &open)?;
+        }
         // A word nothing decided takes its one declared reading, before a
         // numeral does its default: `W(3)` builds a `W`, whatever `3` is.
         // One at a time, since reading one may prove another's position a
@@ -736,9 +742,9 @@ impl Checker<'_> {
         Ok(bounds)
     }
 
-    /// Settle methods and claimed words together until neither moves: a
-    /// method's answer can decide a word's position, and a word's reading
-    /// a method's receiver.
+    /// Settle methods, claimed words and the ways into joins together
+    /// until none moves: a method's answer can decide a word's position or
+    /// a way's type, and a word's reading a method's receiver.
     pub(super) fn settle(&mut self, marks: Marks) -> Result<(), Refusal> {
         self.settle_by(marks, Pass::Waiting, &HashSet::new())
     }
@@ -753,7 +759,9 @@ impl Checker<'_> {
     ) -> Result<(), Refusal> {
         loop {
             self.settle_methods(marks.methods, pass, generic)?;
-            if !self.settle_tags(marks.tags)? {
+            let tags = self.settle_tags(marks.tags)?;
+            let ways = self.settle_ways(marks, false)?;
+            if !tags && !ways {
                 return Ok(());
             }
         }

@@ -1,0 +1,16 @@
+import std.host {Host, Mode.*}
+
+# A branch that never answers ends `main!` there, so the file must be
+# used up before it, as anywhere `main!` ends.
+main! : Host -> []
+main!(host) -> (
+  opened = host.files.open!("a.txt", Read)
+  opened is (
+    Ok(file) then (
+      n = if host.args.len() > 1 then 3 else host.exit!(2)
+      closed = file.close!()
+      host.exit!(U8.of_nat(n))
+    )
+    Err(_) then host.exit!(4)
+  )
+)

@@ -36,6 +36,7 @@
 //! - this module: inference over clauses, patterns and expressions.
 //! - `unify`: types as inference holds them, and unification.
 //! - `pending`: what waits for a type to decide it, and settling it.
+//! - `joins`: where ways meet, and a way of type `[]` takes the others' type.
 //! - `elaborate`: the inferred facts written onto typed HIR.
 
 #![allow(clippy::too_many_lines)]
@@ -132,10 +133,12 @@ mod declared;
 mod effects;
 mod elaborate;
 mod environment;
+mod joins;
 mod pending;
 mod unify;
 
 use components::{binary_member, components, unary_member};
+use joins::{Join, Meeting, PendingWay};
 use unify::{
     Infer, Mismatch, Scheme, Ty, free_scheme, free_variables, public_type, show, substitute,
 };
@@ -325,6 +328,7 @@ struct Marks {
     tags: usize,
     closings: usize,
     handings: usize,
+    ways: usize,
 }
 
 /// An expression handed a name or a lambda, which may be a function: a
@@ -430,6 +434,9 @@ struct Checker<'a> {
     pending_tags: Vec<PendingTag>,
     pending_bare: Vec<PendingBare>,
     pending_closings: Vec<PendingClosing>,
+    /// Every join checked, and the ways into them whose types wait.
+    joins: Vec<Join>,
+    pending_ways: Vec<PendingWay>,
     /// Each definition's bounds, over its scheme's variables.
     bounds: HashMap<Symbol, Vec<Bound>>,
     /// Each signed definition's type variables, by the names it writes them.
@@ -443,10 +450,10 @@ struct Checker<'a> {
     current: Vec<Bound>,
     current_names: HashMap<Symbol, Ty>,
     bound_sites: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Symbol)>,
-    /// What the clause or lambda being checked answers, innermost last,
-    /// which is what a `?` in it answers early with. A guard answers
-    /// nothing.
-    answers: Vec<Option<Ty>>,
+    /// The join of what the clause or lambda being checked answers,
+    /// innermost last, which a `return` or a `?` in it answers early. A
+    /// guard answers nothing.
+    answers: Vec<Option<usize>>,
     /// Where the pending lists stood when the clause being checked began:
     /// what an answer, or a `?`, settles before its row meets the
     /// signature's.
@@ -533,10 +540,17 @@ impl Checker<'_> {
                     },
                 );
             }
+            // A definition's clauses answer one join, its result.
             for name in &component {
-                for clause in &definitions[name].clauses {
-                    self.check_clause(definitions[name].module, clause, &monotypes[name])?;
+                let function = definitions[name];
+                let Ty::Function(_, result) = self.infer.resolve(&monotypes[name]) else {
+                    unreachable!("a definition's type is a function")
+                };
+                let join = self.join(function.module, function.clauses[0].span, (*result).clone());
+                for clause in &function.clauses {
+                    self.check_clause(function.module, clause, &monotypes[name], Some(join))?;
                 }
+                self.close_join(join)?;
             }
             let types: Vec<Ty> = monotypes.values().cloned().collect();
             let names = component_name_set(&monotypes);
@@ -647,7 +661,7 @@ impl Checker<'_> {
                             .collect()
                     })
                     .unwrap_or_default();
-                self.check_clause(module, clause, &ty)?;
+                self.check_clause(module, clause, &ty, None)?;
                 self.finish_pending(marks, Finish::Signed)?;
                 self.current.clear();
                 self.current_names.clear();
@@ -745,15 +759,18 @@ impl Checker<'_> {
         }
     }
 
+    /// A clause of a definition of type `function`, answering `join`, or
+    /// where none is given, a join of its own.
     fn check_clause(
         &mut self,
         module: ModuleId,
         clause: &h::Clause,
         function: &Ty,
+        join: Option<usize>,
     ) -> Result<(), Refusal> {
         let marks = self.marks();
         let outer = self.clause_marks.replace(marks);
-        let checked = self.check_clause_within(module, clause, function, marks);
+        let checked = self.check_clause_within(module, clause, (function, join), marks);
         self.clause_marks = outer;
         checked
     }
@@ -762,7 +779,7 @@ impl Checker<'_> {
         &mut self,
         module: ModuleId,
         clause: &h::Clause,
-        function: &Ty,
+        (function, join): (&Ty, Option<usize>),
         marks: Marks,
     ) -> Result<(), Refusal> {
         self.clause_types.push((
@@ -798,10 +815,16 @@ impl Checker<'_> {
             let actual = actual?;
             self.unify_at(module, guard.span, &actual, &self.bool_type())?;
         }
-        self.answers.push(Some((*result).clone()));
-        let checked = self.clause_body(module, clause, &mut locals, (&result, marks));
+        let own = join.is_none();
+        let join = join.unwrap_or_else(|| self.join(module, clause.span, (*result).clone()));
+        self.answers.push(Some(join));
+        let checked = self.clause_body(module, clause, &mut locals, (join, marks));
         self.answers.pop();
-        checked
+        checked?;
+        if own {
+            self.close_join(join)?;
+        }
+        Ok(())
     }
 
     /// A body's bindings, each value checked and its pattern bound before
@@ -860,14 +883,14 @@ impl Checker<'_> {
         Ok(())
     }
 
-    /// A clause's bindings and answer, with what it answers on top of
-    /// [`Self::answers`], and the marks of what the clause left pending.
+    /// A clause's bindings and answer, a way into `join`, which is on top
+    /// of [`Self::answers`], and the marks of what the clause left pending.
     fn clause_body(
         &mut self,
         module: ModuleId,
         clause: &h::Clause,
         locals: &mut Vec<Option<Scheme>>,
-        (result, marks): (&Ty, Marks),
+        (join, marks): (usize, Marks),
     ) -> Result<(), Refusal> {
         self.bindings(module, &clause.body.bindings, locals)?;
         let actual = self.expr(module, &clause.body.result, locals)?;
@@ -876,16 +899,14 @@ impl Checker<'_> {
         // closed row it holds meets the signature's as that row, and is
         // widened, rather than the signature's row being taken for it.
         self.settle(marks)?;
-        let span = clause.body.result.span;
-        let widened = self
-            .infer
-            .subsume(&actual, result)
-            .map_err(|reason| self.mismatch(module, span, &actual, result, &reason))?;
-        if widened {
-            self.widenings
-                .push((module, span, clause.body.result.site, (*result).clone()));
-        }
-        Ok(())
+        let answered = &clause.body.result;
+        self.way(
+            join,
+            module,
+            answered,
+            &actual,
+            Meeting::Subsumed(answered.site),
+        )
     }
 
     /// A loop: each carried name one type going in, within a round and
@@ -1291,14 +1312,14 @@ impl Checker<'_> {
             // the `return` itself is worth whatever its place asks.
             h::ExprKind::Return(value) => {
                 let answered = self.expr(module, value, locals)?;
-                let Some(Some(answer)) = self.answers.last().cloned() else {
+                let Some(Some(join)) = self.answers.last().copied() else {
                     return Err(failure(
                         module,
                         expression.span,
                         "`return` answers its clause or lambda, and a guard answers nothing",
                     ));
                 };
-                self.unify_at(module, value.span, &answered, &answer)?;
+                self.way(join, module, value, &answered, Meeting::Unified(None))?;
                 Ok(self.infer.fresh())
             }
             // A test answers a `Bool`; its pattern types what it binds,
@@ -1315,10 +1336,11 @@ impl Checker<'_> {
                 Ok(self.bool_type())
             }
             // Every arm's pattern is the value's, its guard a `Bool`, and its
-            // body answers the one type the `is` does.
+            // body answers the one type the `is` does, unless it never answers.
             h::ExprKind::Match(value, arms) => {
                 let tested = self.expr(module, value, locals)?;
                 let answer = self.infer.fresh();
+                let join = self.join(module, expression.span, answer.clone());
                 for arm in arms {
                     self.tested_pattern(module, &arm.pattern, &tested, locals, value.span)?;
                     if let Some(guard) = &arm.guard {
@@ -1327,9 +1349,10 @@ impl Checker<'_> {
                         self.unify_at(module, guard.span, &asked, &bool_)?;
                     }
                     let answered = self.expr(module, &arm.body, locals)?;
-                    self.unify_at(module, arm.body.span, &answered, &answer)
-                        .map_err(|error| error.note("every arm of an `is` answers one type"))?;
+                    let meeting = Meeting::Unified(Some("every arm of an `is` answers one type"));
+                    self.way(join, module, &arm.body, &answered, meeting)?;
                 }
+                self.close_join(join)?;
                 // Arms close the row they take apart as clauses do; a test
                 // alone does not, since what it does not match goes on.
                 let rows = arms
@@ -1344,15 +1367,20 @@ impl Checker<'_> {
                 });
                 Ok(answer)
             }
-            // Its branches answer one type, the one the `if` answers.
+            // Its branches answer one type, the one the `if` answers, unless
+            // one never answers.
             h::ExprKind::If(condition, yes, no) => {
                 let asked = self.expr(module, condition, locals)?;
                 let bool_ = self.bool_type();
                 self.unify_at(module, condition.span, &asked, &bool_)?;
-                let answer = self.expr(module, yes, locals)?;
-                let other = self.expr(module, no, locals)?;
-                self.unify_at(module, no.span, &other, &answer)
-                    .map_err(|error| error.note("both branches of an `if` answer one type"))?;
+                let answer = self.infer.fresh();
+                let join = self.join(module, expression.span, answer.clone());
+                let meeting = Meeting::Unified(Some("both branches of an `if` answer one type"));
+                for branch in [yes, no] {
+                    let answered = self.expr(module, branch, locals)?;
+                    self.way(join, module, branch, &answered, meeting)?;
+                }
+                self.close_join(join)?;
                 Ok(answer)
             }
             // A tag alone is a value of a row holding it with no fields, or
@@ -1494,11 +1522,13 @@ impl Checker<'_> {
                     self.pattern(module, pattern, parameter, locals, expression.span)?;
                 }
                 let answer = self.infer.fresh();
-                self.answers.push(Some(answer.clone()));
+                let join = self.join(module, body.span, answer.clone());
+                self.answers.push(Some(join));
                 let result = self.expr(module, body, locals);
                 self.answers.pop();
                 let result = result?;
-                self.unify_at(module, body.span, &result, &answer)?;
+                self.way(join, module, body, &result, Meeting::Unified(None))?;
+                self.close_join(join)?;
                 for (pattern, parameter) in patterns.iter().zip(&parameters) {
                     self.pending_closings.push(PendingClosing {
                         module,
@@ -1510,7 +1540,7 @@ impl Checker<'_> {
                 for local in bound {
                     locals[local.index()] = None;
                 }
-                Ok(Ty::Function(parameters.into(), Rc::new(result)))
+                Ok(Ty::Function(parameters.into(), Rc::new(answer)))
             }
             h::ExprKind::Call(head, arguments) if matches!(head.kind, h::ExprKind::Dual(_)) => {
                 let h::ExprKind::Dual(dual) = &head.kind else {
@@ -1999,13 +2029,16 @@ impl Checker<'_> {
         // As for a clause's answer: the producer's own row, once what it
         // waits on is settled, is what joins the answer's.
         self.settle(marks)?;
-        let Some(Some(answer)) = self.answers.last().cloned() else {
+        let Some(Some(join)) = self.answers.last().copied() else {
             return Err(failure(
                 module,
                 span,
                 "`?` answers early from its clause or lambda, and a guard answers nothing",
             ));
         };
+        // An `Err` answered early is a way of its own into the answer.
+        self.join_met(join);
+        let answer = self.join_answer(join);
         let answered_error = self.infer.fresh();
         let answered = Ty::Named(
             self.prelude.result,

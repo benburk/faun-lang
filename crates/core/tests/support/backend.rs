@@ -1317,6 +1317,46 @@ fn a_branch_whose_value_goes_on_may_leave() {
     assert_eq!(answers, [17, 53]);
 }
 
+/// A branch, an arm or a `return` that never answers takes the type the
+/// others answer: where it is taken the program ends with its status, and
+/// where it is not the program goes on with the other's value.
+#[test]
+fn a_way_that_never_answers_meets_one_that_does() {
+    let program = read(
+        "import std.host {Host}
+
+         fail! : (Host, Nat) -> []
+         fail!(host, status) -> host.exit!(U8.of_nat(status))
+
+         port! : (Host, Str) -> Nat
+         port!(host, text) -> (
+           Nat.from_str(text) is Ok(n) else return host.exit!(6)
+           n
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           count = host.args.len()
+           n = if count > 1 then 3 else host.exit!(2)
+           p = port!(host, if count == 3 then \"x\" else \"1\")
+           m = count is (
+             2 | 3 then 4
+             _ then fail!(host, 5)
+           )
+           host.exit!(U8.of_nat(n + p + m))
+         )",
+    )
+    .expect("a program whose ways never answer");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2, 3, 4])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [2, 8, 6, 5]);
+}
+
 /// A name assigned again holds its new value from there on, past the
 /// branch or arm it was assigned in.
 #[test]

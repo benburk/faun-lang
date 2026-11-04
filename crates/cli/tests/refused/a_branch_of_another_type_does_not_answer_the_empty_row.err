@@ -1,0 +1,8 @@
+error: a numeral cannot be a `[]`
+ --> a_branch_of_another_type_does_not_answer_the_empty_row.fn:4:24
+  |
+4 | f(n) -> if n == 0 then 3 else f(n)
+  |                        ^ expected `[]`, found a numeral
+  |
+  = note: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`
+  = help: convert a value with `of_nat`

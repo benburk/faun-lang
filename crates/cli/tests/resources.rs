@@ -56,6 +56,37 @@ fn a_lent_file_may_be_held_where_a_function_leaves() {
     assert_eq!(left["output.txt"], text);
 }
 
+/// A branch that never answers is a way `main!` ends, so it closes the
+/// file it holds there, and has no say in what the branch that answers
+/// does with it: that one hands it on to be closed after.
+#[test]
+fn a_branch_that_never_answers_closes_what_it_holds() {
+    let package = Package::new(
+        "never-answers",
+        "import std.host {Host, Mode.*}
+
+         main! : Host -> []
+         main!(host) -> (
+           opened = host.files.open!(\"a.txt\", Overwrite)
+           opened is (
+             Ok(file) then (
+               n = if host.args.len() > 1 then 3 else (
+                 closed = file.close!()
+                 host.exit!(2)
+               )
+               wrote = file.write_all!(\"never\".to_utf8())
+               closed = file.close!()
+               host.exit!(U8.of_nat(n))
+             )
+             Err(_) then host.exit!(4)
+           )
+         )",
+    );
+    let (status, written, left) = support::run_among(&package.entry(), Directory::new());
+    assert_eq!((status, written.as_str()), (2, ""));
+    assert_eq!(left["a.txt"], b"");
+}
+
 /// A file closed in both branches of an `if` is closed whichever is
 /// chosen, so it is used up once on every way the function goes on.
 #[test]

@@ -1,0 +1,4 @@
+# `[]` takes the type of the ways it meets, never the other way: a
+# body answering a numeral is not one that never answers.
+bad : Nat -> []
+bad(n) -> 3

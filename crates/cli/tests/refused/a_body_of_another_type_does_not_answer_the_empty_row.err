@@ -1,0 +1,8 @@
+error: a numeral cannot be a `[]`
+ --> a_body_of_another_type_does_not_answer_the_empty_row.fn:4:11
+  |
+4 | bad(n) -> 3
+  |           ^ expected `[]`, found a numeral
+  |
+  = note: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`
+  = help: convert a value with `of_nat`
