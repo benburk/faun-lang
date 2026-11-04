@@ -470,9 +470,15 @@ impl Lexer<'_> {
         match self.bytes.get(self.at) {
             Some(b'\\') => {
                 self.at += 1;
-                match self.src[self.at..].chars().next() {
-                    Some(c) => self.at += c.len_utf8(),
-                    None => return Kind::Error,
+                // `\u{...}` names a scalar by its hexadecimal digits; any
+                // other escape is one character, which decoding checks.
+                if let Some(end) = self.unicode_escape_end() {
+                    self.at = end;
+                } else {
+                    match self.src[self.at..].chars().next() {
+                        Some(c) => self.at += c.len_utf8(),
+                        None => return Kind::Error,
+                    }
                 }
             }
             Some(b'\'' | b'\n' | b'\r') | None => {
@@ -490,6 +496,21 @@ impl Lexer<'_> {
         } else {
             Kind::Error
         }
+    }
+
+    /// Where a `u{...}` escape at the cursor ends: `u`, `{`, one or more
+    /// hexadecimal digits and `}`, as the tree-sitter grammar reads one.
+    fn unicode_escape_end(&self) -> Option<usize> {
+        let rest = self.bytes.get(self.at..)?;
+        let digits = rest.strip_prefix(b"u{")?;
+        let count = digits
+            .iter()
+            .take_while(|byte| byte.is_ascii_hexdigit())
+            .count();
+        if count == 0 || digits.get(count) != Some(&b'}') {
+            return None;
+        }
+        Some(self.at + 2 + count + 1)
     }
 
     fn number(&mut self) -> Kind {
@@ -720,6 +741,17 @@ mod tests {
         assert_eq!(kinds("1.5e3")[0], Kind::Decimal);
         assert_eq!(kinds("0xffTrue")[0], Kind::Error);
         assert_eq!(kinds("0x")[0], Kind::Error);
+    }
+
+    #[test]
+    fn a_character_literal_names_a_scalar_by_its_digits() {
+        assert_eq!(kinds(r"'\u{e9}'"), [Kind::Char, Kind::Eof]);
+        assert_eq!(
+            kinds(r"'\u{80}'..'\u{ff}'"),
+            [Kind::Char, Kind::DotDot, Kind::Char, Kind::Eof]
+        );
+        assert_eq!(kinds(r"'\n'"), [Kind::Char, Kind::Eof]);
+        assert_eq!(kinds(r"'\u{}'")[0], Kind::Error);
     }
 
     #[test]
