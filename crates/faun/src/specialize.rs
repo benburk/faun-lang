@@ -991,9 +991,15 @@ impl<'a> Specializer<'a> {
                                 },
                             )?;
                         }
-                        crate::blessed::numeral(magnitude.clone(), *negative, kind, self.prelude)
-                            .map(|literal| (literal, word.equals))
-                            .map_err(|failure| located(module, span, &failure.to_string()))
+                        crate::blessed::numeral(
+                            magnitude.clone(),
+                            *negative,
+                            *character,
+                            kind,
+                            self.prelude,
+                        )
+                        .map(|literal| (literal, word.equals))
+                        .map_err(|failure| located(module, span, &failure.to_string()))
                     })
                     .transpose()?,
                 _ => None,
@@ -1654,7 +1660,7 @@ impl<'a> Specializer<'a> {
             crate::blessed::character(&magnitude, kind, self.prelude)
                 .map_err(|failure| failure.advise(located(module, span, &failure.to_string())))?;
         }
-        let literal = crate::blessed::numeral(magnitude, negative, kind, self.prelude)
+        let literal = crate::blessed::numeral(magnitude, negative, character, kind, self.prelude)
             .map_err(|failure| located(module, span, &failure.to_string()))?;
         self.literal(module, span, &literal, ty)
     }

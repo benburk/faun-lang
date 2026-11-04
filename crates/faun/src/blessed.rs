@@ -251,6 +251,8 @@ pub fn decimal(digits: BigUint, scale: u32, negative: bool, float: &Float) -> Li
 }
 
 /// Elaborate a numeral after context has selected `Nat` or `Int`.
+/// `character` says it was written as a character literal, which is how a
+/// refusal names it.
 ///
 /// # Errors
 ///
@@ -258,6 +260,7 @@ pub fn decimal(digits: BigUint, scale: u32, negative: bool, float: &Float) -> Li
 pub fn numeral(
     magnitude: BigUint,
     negative: bool,
+    character: bool,
     ty: NumeralType<'_>,
     prelude: &PreludeIds,
 ) -> Result<LiteralExpr, LiteralElaborationError> {
@@ -270,6 +273,7 @@ pub fn numeral(
         if magnitude >= word.below {
             return Err(LiteralElaborationError::TooLarge {
                 written: magnitude,
+                character,
                 name: word.name.clone(),
                 below: word.below.clone(),
             });
@@ -328,6 +332,8 @@ pub enum LiteralElaborationError {
     /// A numeral a word's `of_nat` would wrap.
     TooLarge {
         written: BigUint,
+        /// Written as a character literal, whose scalar `written` is.
+        character: bool,
         name: String,
         below: BigUint,
     },
@@ -344,6 +350,21 @@ impl fmt::Display for LiteralElaborationError {
         match self {
             Self::NegativeNat => f.write_str("a negative numeral cannot be a `Nat`"),
             Self::Negative(name) => write!(f, "a `{name}` has no negative numerals"),
+            Self::TooLarge {
+                written,
+                character: true,
+                name,
+                ..
+            } => {
+                // A scalar the literal held, so it fits a `u32` and is a `char`.
+                let scalar = u32::try_from(written).expect("a character literal is a scalar");
+                let shown = char::from_u32(scalar).expect("a character literal is a scalar");
+                let shown = shown.escape_debug();
+                write!(
+                    f,
+                    "`'{shown}'` (U+{scalar:04X}, {written}) is out of range for `{name}`"
+                )
+            }
             Self::TooLarge { written, name, .. } => {
                 write!(f, "`{written}` is out of range for `{name}`")
             }
@@ -607,7 +628,7 @@ mod tests {
         let loaded = loaded();
         let ids = PreludeIds::find_in(&loaded).unwrap();
         assert_eq!(
-            numeral(BigUint::from(42u8), true, NumeralType::Int, &ids).unwrap(),
+            numeral(BigUint::from(42u8), true, false, NumeralType::Int, &ids).unwrap(),
             LiteralExpr::Call(
                 ids.int_neg,
                 vec![LiteralExpr::Call(
@@ -617,11 +638,11 @@ mod tests {
             )
         );
         assert_eq!(
-            numeral(BigUint::from(42u8), false, NumeralType::Nat, &ids).unwrap(),
+            numeral(BigUint::from(42u8), false, false, NumeralType::Nat, &ids).unwrap(),
             LiteralExpr::Natural(BigUint::from(42u8))
         );
         assert_eq!(
-            numeral(BigUint::from(1u8), true, NumeralType::Nat, &ids),
+            numeral(BigUint::from(1u8), true, false, NumeralType::Nat, &ids),
             Err(LiteralElaborationError::NegativeNat)
         );
     }

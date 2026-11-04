@@ -1,0 +1,7 @@
+error: `'😀'` (U+1F600, 128512) is out of range for `U16`
+ --> a_character_past_a_word_s_width_is_named_as_written.fn:7:42
+  |
+7 | main!(host) -> host.exit!(U8.of_nat(unit('😀').to_nat()))
+  |                                          ^^^
+  |
+  = note: a `U16` takes numerals below 65536

@@ -501,6 +501,7 @@ impl Checker<'_> {
         let value = blessed::numeral(
             numeral.magnitude.clone(),
             numeral.negative,
+            numeral.character,
             kind,
             self.prelude,
         )
