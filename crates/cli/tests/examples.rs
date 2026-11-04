@@ -348,6 +348,113 @@ fn a_call_too_deep_for_the_stack_says_so() {
     assert_eq!(output.status.code(), Some(3));
 }
 
+/// A program reading its standard input to the end: one held open, it
+/// waits on for good.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+const WAITS: &str = "waits : {args: List(Str), stdin: List(U8)} -> Nat
+    waits(input) -> input.stdin.len()
+
+    main!(host) -> host.run_stdin!(waits)";
+
+/// A program a signal stops is said to have been, and `faun run` answers
+/// as a shell does, 128 and the signal's number. No Faun program can raise
+/// one, so this one waits on standard input, which is held open, until
+/// the test kills it. Whatever goes wrong, a minute ends the wait.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn a_program_a_signal_stops_is_said_to_be() {
+    use std::time::{Duration, Instant};
+
+    let package = support::Package::new("signalled", WAITS);
+    let mut faun = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("run")
+        .arg(package.entry())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_mins(1);
+    // Until the program runs, or `faun` ends without running it.
+    let started = within(deadline, || {
+        running_program(faun.id()).map_or_else(
+            || faun.try_wait().unwrap().map(Err),
+            |program| Some(Ok(program)),
+        )
+    });
+    let Some(Ok(program)) = started else {
+        faun.kill().ok();
+        let output = faun.wait_with_output().unwrap();
+        panic!("the program never ran: {output:?}");
+    };
+    let killed = std::process::Command::new("sh")
+        .args(["-c", "kill -KILL \"$0\"", &program.to_string()])
+        .status();
+    assert!(killed.unwrap().success());
+    let Some(status) = within(deadline, || faun.try_wait().unwrap()) else {
+        faun.kill().ok();
+        panic!("`faun run` went on after its program was killed");
+    };
+    let output = faun.wait_with_output().unwrap();
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "the program was stopped by signal 9\n"
+    );
+    assert_eq!(status.code(), Some(128 + 9));
+}
+
+/// What `poll` first answers, asked every ten milliseconds until
+/// `deadline`, past which it is `None`.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+fn within<T>(deadline: std::time::Instant, mut poll: impl FnMut() -> Option<T>) -> Option<T> {
+    while std::time::Instant::now() < deadline {
+        if let Some(answer) = poll() {
+            return Some(answer);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    None
+}
+
+/// The process `faun run`, `faun`, runs its program as, once it is that
+/// program rather than `faun` about to become it: a child whose first
+/// argument is the image `faun` wrote.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+fn running_program(faun: u32) -> Option<u32> {
+    let image = format!("faun-run-{faun}/program");
+    for entry in std::fs::read_dir("/proc").ok()? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse().ok())
+        else {
+            continue;
+        };
+        // A process may end while it is read; it is then no candidate.
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        // The parent is the second field after the name, which closes with
+        // the last `)`, since a name may hold one.
+        let after_name = stat.rsplit_once(')').map_or("", |(_, rest)| rest);
+        let parent = after_name.split_whitespace().nth(1);
+        if parent != Some(faun.to_string().as_str()) {
+            continue;
+        }
+        let Ok(command) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let first = command.split(|&byte| byte == 0).next().unwrap_or_default();
+        if String::from_utf8_lossy(first).ends_with(&image) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
 /// The standard-input runner reads the input to its end and hands it to the
 /// program beside the arguments.
 #[test]
