@@ -10,7 +10,9 @@ A numeral takes its type from its position, as in Ori, and may be only a
 methods it defines. A word is built through its own `of_nat`, and its module's
 private `numerals_below` bounds what may be written: `300` is not a `U8`,
 though `U8.of_nat(300)` is 44. A numeral nothing types is a `Nat`, or an `Int`
-when it is negated. The words are rings: they wrap by definition, and `sub`
+when it is negated. A character literal is its scalar value, and at a `U8`
+must be ASCII: `'é'` is two bytes in UTF-8, so it is no `U8`, and is
+refused with its bytes shown. The words are rings: they wrap by definition, and `sub`
 is the ring's, not monus.
 
 A numeral with a point, `1.5` or `1.0e-12`, is a float's, and only a float's:

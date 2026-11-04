@@ -99,11 +99,19 @@ and write bytes; `read_to_str!` is the one read that validates, answering
 input as `List(U8)`, so a program hashing or decoding it pays for no check,
 and one that wants text asks `Str.from_utf8` itself.
 
-A character literal is a numeral, its scalar value. At a `U8` it is a byte
-if the value is below 256 and refused if not, so `'a'` matches the byte
-`"a"` holds. A scalar from 128 to 255 is accepted as a byte too, though
-UTF-8 writes it as two: `'é'` at a `U8` is `233`, and `"é".to_utf8()` is
-`[0xc3, 0xa9]`.
+A character literal is a numeral, its scalar value, and may name it by
+number, `'\u{e9}'`. At a `U8` it must be ASCII, below 128, so `'a'` matches
+the byte `"a"` holds. Any other character is more than one byte in UTF-8,
+so it is refused there, with its bytes shown and the two ways out offered:
+
+```
+error: `'é'` is not one byte in UTF-8, so it cannot be a `U8`
+  = note: `'é'` is 2 bytes in UTF-8: `[0xc3, 0xa9]`
+  = help: write `0xe9` for the byte 233, or `"é".to_utf8()` for its encoding
+```
+
+At `Nat`, `Int` and the wider words it stays its scalar value: `'é'` at a
+`U32` is 233.
 
 ## Rationale
 
@@ -161,6 +169,16 @@ So that braces are just braces. JSON, CSS and code in a string need no
 doubling, as they would under Python's or Rust's `{name}`:
 `"body { color: ${color}; }"` reads like its output. `${` almost never
 occurs in text, and `\$` escapes it where it does.
+
+### Why must a character at a `U8` be ASCII?
+
+Because a `U8` in Faun is a byte of UTF-8 text, and a byte from 128 to 255
+is never a whole character there. `'é'` at a `U8` used to be 233, which is
+`é` only in Latin-1: `byte == 'é'` compiled and could never match a byte of
+a Faun string, since `"é"` holds `0xc3` then `0xa9`. Refusing it turns that
+silent mismatch into an error naming the bytes. The cost is that a program
+that does mean the byte 233 writes `0xe9`, which says what it means. At the
+wider types a character is its scalar value, which is what a code point is.
 
 ### Why is `cmp` byte order rather than a collation?
 

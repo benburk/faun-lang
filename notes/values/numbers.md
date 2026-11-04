@@ -11,7 +11,8 @@ own note.
 A numeral has no type of its own. Its position decides, and the numeral is
 built through that type's `of_nat`; at `Nat` the numeral already is the
 value. Hexadecimal, binary and character literals are other spellings of
-the same thing, a character standing for its Unicode scalar value:
+the same thing, a character standing for its Unicode scalar value, and at
+a `U8` only an ASCII one ([strings](strings.md)):
 
 ```ruby
 double(x) -> x.mul(2)
