@@ -1912,7 +1912,9 @@ fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, Refusal> {
 
 /// Meet a bound's shape with its implementation's signature, each side's
 /// variables its own: where one side is known in full, the other is matched
-/// against it; where both are built alike, their parts meet. Answers
+/// against it; where both are built alike, their parts meet, as they do
+/// where the whole does not match, so a bound whose answer's row a `?`
+/// widened still learns its argument from the implementation. Answers
 /// whether either side learnt anything. A part neither knows yet, or rows
 /// neither side knows in full, wait for a later round.
 fn meet(
@@ -1937,11 +1939,15 @@ fn meet(
         }
         false
     }
-    if let Ok(concrete) = substitute_type(implementation, fixed) {
-        return learn(bound, &concrete, known);
+    if let Ok(concrete) = substitute_type(implementation, fixed)
+        && learn(bound, &concrete, known)
+    {
+        return true;
     }
-    if let Ok(concrete) = substitute_type(bound, known) {
-        return learn(implementation, &concrete, fixed);
+    if let Ok(concrete) = substitute_type(bound, known)
+        && learn(implementation, &concrete, fixed)
+    {
+        return true;
     }
     let mut learnt = false;
     let mut each = |bounds: &[InferredType], implementations: &[InferredType]| {

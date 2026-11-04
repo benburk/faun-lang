@@ -313,7 +313,7 @@ impl Checker<'_> {
         if self.settle_bare(true)? {
             self.settle_by(marks, pass, &open)?;
         }
-        let generic = match finish {
+        let mut generic = match finish {
             Finish::Unsigned(types, names) => {
                 let generic = self.generic_variables(types, names);
                 self.link_shapes(method_start, &generic);
@@ -322,14 +322,20 @@ impl Checker<'_> {
             }
             _ => HashSet::new(),
         };
-        let is_generic = |checker: &Self, ty: &Ty| matches!(checker.infer.resolve(ty), Ty::Var(variable) if generic.contains(&variable));
+        let is_generic = |checker: &Self, generic: &HashSet<u32>, ty: &Ty| matches!(checker.infer.resolve(ty), Ty::Var(variable) if generic.contains(&variable));
+        // Spread once, before the first default: nothing to spread from
+        // where nothing is generic.
+        let mut spread = generic.is_empty();
         // A numeral nothing typed takes its default one at a time, a
         // negative one first since only `Int` holds it, and what that
         // settles may type the rest: in `-2 < 1` the `1` is compared with an
         // `Int`, so it is one. A numeral a definition used here carries in
         // is owed as its type's `of_nat`, `of_decimal` or `neg`, and takes
         // its default as a written one does: `t = 200` used where nothing
-        // types it is a `Nat`.
+        // types it is a `Nat`. One whose type only a generic receiver's
+        // member reaches is as generic as the receiver, as the bound on it
+        // says: in `fail!(host) -> host.exit!(1)` the `1` is whatever
+        // `exit!` takes where `host` is known.
         loop {
             let undecided = |negative: bool| {
                 (numeral_start..self.pending_numerals.len()).find(|&index| {
@@ -337,7 +343,7 @@ impl Checker<'_> {
                     !numeral.resolved
                         && numeral.negative == negative
                         && matches!(self.infer.resolve(&numeral.ty), Ty::Var(_))
-                        && !is_generic(self, &numeral.ty)
+                        && !is_generic(self, &generic, &numeral.ty)
                 })
             };
             let owed = |negative: bool| {
@@ -347,7 +353,7 @@ impl Checker<'_> {
                         && !pending.resolved
                         && (self.symbols.text(pending.name) == "neg") == negative
                         && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_))
-                        && !is_generic(self, &pending.receiver)
+                        && !is_generic(self, &generic, &pending.receiver)
                 })
             };
             // Where it stands, its type, and whether it is a decimal.
@@ -370,6 +376,11 @@ impl Checker<'_> {
             let Some((module, span, ty, decimal)) = negative.or_else(|| next(false)) else {
                 break;
             };
+            if !spread {
+                spread = true;
+                self.spread_generic(method_start, &mut generic);
+                continue;
+            }
             let default = match (decimal, self.prelude.floats.first()) {
                 (true, Some(float)) => Ty::Named(float.ty, Rc::default()),
                 (true, None) => {
@@ -387,7 +398,7 @@ impl Checker<'_> {
         }
         for index in numeral_start..self.pending_numerals.len() {
             let numeral = self.pending_numerals[index].clone();
-            if !numeral.resolved && is_generic(self, &numeral.ty) {
+            if !numeral.resolved && is_generic(self, &generic, &numeral.ty) {
                 self.defer_numeral(&numeral)?;
                 self.pending_numerals[index].resolved = true;
             }

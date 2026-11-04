@@ -942,6 +942,54 @@ const RUNNING: &[(&str, &str, u32)] = &[
         3 + 4 + 20 + 120,
     ),
     (
+        "a numeral a generic receiver's method takes is what the method takes where the receiver is known",
+        "Quiet : [Quiet(Host)].(
+           println! : (Quiet, Str) -> {}
+           println!(Quiet(_), _) -> {}
+           exit! : (Quiet, Nat) -> []
+           exit!(Quiet(host), code) -> host.exit!(U8.of_nat(code + 40))
+         )
+
+         fail!(host, text) -> (
+           host.println!(text)
+           host.exit!(1)
+         )
+
+         main!(host) -> if host.args.len() == 1 then fail!(host, \"x\") else fail!(Quiet(host), \"q\")",
+        1,
+    ),
+    (
+        "a numeral reaches the type a bound takes through two calls",
+        "Quiet : [Quiet(Host)].(
+           println! : (Quiet, Str) -> {}
+           println!(Quiet(_), _) -> {}
+           exit! : (Quiet, Nat) -> []
+           exit!(Quiet(host), code) -> host.exit!(U8.of_nat(code + 40))
+         )
+
+         bail!(host, code) -> host.exit!(code + 1)
+
+         fail!(host, text) -> (
+           host.println!(text)
+           bail!(host, 4)
+         )
+
+         main! : Host -> []
+         main!(host) -> if host.args.len() == 1 then fail!(host, \"x\") else fail!(Quiet(host), \"q\")",
+        5,
+    ),
+    (
+        "a numeral a generic receiver's method takes is met where a `?` widened what it answers",
+        "second(r) -> (
+           n = Nat.from_str(r.words.get(1)?)?
+           Ok(n)
+         )
+
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(second({words: [\"a\", \"7\"]}).ok_or(0) + second({words: [\"a\"]}).ok_or(10)))",
+        17,
+    ),
+    (
         "a method's receiver is read before its arguments, as a call's first argument is",
         "assigned(n) -> (
            x = n
