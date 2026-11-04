@@ -133,8 +133,9 @@ included and no background thread.
 exec! : (Host, Spec) -> Result([], SpawnError)
 ```
 
-It returns only on failure. Whether a linear resource may still be live at
-the call is the same open question as for `exit!`. It is a Unix-only contract,
+It returns only on failure. A linear resource may not still be live at the
+call, as at `exit!`: a branch that never answers must use up what it holds,
+as a `return` must. It is a Unix-only contract,
 which is useful for
 wrappers and shells, and it is honest about what it does: after it succeeds,
 nothing in the program exists any more.

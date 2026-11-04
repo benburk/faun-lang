@@ -226,7 +226,10 @@ into layout, method resolution and specialization.
 Rows cover most of what subtyping is used for: a function asks for
 `{name: Str, *}` and takes any record with a `name`, and tag rows widen by
 joining. The cost is no heterogeneous collections and no implicit widening
-of a declared type: a conversion is written.
+of a declared type: a conversion is written. The one exception is `[]`, the
+type of what never answers: where paths meet, a path of type `[]` takes the
+others' type, one way only
+([proposal](proposals/approved/never-at-joins.md)).
 
 ### Why no higher-kinded or higher-rank types?
 

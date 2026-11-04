@@ -469,7 +469,8 @@ begins a line of its own.
 
 `if condition then yes else no` answers `yes` where the `Bool` condition is
 `True` and `no` where it is `False`, working out only the branch it chooses;
-both answer one type, and `else` is always written. It takes everything
+both answer one type, a branch that never answers, of type `[]` as
+`host.exit!(2)` is, taking the other's, and `else` is always written. It takes everything
 after its `else`, so it begins an expression, as a clause's body, a
 binding's value, an argument or a branch; as an operand it is written in
 parentheses, `1 + (if late then 10 else 0)`. A line of a block beginning
@@ -554,7 +555,10 @@ or taken apart, not both.
 matches the value and whose guard, `if condition`, holds. What an arm's
 pattern and its guard's tests bind is seen by its value alone. The arms
 must cover every value, as a definition's clauses must, a guarded arm
-covering nothing; every arm answers one type.
+covering nothing; every arm answers one type, an arm of type `[]` taking the
+others'. So does a `return`'s value, against what its clause answers: a
+path that never answers fits wherever paths meet, though nothing of another
+type becomes a `[]`.
 
 ```
 area(shape) -> shape is (
