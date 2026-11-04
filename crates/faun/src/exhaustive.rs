@@ -219,6 +219,7 @@ impl<'a> Coverage<'a> {
             t::Pattern::Number {
                 magnitude,
                 negative,
+                ..
             } => Pattern::Number(magnitude.clone(), *negative),
             // A range, or a string, which is a test, covers nothing.
             t::Pattern::Range(_, _) | t::Pattern::String(_) => Pattern::Range,

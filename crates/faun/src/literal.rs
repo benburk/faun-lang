@@ -115,6 +115,15 @@ pub fn magnitude(numeral: Numeral, source: &str) -> Result<BigUint, LiteralError
     }
 }
 
+/// Decode a character literal to the scalar it holds.
+///
+/// # Errors
+///
+/// Rejects a malformed literal, as [`magnitude`] does.
+pub fn scalar(numeral: Numeral, source: &str) -> Result<char, LiteralError> {
+    character(numeral.span, numeral.text(source))
+}
+
 /// The scalar value a character literal, `text`, holds.
 fn character(span: Span, text: &str) -> Result<char, LiteralError> {
     let refused = |message: &str| LiteralError {

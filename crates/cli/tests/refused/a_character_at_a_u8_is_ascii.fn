@@ -1,0 +1,7 @@
+import std.host {Host}
+
+accent : U8
+accent = 'é'
+
+main! : Host -> []
+main!(host) -> host.exit!(accent)

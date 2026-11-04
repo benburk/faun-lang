@@ -1,0 +1,6 @@
+import std.host {Host}
+
+accented(byte) -> byte == 'é'
+
+main! : Host -> []
+main!(host) -> host.exit!(if accented(U8.of_nat(0xe9)) then 1 else 0)

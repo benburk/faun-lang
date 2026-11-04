@@ -1,0 +1,8 @@
+error: `'€'` is not one byte in UTF-8, so it cannot be a `U8`
+ --> a_character_past_255_at_a_u8_is_not_one_byte_either.fn:4:8
+  |
+4 | euro = '€'
+  |        ^^^
+  |
+  = note: `'€'` is 3 bytes in UTF-8: `[0xe2, 0x82, 0xac]`
+  = help: write `"€".to_utf8()` for its encoding

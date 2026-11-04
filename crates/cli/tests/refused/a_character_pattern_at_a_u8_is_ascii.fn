@@ -1,0 +1,8 @@
+import std.host {Host}
+
+accented : U8 -> Bool
+accented('é') -> True
+accented(_) -> False
+
+main! : Host -> []
+main!(host) -> host.exit!(if accented(0xe9) then 1 else 0)

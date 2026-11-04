@@ -2292,6 +2292,7 @@ impl ClauseResolver<'_> {
                 magnitude: literal::magnitude(*numeral, self.source)
                     .expect("literals were validated while parsing"),
                 negative: *negative,
+                character: numeral.kind == s::NumeralKind::Character,
             }),
             s::Pattern::Range { start, end, .. } => {
                 let bound = |bound: &Option<s::Bound>| {
@@ -2299,6 +2300,7 @@ impl ClauseResolver<'_> {
                         magnitude: literal::magnitude(bound.numeral, self.source)
                             .expect("literals were validated while parsing"),
                         negative: bound.negative,
+                        character: bound.numeral.kind == s::NumeralKind::Character,
                     })
                 };
                 Ok(h::Pattern::Range(bound(start), bound(end)))
@@ -2417,6 +2419,12 @@ impl ClauseResolver<'_> {
                 let (digits, scale) = literal::decimal(*numeral, self.source)
                     .expect("literals were validated while parsing");
                 h::ExprKind::Decimal(digits, scale)
+            }
+            s::ExprKind::Number(numeral) if numeral.kind == s::NumeralKind::Character => {
+                h::ExprKind::Character(
+                    literal::scalar(*numeral, self.source)
+                        .expect("literals were validated while parsing"),
+                )
             }
             s::ExprKind::Number(numeral) => h::ExprKind::Number(
                 literal::magnitude(*numeral, self.source)

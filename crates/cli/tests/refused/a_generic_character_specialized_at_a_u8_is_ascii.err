@@ -1,0 +1,8 @@
+error: `'é'` is not one byte in UTF-8, so it cannot be a `U8`
+ --> a_generic_character_specialized_at_a_u8_is_ascii.fn:3:27
+  |
+3 | accented(byte) -> byte == 'é'
+  |                           ^^^
+  |
+  = note: `'é'` is 2 bytes in UTF-8: `[0xc3, 0xa9]`
+  = help: write `0xe9` for the byte 233, or `"é".to_utf8()` for its encoding

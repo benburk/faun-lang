@@ -129,9 +129,11 @@ impl Elaborator<'_> {
             h::Pattern::Number {
                 magnitude,
                 negative,
+                character,
             } => t::Pattern::Number {
                 magnitude,
                 negative,
+                character,
             },
             h::Pattern::Range(low, high) => t::Pattern::Range(low, high),
             h::Pattern::String(bytes) => t::Pattern::String(bytes),
@@ -255,7 +257,7 @@ impl Elaborator<'_> {
                 h::ExprKind::Associated(..) => {
                     t::ExprKind::Method(self.target(site, false), Vec::new())
                 }
-                h::ExprKind::Number(_) | h::ExprKind::Decimal(..) => {
+                h::ExprKind::Number(_) | h::ExprKind::Character(_) | h::ExprKind::Decimal(..) => {
                     unreachable!("every numeral was elaborated or deferred")
                 }
                 h::ExprKind::String(parts) => {

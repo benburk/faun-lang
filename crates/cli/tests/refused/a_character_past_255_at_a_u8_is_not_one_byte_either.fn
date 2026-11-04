@@ -1,0 +1,7 @@
+import std.host {Host}
+
+euro : U8
+euro = '€'
+
+main! : Host -> []
+main!(host) -> host.exit!(euro)

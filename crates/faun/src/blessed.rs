@@ -11,7 +11,7 @@ use std::fmt;
 use faun_core::float::Operation;
 use num_bigint::BigUint;
 
-use super::diagnostic::Diagnostic;
+use super::diagnostic::{Advised, Diagnostic};
 use super::modules::{LoadedProgram, TypeBinding};
 use super::{Symbol, Symbols};
 
@@ -292,6 +292,34 @@ pub fn numeral(
     }
 }
 
+/// A character literal at `ty`, which at a `U8` must be ASCII: a byte of a
+/// `Str` is one of its UTF-8, which writes every other character as more
+/// than one.
+///
+/// # Errors
+///
+/// Refuses a character at a `U8` that UTF-8 does not write as one byte.
+pub fn character(
+    magnitude: &BigUint,
+    ty: NumeralType<'_>,
+    prelude: &PreludeIds,
+) -> Result<(), LiteralElaborationError> {
+    let NumeralType::Word(word) = ty else {
+        return Ok(());
+    };
+    if word.ty != prelude.u8_ {
+        return Ok(());
+    }
+    let scalar = u32::try_from(magnitude).ok().and_then(char::from_u32);
+    match scalar {
+        Some(scalar) if !scalar.is_ascii() => Err(LiteralElaborationError::NotOneByte {
+            scalar,
+            name: word.name.clone(),
+        }),
+        _ => Ok(()),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiteralElaborationError {
     NegativeNat,
@@ -303,6 +331,12 @@ pub enum LiteralElaborationError {
         name: String,
         below: BigUint,
     },
+    /// A character literal at a `U8` that UTF-8 writes as more than one
+    /// byte.
+    NotOneByte {
+        scalar: char,
+        name: String,
+    },
 }
 
 impl fmt::Display for LiteralElaborationError {
@@ -312,6 +346,12 @@ impl fmt::Display for LiteralElaborationError {
             Self::Negative(name) => write!(f, "a `{name}` has no negative numerals"),
             Self::TooLarge { written, name, .. } => {
                 write!(f, "`{written}` is out of range for `{name}`")
+            }
+            Self::NotOneByte { scalar, name } => {
+                write!(
+                    f,
+                    "`{scalar:?}` is not one byte in UTF-8, so it cannot be a `{name}`"
+                )
             }
         }
     }
@@ -325,7 +365,49 @@ impl LiteralElaborationError {
             Self::TooLarge { name, below, .. } => {
                 Some(format!("a `{name}` takes numerals below {below}"))
             }
+            Self::NotOneByte { scalar, .. } => {
+                let mut encoded = [0; 4];
+                let bytes = scalar.encode_utf8(&mut encoded).as_bytes();
+                let shown: Vec<String> = bytes.iter().map(|byte| format!("{byte:#04x}")).collect();
+                Some(format!(
+                    "`{scalar:?}` is {} bytes in UTF-8: `[{}]`",
+                    bytes.len(),
+                    shown.join(", ")
+                ))
+            }
             Self::NegativeNat | Self::Negative(_) => None,
+        }
+    }
+
+    /// `refused` with what explains this and how to write what was meant.
+    #[must_use]
+    pub fn advise<R: Advised>(&self, refused: R) -> R {
+        let refused = match self.note() {
+            Some(note) => refused.note(note),
+            None => refused,
+        };
+        match self.help() {
+            Some(help) => refused.help(help),
+            None => refused,
+        }
+    }
+
+    /// How to write what was meant instead.
+    #[must_use]
+    pub fn help(&self) -> Option<String> {
+        match self {
+            Self::NotOneByte { scalar, .. } => {
+                let text = format!("{:?}", scalar.to_string());
+                let code = u32::from(*scalar);
+                if code < 256 {
+                    Some(format!(
+                        "write `{code:#04x}` for the byte {code}, or `{text}.to_utf8()` for its encoding"
+                    ))
+                } else {
+                    Some(format!("write `{text}.to_utf8()` for its encoding"))
+                }
+            }
+            Self::NegativeNat | Self::Negative(_) | Self::TooLarge { .. } => None,
         }
     }
 }

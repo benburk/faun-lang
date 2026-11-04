@@ -951,15 +951,18 @@ impl<'a> Specializer<'a> {
                 let low = self.natural_numeral(
                     module,
                     span,
-                    start.magnitude.clone(),
-                    start.negative,
+                    (start.magnitude.clone(), start.negative, start.character),
                     ty,
                 )?;
                 tests.push(self.at_most((module, span), low, held.clone(), ty)?);
             }
             if let Some(end) = end {
-                let high =
-                    self.natural_numeral(module, span, end.magnitude.clone(), end.negative, ty)?;
+                let high = self.natural_numeral(
+                    module,
+                    span,
+                    (end.magnitude.clone(), end.negative, end.character),
+                    ty,
+                )?;
                 tests.push(self.at_most((module, span), held, high, ty)?);
             }
             return Ok(Pattern::Bind(local));
@@ -972,6 +975,7 @@ impl<'a> Specializer<'a> {
             t::Pattern::Number {
                 magnitude,
                 negative,
+                character,
             } => match ty {
                 Type::Named(name, _) => self
                     .prelude
@@ -979,14 +983,17 @@ impl<'a> Specializer<'a> {
                     .iter()
                     .find(|word| word.ty == *name)
                     .map(|word| {
-                        crate::blessed::numeral(
-                            magnitude.clone(),
-                            *negative,
-                            NumeralType::Word(word),
-                            self.prelude,
-                        )
-                        .map(|literal| (literal, word.equals))
-                        .map_err(|failure| located(module, span, &failure.to_string()))
+                        let kind = NumeralType::Word(word);
+                        if *character {
+                            crate::blessed::character(magnitude, kind, self.prelude).map_err(
+                                |failure| {
+                                    failure.advise(located(module, span, &failure.to_string()))
+                                },
+                            )?;
+                        }
+                        crate::blessed::numeral(magnitude.clone(), *negative, kind, self.prelude)
+                            .map(|literal| (literal, word.equals))
+                            .map_err(|failure| located(module, span, &failure.to_string()))
                     })
                     .transpose()?,
                 _ => None,
@@ -1602,20 +1609,23 @@ impl<'a> Specializer<'a> {
         self.natural_numeral(
             module,
             span,
-            numeral.magnitude.clone(),
-            numeral.negative,
+            (
+                numeral.magnitude.clone(),
+                numeral.negative,
+                numeral.character,
+            ),
             ty,
         )
     }
 
-    /// A numeral with no point, `magnitude` negated or not, at `ty`, which
-    /// must be one a numeral can be.
+    /// A numeral with no point, `magnitude` negated or not and written as
+    /// a character literal or not, at `ty`, which must be one a numeral can
+    /// be.
     fn natural_numeral(
         &mut self,
         module: ModuleId,
         span: crate::ast::Span,
-        magnitude: BigUint,
-        negative: bool,
+        (magnitude, negative, character): (BigUint, bool, bool),
         ty: &Type,
     ) -> Result<Expr, Refusal> {
         let kind = match ty {
@@ -1640,6 +1650,10 @@ impl<'a> Specializer<'a> {
                 "a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`",
             )
         })?;
+        if character {
+            crate::blessed::character(&magnitude, kind, self.prelude)
+                .map_err(|failure| failure.advise(located(module, span, &failure.to_string())))?;
+        }
         let literal = crate::blessed::numeral(magnitude, negative, kind, self.prelude)
             .map_err(|failure| located(module, span, &failure.to_string()))?;
         self.literal(module, span, &literal, ty)
@@ -1818,6 +1832,7 @@ fn convert_pattern(pattern: &t::Pattern) -> Pattern {
         t::Pattern::Number {
             magnitude,
             negative,
+            ..
         } => Pattern::Number {
             magnitude: magnitude.clone(),
             negative: *negative,

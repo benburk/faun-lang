@@ -350,6 +350,8 @@ struct PendingNumeral {
     /// For a decimal, the power of ten `magnitude` is over: a float's
     /// numeral, where the others are integers'.
     scale: Option<u32>,
+    /// Whether it was written as a character literal.
+    character: bool,
     ty: Ty,
     resolved: bool,
 }
@@ -1067,6 +1069,7 @@ impl Checker<'_> {
             h::Pattern::Number {
                 magnitude,
                 negative,
+                character,
             } => {
                 self.pending_numerals.push(PendingNumeral {
                     site: None,
@@ -1075,6 +1078,7 @@ impl Checker<'_> {
                     magnitude: magnitude.clone(),
                     negative: *negative,
                     scale: None,
+                    character: *character,
                     ty: expected.clone(),
                     resolved: false,
                 });
@@ -1089,6 +1093,7 @@ impl Checker<'_> {
                         magnitude: bound.magnitude.clone(),
                         negative: bound.negative,
                         scale: None,
+                        character: bound.character,
                         ty: expected.clone(),
                         resolved: false,
                     });
@@ -1369,15 +1374,21 @@ impl Checker<'_> {
             h::ExprKind::Dual(dual) => {
                 Ok(self.defer_tag(module, expression.span, dual, None, Vec::new()))
             }
-            h::ExprKind::Number(magnitude) => {
+            h::ExprKind::Number(_) | h::ExprKind::Character(_) => {
+                let (magnitude, character) = match &expression.kind {
+                    h::ExprKind::Number(magnitude) => (magnitude.clone(), false),
+                    h::ExprKind::Character(scalar) => (u32::from(*scalar).into(), true),
+                    _ => unreachable!("guarded"),
+                };
                 let ty = self.infer.fresh();
                 self.pending_numerals.push(PendingNumeral {
                     site: Some(expression.site),
                     module,
                     span: expression.span,
-                    magnitude: magnitude.clone(),
+                    magnitude,
                     negative: false,
                     scale: None,
+                    character,
                     ty: ty.clone(),
                     resolved: false,
                 });
@@ -1392,6 +1403,7 @@ impl Checker<'_> {
                     magnitude: digits.clone(),
                     negative: false,
                     scale: Some(*scale),
+                    character: false,
                     ty: ty.clone(),
                     resolved: false,
                 });
@@ -1575,12 +1587,13 @@ impl Checker<'_> {
             h::ExprKind::Unary(super::ast::UnaryOp::Negate, value)
                 if matches!(
                     value.kind,
-                    h::ExprKind::Number(_) | h::ExprKind::Decimal(..)
+                    h::ExprKind::Number(_) | h::ExprKind::Character(_) | h::ExprKind::Decimal(..)
                 ) =>
             {
-                let (magnitude, scale) = match &value.kind {
-                    h::ExprKind::Number(magnitude) => (magnitude.clone(), None),
-                    h::ExprKind::Decimal(digits, scale) => (digits.clone(), Some(*scale)),
+                let (magnitude, scale, character) = match &value.kind {
+                    h::ExprKind::Number(magnitude) => (magnitude.clone(), None, false),
+                    h::ExprKind::Character(scalar) => (u32::from(*scalar).into(), None, true),
+                    h::ExprKind::Decimal(digits, scale) => (digits.clone(), Some(*scale), false),
                     _ => unreachable!("guarded"),
                 };
                 let ty = self.infer.fresh();
@@ -1591,6 +1604,7 @@ impl Checker<'_> {
                     magnitude,
                     negative: true,
                     scale,
+                    character,
                     ty: ty.clone(),
                     resolved: false,
                 });

@@ -1329,6 +1329,36 @@ const RUNNING: &[(&str, &str, u32)] = &[
         // 13 & 19 is 1, and 16 | 32 is 48.
         55,
     ),
+    (
+        "a character literal is its scalar at a wide integer, and an ASCII one is a byte",
+        "import std.host {Host}
+
+         lower : U8 -> Bool
+         lower('a'..'z') -> True
+         lower(_) -> False
+
+         accented(x) -> x == 'é'
+
+         n : Nat
+         n = 'é'
+
+         w : U32
+         w = '\\u{e9}'
+
+         a : U8
+         a = 'a'
+
+         bit : Bool -> Nat
+         bit(b) -> b.to_nat()
+
+         main! : Host -> []
+         main!(host) -> (
+           wide = bit(n == 233) + bit(w == 233) * 2 + bit(accented(U32.of_nat(233))) * 4
+           bytes = bit(a == 97) * 8 + bit(lower('q')) * 16 + bit(\"q\".to_utf8() == ['q']) * 32
+           host.exit!(U8.of_nat(wide + bytes))
+         )",
+        63,
+    ),
 ];
 
 #[test]

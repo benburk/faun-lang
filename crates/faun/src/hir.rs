@@ -182,6 +182,8 @@ pub struct Dual {
 pub struct Bound {
     pub magnitude: BigUint,
     pub negative: bool,
+    /// Whether it was written as a character literal.
+    pub character: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +200,8 @@ pub enum Pattern<D = Dual> {
     Number {
         magnitude: BigUint,
         negative: bool,
+        /// Whether it was written as a character literal.
+        character: bool,
     },
     /// `lo..hi`, inclusive, either end open where it is `None`.
     Range(Option<Bound>, Option<Bound>),
@@ -418,6 +422,7 @@ impl Expr {
             | ExprKind::Associated(..)
             | ExprKind::Dual(_)
             | ExprKind::Number(_)
+            | ExprKind::Character(_)
             | ExprKind::Decimal(..) => Ok(()),
             ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
                 StringPart::Text(_) => Ok(()),
@@ -485,6 +490,7 @@ impl Expr {
             | ExprKind::Associated(..)
             | ExprKind::Dual(_)
             | ExprKind::Number(_)
+            | ExprKind::Character(_)
             | ExprKind::Decimal(..) => {}
             ExprKind::String(parts) => {
                 for part in parts {
@@ -568,6 +574,8 @@ pub enum ExprKind {
     /// A word a declaration claims, whose reading its position decides.
     Dual(Dual),
     Number(BigUint),
+    /// A character literal, a numeral of its scalar value.
+    Character(char),
     /// A decimal numeral, `digits / 10^scale`, which only a float is.
     Decimal(BigUint, u32),
     String(Vec<StringPart>),

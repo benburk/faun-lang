@@ -1,0 +1,8 @@
+import std.host {Host}
+
+high : U8 -> Bool
+high('\u{80}'..'\u{ff}') -> True
+high(_) -> False
+
+main! : Host -> []
+main!(host) -> host.exit!(if high(0xe9) then 1 else 0)

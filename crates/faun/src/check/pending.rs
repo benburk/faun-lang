@@ -492,19 +492,19 @@ impl Checker<'_> {
                     .help("convert a value with `of_nat`"));
             }
         };
+        let refuse = |error: blessed::LiteralElaborationError| {
+            error.advise(failure(numeral.module, numeral.span, error.to_string()))
+        };
+        if numeral.character {
+            blessed::character(&numeral.magnitude, kind, self.prelude).map_err(refuse)?;
+        }
         let value = blessed::numeral(
             numeral.magnitude.clone(),
             numeral.negative,
             kind,
             self.prelude,
         )
-        .map_err(|error| {
-            let refused = failure(numeral.module, numeral.span, error.to_string());
-            match error.note() {
-                Some(note) => refused.note(note),
-                None => refused,
-            }
-        })?;
+        .map_err(refuse)?;
         if let Some(site) = numeral.site {
             self.checked.literals.insert(site, value);
         }
@@ -670,6 +670,7 @@ impl Checker<'_> {
                     magnitude: numeral.magnitude.clone(),
                     negative: numeral.negative,
                     scale: numeral.scale,
+                    character: numeral.character,
                 },
             );
         }

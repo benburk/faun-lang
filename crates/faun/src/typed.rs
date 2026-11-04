@@ -192,6 +192,8 @@ pub struct Numeral {
     pub magnitude: num_bigint::BigUint,
     pub negative: bool,
     pub scale: Option<u32>,
+    /// Whether it was written as a character literal.
+    pub character: bool,
 }
 
 #[derive(Clone, Debug)]
