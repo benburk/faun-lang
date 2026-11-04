@@ -1,0 +1,8 @@
+error: `Shape` is imported as `shape`, which is not capitalised
+ --> a_type_renamed_to_lowercase_keeps_its_own_name/main.fn:1:25
+  |
+1 | import shapes {Shape.*: shape}
+  |                         ^^^^^ a type or constructor is named in capitals
+  |
+  = note: a capitalised word names a type or constructor, and a lowercase one a value or function
+  = help: import it under its own name, as `{Shape.*}`

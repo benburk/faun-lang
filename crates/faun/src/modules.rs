@@ -438,8 +438,8 @@ impl Loader {
             };
             (declared.text(source) == name).then_some(declared.0)
         });
-        // Where it is imported, and the last part of the module it is
-        // imported from.
+        // Where it is imported, the last part of the module it is imported
+        // from, and whether its constructors come with it.
         let imported = syntax.items.iter().find_map(|item| match item {
             Item::Import(import) => {
                 let exposure = import
@@ -447,7 +447,7 @@ impl Loader {
                     .iter()
                     .find(|exposure| exposure.local.text(source) == name)?;
                 let module = import.path.last().map_or("other", |part| part.text(source));
-                Some((exposure.local.0, module))
+                Some((exposure.local.0, module, exposure.constructors))
             }
             _ => None,
         });
@@ -460,18 +460,20 @@ impl Loader {
         };
         let diagnostic = diagnostic.at(file, declared).label("declared here");
         match imported {
-            Some((imported, module)) => {
+            Some((imported, module, constructors)) => {
                 // A renamed name keeps its case, so a value's new name is
-                // lowercase and a type's capitalised.
+                // lowercase and a type's capitalised: `helpers_double`, and
+                // `ShapesShape`, each led by the module it comes from.
                 let renamed = if kind == "value" {
                     format!("{module}_{name}")
                 } else {
-                    "Other".to_owned()
+                    format!("{}{name}", capitalised_words(module))
                 };
+                let constructors = if constructors { ".*" } else { "" };
                 diagnostic
                     .secondary(file, imported, "imported here")
                     .help(format!(
-                        "import it under another name, as `{{{name}: {renamed}}}`"
+                        "import it under another name, as `{{{name}{constructors}: {renamed}}}`"
                     ))
             }
             None => diagnostic
@@ -984,12 +986,36 @@ fn renamed_alike(exposure: &super::ast::Exposure, file: &Source) -> Result<(), D
         ("lowercase", label, first.to_ascii_lowercase())
     };
     let suggested = format!("{first}{rest}");
+    let constructors = if exposure.constructors { ".*" } else { "" };
+    // Where the new name in the right case is the old one, as `shape` for
+    // `Shape`, the rename asks for nothing the name does not already have.
+    let help = if suggested == exported {
+        format!("import it under its own name, as `{{{exported}{constructors}}}`")
+    } else {
+        format!("rename it as `{{{exported}{constructors}: {suggested}}}`")
+    };
     let message = format!("`{exported}` is imported as `{local}`, which is not {wanted}");
     Err(Diagnostic::new(message)
         .at(file, exposure.local.0)
         .label(label)
         .note("a capitalised word names a type or constructor, and a lowercase one a value or function")
-        .help(format!("rename it as `{{{exported}: {suggested}}}`")))
+        .help(help))
+}
+
+/// `words` with each word between underscores capitalised and the
+/// underscores dropped: `shapes` is `Shapes`, and `flat_shapes` is
+/// `FlatShapes`.
+fn capitalised_words(words: &str) -> String {
+    let mut joined = String::with_capacity(words.len());
+    for word in words.split('_') {
+        let mut characters = word.chars();
+        let Some(first) = characters.next() else {
+            continue;
+        };
+        joined.push(first.to_ascii_uppercase());
+        joined.push_str(characters.as_str());
+    }
+    joined
 }
 
 fn merge_map(
@@ -1152,5 +1178,12 @@ mod tests {
             .find(|module| module.path.ends_with("nat.fn"))
             .unwrap();
         assert_eq!(loaded.symbols.text(nat.namespace), "Mstd_nat");
+    }
+
+    #[test]
+    fn a_module_s_words_lead_a_type_s_new_name_capitalised() {
+        assert_eq!(capitalised_words("shapes"), "Shapes");
+        assert_eq!(capitalised_words("flat_shapes"), "FlatShapes");
+        assert_eq!(capitalised_words("v2__io_"), "V2Io");
     }
 }

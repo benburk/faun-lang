@@ -1,0 +1,10 @@
+error: type `Shape` is both imported and declared
+ --> a_type_is_not_both_imported_and_declared/main.fn:3:1
+  |
+1 | import shapes {Shape.*}
+  |                ----- imported here
+...
+3 | Shape : [Point]
+  | ^^^^^ declared here
+  |
+  = help: import it under another name, as `{Shape.*: ShapesShape}`

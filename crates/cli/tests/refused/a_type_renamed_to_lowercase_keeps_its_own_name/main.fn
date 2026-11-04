@@ -1,0 +1,9 @@
+import shapes {Shape.*: shape}
+import std.host {Host}
+
+side : shape -> Nat
+side(Circle(r)) -> r
+side(Square(s)) -> s
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(side(Square(2))))
