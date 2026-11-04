@@ -177,45 +177,16 @@ to the language.
 
 ## Open: indexed types
 
-Indexed types are a restricted dependent form that may still fit. An index
-is a value in a type, as in a length-indexed list, but indices range over a
-fixed, decidable theory, typically naturals under linear arithmetic, apart
-from the program's terms. `append` could say
-`(Vec(m, a), Vec(n, a)) -> Vec(m + n, a)`, and the checker would discharge
-`m + n = k` in a solver for linear arithmetic, never evaluating a user
-definition. `Vec(m * n, a)` stays out, since multiplying two variables
-makes the theory undecidable.
-
-Ori's design note (`design/indexed-types.md` in ori-lang) works this out.
-What it could buy Faun:
-
-- **Lookups that cannot miss.** A `get` whose index is shown below the
-  length could answer the element, not a `Result`, and need no check at
-  run time.
-- **Lengths that must agree.** `zip` of two lists of one length, or the
-  dimensions of matrices multiplied, checked where they are built.
-- **Nothing at run time.** An index is erased, so a `Vec(n, a)` would be a
-  `List(a)` in memory.
-
-Much of Ori's case for them was termination: a length index would let
-mergesort's halving be seen to descend. Faun no longer checks termination,
-so that part of the case is gone.
-
-For Faun to adopt them, at least these would have to hold:
-
-- Indices are inferred in ordinary code. A program that never writes one
-  reads and checks as it does today, and signatures stay optional.
-- Checking stays within the time goal on the example programs.
-- Indices erase, so no program gets slower or larger.
-- Errors name the index fact that failed in the program's own terms.
-- Real programs in the corpus get shorter or faster: fewer `Result`s from
-  lookups, or fewer checks at run time.
-
-Whether they do is not decided.
+Indexed types are the restricted form that may still fit: a type carries a
+value from a small decidable language, such as a length, and a decision
+procedure checks it without running the program. Faun already has their
+lowest tier, tags as phantom type parameters. Whether to go further is
+open; [indexed types](indexed-types.md) owns the question.
 
 ## Related
 
 - [Types](types.md): what the type system is, and why it stops at HM
+- [Indexed types](indexed-types.md): the restricted form left open
 - [Computation](computation.md): why termination is not checked
 - [Totality](totality.md): what a total language would allow types to do
 - [Termination proposal](proposals/approved/termination.md): the 10 ms goal

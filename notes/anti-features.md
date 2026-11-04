@@ -83,4 +83,4 @@ These are open rather than refused:
 
 - a foreign-function interface
 - concurrency
-- indexed types ([dependent types](dependent-types.md))
+- indexed types ([indexed types](indexed-types.md))

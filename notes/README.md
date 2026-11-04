@@ -20,8 +20,9 @@ not needed.
   simple and hard, the designs in between, and why Faun dropped it
 - [Types](types.md): inference, rows, `where` bounds, aliases and
   monomorphization
-- [Dependent types](dependent-types.md): why Faun leaves them out, and what
-  indexed types might still offer
+- [Dependent types](dependent-types.md): why Faun leaves them out
+- [Indexed types](indexed-types.md): types that carry a length or a tag,
+  between Faun's types and dependent ones, left open
 - [Anti-features](anti-features.md): everything left out, each linked to its
   owner
 
