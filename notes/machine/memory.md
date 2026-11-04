@@ -44,6 +44,8 @@ block returns to a private heap. Where the heap is full, it asks the target
 for more; where there is no more, the program exits with status 2. Where a
 call goes deeper than the stack has room for, an x86-64 Linux or 6502
 program says `stack overflow` on standard error and exits with status 3.
+A 6502 program without recursion whose calls could go that deep is refused
+when it is built.
 
 ## Writing in place
 

@@ -358,6 +358,7 @@ pub(crate) fn lower(program: &Program) -> Result<Code, String> {
         let end = (usize::from(code.reset) + code.bytes.len()).next_multiple_of(2);
         let end = u16::try_from(end).map_err(|_| too_large(end))?;
         if end <= heap {
+            within_the_stacks(program, heap)?;
             return Ok(code);
         }
         heap = end;
@@ -383,6 +384,64 @@ pub(crate) fn check_frames(program: &Program) -> Result<(), String> {
         })?;
     }
     Ok(())
+}
+
+/// Where calls cannot go round, refuse a program whose deepest calls would
+/// not fit: more return addresses than the hardware stack holds, or more
+/// frames than lie between the heap's start, at the end of the image, and
+/// the top of the frames. Nothing checks either as it runs, and saying so
+/// here costs the program nothing.
+fn within_the_stacks(program: &Program, heap: u16) -> Result<(), String> {
+    let frames = frames(program);
+    let Some(depth) = super::calls::depth(program, &frames) else {
+        return Ok(());
+    };
+    let entry = program.entry();
+    let name = |id: FunctionId| program.name(program.function(id).name);
+    // The reset routine calls the entry where it comes back, and runs into
+    // it where it does not.
+    let called = if program.comes_back(entry) {
+        super::calls::RETURN_ADDRESS
+    } else {
+        0
+    };
+    let pushed = depth.pushed.bytes.saturating_add(called);
+    if pushed > super::calls::STACK {
+        let deep = pushed / super::calls::RETURN_ADDRESS;
+        let most = super::calls::STACK / super::calls::RETURN_ADDRESS;
+        return Err(format!(
+            "mos6502-sim65 calls go {deep} deep, from `{}` down to `{}`, and the hardware stack holds {most} return addresses",
+            name(entry),
+            name(depth.pushed.ends)
+        ));
+    }
+    let room = u32::from(FRAMES_TOP).saturating_sub(u32::from(heap));
+    if depth.framed.bytes > room {
+        return Err(format!(
+            "mos6502-sim65 frames from `{}` down to `{}` take {} bytes at once, and {room} lie between the end of the image and the top of the frames",
+            name(entry),
+            name(depth.framed.ends),
+            depth.framed.bytes
+        ));
+    }
+    Ok(())
+}
+
+/// How many bytes each function's frame takes, and nothing for one the
+/// simulator answers.
+fn frames(program: &Program) -> Vec<u32> {
+    let mut state = Lowering::new(program, Assembler::new(0), 0);
+    state.needs = reads(program);
+    program
+        .functions()
+        .iter()
+        .map(|function| {
+            function.body().map_or(0, |body| {
+                let plan = state.plan(body).expect("accepted frame size");
+                u32::from(plan.frame)
+            })
+        })
+        .collect()
 }
 
 fn too_large(end: usize) -> String {

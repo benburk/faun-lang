@@ -319,3 +319,113 @@ fn frames_reaching_the_image_say_the_stack_overflowed() {
     });
     says_stack_overflow(&program);
 }
+
+/// A chain of `links` functions from `main`, each handing the next one more
+/// than it was handed, from nought, and keeping `kept` products of what it
+/// was handed across the call; the last answers what it was handed. Data of
+/// `filler` bytes goes before the code.
+fn chain(links: u64, kept: u64, filler: usize) -> Program {
+    let (mut program, main) = Program::new("main");
+    let functions: Vec<FunctionId> = (0..links)
+        .map(|at| program.declare(&format!("link{at}"), &[Class::Word], &[Class::Word]))
+        .collect();
+    for (at, &function) in functions.iter().enumerate() {
+        let next = functions.get(at + 1).copied();
+        program.define(function, |b, params| {
+            let n = params[0];
+            let Some(next) = next else {
+                b.ret(&[n]);
+                return;
+            };
+            let mut products = Vec::new();
+            for step in 1..=kept {
+                let step = b.constant(Class::Word, step);
+                let product = b.binary(Binary::Mul, n, step);
+                products.push(product);
+            }
+            let one = b.constant(Class::Word, 1);
+            let more = b.binary(Binary::Add, n, one);
+            let rest = b.call(next, &[more]);
+            let mut total = rest[0];
+            for product in products {
+                total = b.binary(Binary::Add, total, product);
+            }
+            b.ret(&[total]);
+        });
+    }
+    program.define(main, |b, _| {
+        let filler = b.data(&vec![0; filler.max(1)]);
+        let at = b.address_of(filler);
+        let zero = b.load(Width::Byte, at, Offset::Bytes(0));
+        let answer = b.call(functions[0], &[zero]);
+        b.ret(&answer);
+    });
+    program
+}
+
+/// What `chain` answers: the last link's count, and each other link's
+/// products of its own.
+fn chain_answer(links: u64, kept: u64) -> u16 {
+    let each: u64 = (1..=kept).sum();
+    let products: u64 = (0..links - 1).map(|at| at * each).sum();
+    let answer = (links - 1 + products) % 0x1_0000;
+    u16::try_from(answer).expect("a word")
+}
+
+/// Where calls cannot go round, how deep they go is known before the program
+/// runs, and nothing checks it as it does: one going deeper than the
+/// hardware stack's 128 return addresses is refused rather than built, and
+/// says how deep, from where to where. The reset routine's call to `main` is
+/// one of them.
+#[test]
+fn calls_too_deep_for_the_stack_without_a_cycle_are_refused() {
+    let refused = TARGET.prepare(&chain(140, 0, 0)).unwrap_err();
+    assert_eq!(
+        refused,
+        "mos6502-sim65 calls go 141 deep, from `main` down to `link139`, and the hardware stack holds 128 return addresses"
+    );
+    let refused = TARGET.prepare(&chain(128, 0, 0)).unwrap_err();
+    assert!(refused.contains("go 129 deep"), "{refused}");
+}
+
+/// Calls exactly as deep as the hardware stack holds build, and run.
+#[test]
+fn calls_as_deep_as_the_stack_holds_run() {
+    let (status, stdout, stderr) = run_reporting(&chain(127, 0, 0));
+    assert_eq!((stdout.as_str(), stderr.as_str()), ("", ""));
+    let answer = chain_answer(127, 0);
+    assert_eq!(status, Some(i32::from(answer.to_le_bytes()[0])));
+}
+
+/// Frames that would reach down into the image, in a program whose calls
+/// cannot go round, are refused too, before they could write over the code.
+/// Data fills memory up to a little short of where the frames begin, less
+/// than the chain's frames take; with more room left, it runs.
+#[test]
+fn frames_too_deep_for_memory_without_a_cycle_are_refused() {
+    const LINKS: u64 = 4;
+    const KEPT: u64 = 60;
+    let code = |filler: usize| {
+        let image = TARGET
+            .compile_machine_ir(&chain(LINKS, KEPT, filler))
+            .expect("a chain that fits");
+        image.len() - filler
+    };
+    // Without the data, how much image the rest takes; the frames' top is
+    // `$FD00`, and the image is loaded at `$0200`.
+    let rest = code(1);
+    let room = |left: usize| 0xFD00 - 0x0200 - rest - left;
+    let refused = TARGET.prepare(&chain(LINKS, KEPT, room(100))).unwrap_err();
+    assert!(
+        refused.starts_with("mos6502-sim65 frames from `main` down to `link2` take "),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("lie between the end of the image and the top of the frames"),
+        "{refused}"
+    );
+    let (status, stdout, stderr) = run_reporting(&chain(LINKS, KEPT, room(2000)));
+    assert_eq!((stdout.as_str(), stderr.as_str()), ("", ""));
+    let answer = chain_answer(LINKS, KEPT);
+    assert_eq!(status, Some(i32::from(answer.to_le_bytes()[0])));
+}

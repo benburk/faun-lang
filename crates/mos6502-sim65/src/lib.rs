@@ -8,7 +8,9 @@
 //! which bounds recursion at 128 deep until those move too. A function in
 //! a call cycle checks the stack pointer on the way in, and a call that
 //! would go deeper says `stack overflow` on standard error and exits with
-//! status 3.
+//! status 3. Where calls cannot go round, how deep they go is known before
+//! the program runs, and one whose calls would go deeper, or whose frames
+//! would reach the image, is refused rather than built.
 //!
 //! The image is a twelve-byte header, the data, the globals and the code,
 //! loaded at `$0200`. The platform is the simulator's hooks. Memory past the
