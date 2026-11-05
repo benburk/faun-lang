@@ -1,4 +1,6 @@
-.claude/*
-!.claude/skills/
 .env
-/target/
+.direnv/
+.claude/worktrees/
+.claude/settings.local.json
+
+target/

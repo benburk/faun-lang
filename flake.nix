@@ -1,7 +1,5 @@
 {
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
-  };
+  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
 
   outputs =
     { self, nixpkgs }:
@@ -52,18 +50,23 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              cargo
-              cargo-nextest
-              rustc
-              clippy
-              rust-analyzer
-              rustfmt
-              wasmtime
-              cc65
+              just
               dprint
               fd
               ripgrep
               nixfmt
+              cargo
+              rustc
+              clippy
+              rustfmt
+              rust-analyzer
+              # `just test` runs the tests with nextest, and the backends'
+              # programs on wasmtime and cc65's sim65.
+              cargo-nextest
+              wasmtime
+              cc65
+              # `just tree-sitter` generates the grammar from grammar.js,
+              # which tree-sitter evaluates with node.
               tree-sitter
               nodejs
             ];
