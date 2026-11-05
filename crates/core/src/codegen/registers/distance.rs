@@ -6,6 +6,9 @@
 //! much as a long way round, so a value read after a loop gives way to one
 //! read inside it.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 use super::{BlockId, Code, Liveness, Point, Register, VReg, successors, visit_terminator_values};
 
 /// What leaving one loop counts as, in points.
@@ -49,19 +52,37 @@ impl Distances {
             out[at] = vec![NEVER; liveness.at[layout.terminator.index()].len()];
             ends[at] = layout.terminator;
         }
-        let leaving = leaving(code);
+        let walk = walk(code);
+        let leaving = leaving(code, &walk.back);
         let mut distances = Self { reads, out, ends };
-        distances.solve(code, liveness, &leaving);
+        distances.solve(code, liveness, &leaving, &walk.left);
         distances
     }
 
     /// Carry each block's distances back to its predecessors until none
     /// shortens, revisiting only the blocks whose successors changed.
-    fn solve<R: Register>(&mut self, code: &Code<R>, liveness: &Liveness, leaving: &[Vec<u32>]) {
+    ///
+    /// The pending block the walk left first goes next, so a block is
+    /// mostly carried back once its successors are settled: outside loops
+    /// once, and a loop's body as often as the loop has to go round. Taken
+    /// in any other order, a distance shortened late is carried back again
+    /// through every block it already went through.
+    fn solve<R: Register>(
+        &mut self,
+        code: &Code<R>,
+        liveness: &Liveness,
+        leaving: &[Vec<u32>],
+        left: &[BlockId],
+    ) {
         let predecessors = predecessors(code);
-        let mut pending: Vec<BlockId> = liveness.blocks.iter().map(|layout| layout.block).collect();
+        let mut rank = vec![0; code.blocks.len()];
+        for (order, id) in left.iter().enumerate() {
+            rank[id.index()] = order;
+        }
+        let mut pending: BinaryHeap<Reverse<usize>> = (0..left.len()).map(Reverse).collect();
         let mut queued = vec![true; code.blocks.len()];
-        while let Some(id) = pending.pop() {
+        while let Some(Reverse(order)) = pending.pop() {
+            let id = left[order];
             let at = id.index();
             queued[at] = false;
             let mut changed = false;
@@ -77,7 +98,7 @@ impl Distances {
                 for &from in &predecessors[at] {
                     if !queued[from.index()] {
                         queued[from.index()] = true;
-                        pending.push(from);
+                        pending.push(Reverse(rank[from.index()]));
                     }
                 }
             }
@@ -155,14 +176,25 @@ fn predecessors<R: Register>(code: &Code<R>) -> Vec<Vec<BlockId>> {
     predecessors
 }
 
-/// For each block, which of its edges go back to a block the walk from
-/// its function's entry is still within: the edges that close a loop.
-/// Block order says nothing of this, as a branch's join may be made before
-/// its arms, so each is found by walking.
-fn back_edges<R: Register>(code: &Code<R>) -> Vec<[bool; 2]> {
+/// What walking depth first from each function's entry finds.
+struct Walk {
+    /// For each block, which of its edges go back to a block the walk is
+    /// still within: the edges that close a loop. Block order says nothing
+    /// of this, as a branch's join may be made before its arms, so each is
+    /// found by walking.
+    back: Vec<[bool; 2]>,
+    /// Every block, in the order the walk left it: each after every
+    /// successor it reaches by an edge that is not a back edge.
+    left: Vec<BlockId>,
+}
+
+fn walk<R: Register>(code: &Code<R>) -> Walk {
     let count = code.blocks.len();
     let mut seen = vec![Seen::Not; count];
-    let mut back = vec![[false; 2]; count];
+    let mut walk = Walk {
+        back: vec![[false; 2]; count],
+        left: Vec::with_capacity(count),
+    };
     // Every function from its entry, then any block no entry reaches.
     let roots = code
         .functions
@@ -171,10 +203,10 @@ fn back_edges<R: Register>(code: &Code<R>) -> Vec<[bool; 2]> {
         .chain((0..count).map(BlockId::at));
     for root in roots {
         if seen[root.index()] == Seen::Not {
-            walk_from(code, root, &mut seen, &mut back);
+            walk_from(code, root, &mut seen, &mut walk);
         }
     }
-    back
+    walk
 }
 
 /// Where a block stands in the walk [`back_edges`] makes.
@@ -186,13 +218,8 @@ enum Seen {
 }
 
 /// Walk depth first from `root`, marking each edge to a block the walk is
-/// still within.
-fn walk_from<R: Register>(
-    code: &Code<R>,
-    root: BlockId,
-    seen: &mut [Seen],
-    back: &mut [[bool; 2]],
-) {
+/// still within, and noting each block as the walk leaves it.
+fn walk_from<R: Register>(code: &Code<R>, root: BlockId, seen: &mut [Seen], walk: &mut Walk) {
     seen[root.index()] = Seen::Within;
     // Each block being walked, and which of its edges is next.
     let mut walking = vec![(root, 0)];
@@ -200,6 +227,7 @@ fn walk_from<R: Register>(
         let (at, edge) = *top;
         if edge == 2 {
             seen[at.index()] = Seen::Left;
+            walk.left.push(at);
             walking.pop();
             continue;
         }
@@ -212,7 +240,7 @@ fn walk_from<R: Register>(
                 seen[target.index()] = Seen::Within;
                 walking.push((target, 0));
             }
-            Seen::Within => back[at.index()][edge] = true,
+            Seen::Within => walk.back[at.index()][edge] = true,
             Seen::Left => {}
         }
     }
@@ -222,9 +250,8 @@ fn walk_from<R: Register>(
 /// it leaves. A loop is found by an edge back to a block the walk is still
 /// within; its body is what reaches that edge's source without passing its
 /// head.
-fn leaving<R: Register>(code: &Code<R>) -> Vec<Vec<u32>> {
+fn leaving<R: Register>(code: &Code<R>, back: &[[bool; 2]]) -> Vec<Vec<u32>> {
     let predecessors = predecessors(code);
-    let back = back_edges(code);
     // The loops each block is in, by the order they were found.
     let mut within: Vec<Vec<usize>> = vec![Vec::new(); code.blocks.len()];
     let mut loops = 0;
