@@ -5,10 +5,6 @@ set lazy
 default:
     just --list --unsorted
 
-# Install dependencies and set up the development environment
-bootstrap:
-    cargo build
-
 alias fmt := format
 
 # Format the code and docs
