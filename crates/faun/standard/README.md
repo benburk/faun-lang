@@ -66,10 +66,12 @@ have `min` and `max`, and `U8` the ASCII tests `is_digit`, `is_ascii_lower`,
 byte order and `equals` from it, `from_ascii`, `from_utf8` and `to_utf8`,
 and `Str.hex(bytes)`, the bytes as lowercase hexadecimal, as a digest is
 shown.
-`Bool`, the integers and `Str` say themselves with `to_str`, and a splice
-`${value}` in a string is its value's `to_str`, the pieces joined with
-`concat`. A width pads that text with spaces: `${value:<12}` is
-`value.to_str().pad_end(12)` and `${value:>7}` is `pad_start(7)`. The
+`Bool`, the integers and `Str` say themselves with `to_str`, a `Str` as a
+literal writes it, quoted and escaped: `"a\tb".to_str()` is `"\"a\\tb\""`.
+A splice `${value}` in a string is its value's text, a `Str` as it is and
+anything else its `to_str`, decided once its type is known, the pieces
+joined with `concat`. A width pads that text with spaces: `${value:<12}` is
+its `pad_end(12)` and `${value:>7}` its `pad_start(7)`. The
 width is a numeral, counted in Unicode scalars, and text already that wide
 is left whole. A string or character literal writes `\n`, `\r`, `\t`, `\0`,
 `\\`, `\"`, `\'` and `\$` for themselves, and `\u{...}` for any scalar by
@@ -157,7 +159,7 @@ own, so `Nat.from_str(text) == Ok(48)` asks it of a `Nat` and a row.
 A closed record and a tuple have `equals`, `to_str` and `hash_into` the same
 way, and a tuple `cmp` too. A record is written with its fields in the order
 of their names, `{x: 1, y: 2}` however it was written, and a tuple with its
-members in order, `(1, a)`. A record with `*` has none of them: its other
+members in order, `(1, "a")`. A record with `*` has none of them: its other
 fields are a caller's.
 
 `value?` is an `Ok`'s value, or its `Err` answered at once by the clause or

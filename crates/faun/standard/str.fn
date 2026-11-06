@@ -19,8 +19,15 @@ Str : List(U8).(
   concat : (Str, Str) -> Str
   concat(Str(left), Str(right)) -> Str(left.concat(right))
 
+  # The text as a literal writes it: in double quotes, with `"`, `\`, a
+  # `$` opening `${`, and control characters escaped, so a string among a
+  # list's elements or a record's fields reads as one, `["a", "b, c"]`. A
+  # splice of a `Str` is its text, not this.
   to_str : Str -> Str
-  to_str(text) -> text
+  to_str(Str(bytes)) -> (
+    after = bytes.drop(1).append(0)
+    Str(['"'].concat(bytes.zip(after).flat_map(|(byte, next)| literal_byte(byte, next))).append('"'))
+  )
 
   # The bytes the string is, first to last.
   to_utf8 : Str -> List(U8)
@@ -166,6 +173,19 @@ lines_into(['\r', '\n', *rest], line, lines) -> lines_into(rest, [], [Str(line.r
 lines_into(['\n', *rest], line, lines) -> lines_into(rest, [], [Str(line.reverse()), *lines])
 lines_into([byte, *rest], line, lines) -> lines_into(rest, [byte, *line], lines)
 
+# A string's byte as a literal writes it, given the byte after it, or
+# nought after the last.
+literal_byte : (U8, U8) -> List(U8)
+literal_byte('"', _) -> ['\\', '"']
+literal_byte('\\', _) -> ['\\', '\\']
+literal_byte('$', '{') -> ['\\', '$']
+literal_byte('\n', _) -> ['\\', 'n']
+literal_byte('\r', _) -> ['\\', 'r']
+literal_byte('\t', _) -> ['\\', 't']
+literal_byte(0, _) -> ['\\', '0']
+literal_byte(byte, _) if byte < 32 | byte == 127 -> ['\\', 'u', '{', hex_digit(byte / 16), hex_digit(byte % 16), '}']
+literal_byte(byte, _) -> [byte]
+
 hex_digit : U8 -> U8
 hex_digit(digit) -> "0123456789abcdef".to_utf8().get_or(digit.to_nat(), 0)
 
@@ -191,6 +211,10 @@ then_cmp : (Order, List(U8), List(U8)) -> Order
 then_cmp(Eq, left, right) -> bytes_cmp(left, right)
 then_cmp(decided, _, _) -> decided
 
+expect "plain".to_str() == "\"plain\"" & "${"plain"}" == "plain"
+expect "say \"hi\"\\".to_str() == "\"say \\\"hi\\\"\\\\\""
+expect "a\tb\n\u{1}".to_str() == "\"a\\tb\\n\\u{01}\"" & "\${x} $5".to_str() == "\"\\\${x} $5\""
+expect ["a", "b, c"].to_str() == "[\"a\", \"b, c\"]" & "${("é", 1)}" == "(\"é\", 1)"
 expect "a,b,,c".split(",").len() == 4
 expect "a,b,,c".split(",").join("-") == "a-b--c"
 expect "one::two::".split("::").join("|") == "one|two|"

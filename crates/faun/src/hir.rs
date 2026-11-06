@@ -5,6 +5,7 @@
 //! need to be consulted after this boundary. [`SiteId`] identifies written and
 //! generated occurrences independently of their diagnostic spans.
 
+use std::collections::HashSet;
 use std::convert::Infallible;
 
 use num_bigint::BigUint;
@@ -146,13 +147,28 @@ pub struct SiteId(pub u32);
 
 /// Allocate identities for written and generated HIR in one program.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Sites(u32);
+pub(crate) struct Sites {
+    next: u32,
+    /// The `to_str` calls splices were written as. Each is a splice's text:
+    /// the value itself where specialization finds it a `Str`.
+    spliced: HashSet<SiteId>,
+}
 
 impl Sites {
     pub(crate) const fn fresh(&mut self) -> SiteId {
-        let site = SiteId(self.0);
-        self.0 = self.0.checked_add(1).expect("fewer than 2^32 HIR sites");
+        let site = SiteId(self.next);
+        self.next = self.next.checked_add(1).expect("fewer than 2^32 HIR sites");
         site
+    }
+
+    /// Mark `site`, a `to_str` call, as a written splice's text.
+    pub(crate) fn splice(&mut self, site: SiteId) {
+        self.spliced.insert(site);
+    }
+
+    /// Whether `site` is a written splice's text.
+    pub(crate) fn is_spliced(&self, site: SiteId) -> bool {
+        self.spliced.contains(&site)
     }
 
     pub(crate) const fn expr(&mut self, span: Span, kind: ExprKind) -> Expr {

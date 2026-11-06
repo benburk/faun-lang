@@ -90,13 +90,12 @@ fn entry(cx: &mut Context, main: &Main, asked: &[Symbol]) -> h::Clause {
     let span = Span::new(written, written);
     let sites = &mut cx.sites;
     let symbols = &mut cx.symbols;
-    let (print, exit, select, to_str) = (
+    let (print, exit, select) = (
         symbols.intern("print!"),
         symbols.intern("exit!"),
         symbols.intern("select"),
-        symbols.intern("to_str"),
     );
-    let failures = failures(sites, span, asked, select, to_str);
+    let failures = failures(sites, span, asked, select);
     let text = sites.expr(span, h::ExprKind::String(failures));
     let receiver = sites.expr(span, h::ExprKind::Local(h::LocalId(0)));
     let printed = sites.expr(
@@ -134,7 +133,6 @@ fn failures(
     span: Span,
     asked: &[Symbol],
     select: Symbol,
-    to_str: Symbol,
 ) -> Vec<h::StringPart> {
     let mut failures = Vec::with_capacity(asked.len());
     for (number, &expectation) in asked.iter().enumerate() {
@@ -151,11 +149,7 @@ fn failures(
             span,
             h::ExprKind::Method(Box::new(held), select, vec![nothing, numbered]),
         );
-        let text = sites.expr(
-            span,
-            h::ExprKind::Method(Box::new(selected), to_str, Vec::new()),
-        );
-        failures.push(h::StringPart::Splice(text));
+        failures.push(h::StringPart::Splice(selected));
     }
     failures
 }

@@ -1115,7 +1115,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
            points = bit(p == Point({y: 2, x: 1})) + bit(p != Point({x: 1, y: 3})) * 2 + bit(p.to_str() == \"{x: 1, y: 2}\") * 4
            slots = bit(filled(\"a\", 1) == filled(\"a\", 1)) * 8 + bit(filled(\"a\", 1) != removed) * 16
            ordered = bit(filled(\"a\", 2) < filled(\"b\", 1)) * 32 + bit(removed > filled(\"z\", 9)) * 64
-           printed = bit(\"${[filled(\"a\", 1), removed]}\" == \"[Filled(a, 1), Removed]\") * 128
+           printed = bit(\"${[filled(\"a\", 1), removed]}\" == \"[Filled(\\\"a\\\", 1), Removed]\") * 128
            keyed = Map.empty.insert(filled(\"a\", 1), 1).insert(removed, 2).insert(filled(\"a\", 1), 4)
            host.exit!(U8.of_nat(points + slots + ordered + printed - keyed.len() - keyed.get(removed).ok_or(0) + keyed.get(filled(\"a\", 1)).ok_or(0)))
          )",

@@ -136,6 +136,7 @@ impl Expr {
                 visit(left);
                 visit(right);
             }
+            ExprKind::Spliced(_, value) => visit(value),
             ExprKind::Lambda(_, inner)
             | ExprKind::Is(inner, _)
             | ExprKind::Project(inner, _)
@@ -216,6 +217,10 @@ pub enum ExprKind {
     /// has not decided. Which it is is known once the target is, where the
     /// call is specialized.
     Connective(Target, Box<Expr>, Box<Expr>),
+    /// `${value}`: the value itself where it is a `Str`, and its `to_str`
+    /// through the target otherwise. Which it is is known where the splice
+    /// is specialized, as a connective's is.
+    Spliced(Target, Box<Expr>),
     Project(Box<Expr>, Symbol),
     Widen(Box<Expr>),
     Try(Box<Expr>),

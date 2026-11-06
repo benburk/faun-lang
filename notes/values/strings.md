@@ -55,11 +55,11 @@ part of the text. It escapes `\n`, `\r`, `\t`, `\0`, `\\`, `\"`, `\'` and
 `\$` as themselves, and `\u{...}` writes any scalar by its one to six
 hexadecimal digits, as Rust does.
 
-`${value}` splices a value's `to_str` into the text, and the pieces are
-joined with `concat`. A width pads the spliced text with spaces:
-`${value:<12}` is `value.to_str().pad_end(12)`, and `${value:>7}` is
-`pad_start(7)`. The width is a numeral, and text already that wide is left
-whole.
+`${value}` splices a value's text into the string: a `Str` as it is, and
+anything else by its `to_str`. The pieces are joined with `concat`. A width
+pads the spliced text with spaces: `${value:<12}` is that text's
+`pad_end(12)`, and `${value:>7}` its `pad_start(7)`. The width is a numeral,
+and text already that wide is left whole.
 
 ```ruby
 Celsius : Int.(
@@ -72,6 +72,8 @@ expect "${Celsius(-4)}" == "-4°C"
 expect "[${"ab":<4}|${7:>3}]" == "[ab  |  7]"
 expect "${1234.5678.to_fixed(2):>9}" == "  1234.57"
 expect "\u{1F98C}" == "🦌" & "\${x}".len() == 4
+expect "${"ab"}" == "ab" & "ab".to_str() == "\"ab\""
+expect "${["a", "b, c"]}" == "[\"a\", \"b, c\"]"
 ```
 
 `Bool`, the numbers, `Str` and `List` have `to_str`. A closed record, a
@@ -79,6 +81,14 @@ tuple and a closed tag row have one without declaring it, and a declared
 type asks for the structural one by writing its signature alone. A value
 whose type has none cannot be spliced: `` `Secret` has no field or method
 `to_str` ``.
+
+A `Str`'s `to_str` writes it as a literal would: in double quotes, with
+`"`, `\`, a `$` opening `${`, and control characters escaped, so a string
+among a list's elements, a tuple's members or a tag's fields reads as one,
+and `["a", "b, c"]` is not taken for three. Whether a splice's value is a
+`Str` is known once its type is, so a generic definition splicing a value
+it was handed shows a `Str` as its text too, and asking `x.to_str()`
+instead gives the literal.
 
 A string in a pattern is a test of equality, asked before the clause's
 guard. It never covers anything, so clauses over strings end in a
@@ -162,6 +172,24 @@ Rust's `{:?}`, and no format language beyond a padding width. Number
 formatting is a method call inside the splice:
 `${x.to_fixed(2)}`. Layout belongs to text, so the width pads whatever text
 it is given.
+
+### Why does a `Str`'s `to_str` quote it, when its splice does not?
+
+Because a value inside another is written by its own `to_str`, and a
+string written bare there cannot be told from the text around it:
+`["a", "b, c"]` and `["a", "b", "c"]` both came out `[a, b, c]`, and
+`Ok("")` came out `Ok()`. With one text per type, the one a string has to
+give is the one that reads back as that string, as Rust's `Debug` and
+Python's `repr` give. A splice is where text is being built, and there a
+string is wanted as itself, so a splice of a `Str` is the string. Nothing
+else changes: a number, a tag or a record is written the same either way.
+
+The cost is that `${x}` and `x.to_str()` differ for a `Str`, and only for a
+`Str`, which a definition writing its own `to_str` has to choose between: a
+splice for a part shown as text, `"${degrees}°C"`, and `to_str` for one
+shown as a value. Where the type is generic, the splice is decided when
+the definition is specialized, as `&` on `Bool` is. See
+[quoted strings](../proposals/approved/quoted-strings.md).
 
 ### Why `${…}` rather than `{…}`?
 

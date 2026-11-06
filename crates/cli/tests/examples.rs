@@ -153,7 +153,7 @@ fn runners_print_what_a_program_answers() {
     );
     assert_eq!(
         support::run_file(&checking.entry(), b"abcd"),
-        (0, "Err(too long)\n".to_owned())
+        (0, "Err(\"too long\")\n".to_owned())
     );
 }
 
@@ -248,7 +248,7 @@ fn argument_runners_hand_the_program_its_arguments() {
     );
     assert_eq!(
         run(&second, &["hello"]),
-        (Some(0), "Ok(hello)\n".to_owned())
+        (Some(0), "Ok(\"hello\")\n".to_owned())
     );
     assert_eq!(
         run(&second, &[]),
@@ -481,7 +481,10 @@ fn the_stdin_runner_hands_the_program_arguments_and_input() {
 
          main!(host) -> host.run_stdin!(named)",
     );
-    assert_eq!(run(&named, &["x"], "y"), (Some(0), "Ok(x: y)\n".to_owned()));
+    assert_eq!(
+        run(&named, &["x"], "y"),
+        (Some(0), "Ok(\"x: y\")\n".to_owned())
+    );
     assert_eq!(
         run(&named, &[], "y"),
         (Some(0), "Err(OutOfBounds)\n".to_owned())

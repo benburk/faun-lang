@@ -213,14 +213,15 @@ fn a_bare_read_is_the_field_before_the_method() {
 
 /// A closed record and a tuple say themselves as Ori writes them: a
 /// record's fields in the order of their names, whatever order they were
-/// written in, and a tuple's members in order, each by its own `to_str`.
+/// written in, and a tuple's members in order, each by its own `to_str`,
+/// so a string among them is quoted.
 #[test]
 fn records_and_tuples_say_themselves() {
     let package = Package::new(
         "structural-to-str",
         "expect {y: 2, x: 1}.to_str() == \"{x: 1, y: 2}\"
-         expect (1, \"a\").to_str() == \"(1, a)\" & {}.to_str() == \"{}\"
-         expect {name: \"n\", inner: {z: [1, 2], a: (True, -3)}}.to_str() == \"{inner: {a: (True, -3), z: [1, 2]}, name: n}\"",
+         expect (1, \"a\").to_str() == \"(1, \\\"a\\\")\" & {}.to_str() == \"{}\"
+         expect {name: \"n\", inner: {z: [1, 2], a: (True, -3)}}.to_str() == \"{inner: {a: (True, -3), z: [1, 2]}, name: \\\"n\\\"}\"",
     );
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 3));
 }

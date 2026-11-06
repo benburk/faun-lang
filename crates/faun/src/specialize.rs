@@ -1326,6 +1326,16 @@ impl<'a> Specializer<'a> {
                     None => self.method_call(module, span, &ty, name, vec![left, right])?,
                 }
             }
+            // Only once the value's type is known, here, is it known to be a
+            // `Str`, whose splice is the text itself rather than its literal.
+            t::ExprKind::Spliced(target, value) => {
+                let value = self.expr(module, value, substitution)?;
+                if value.ty == Type::Named(self.prelude.str_, Vec::new()) {
+                    return Ok(value);
+                }
+                let name = self.target_name(target, substitution)?;
+                self.method_call(module, span, &ty, name, vec![value])?
+            }
             t::ExprKind::Project(receiver, field) => {
                 ExprKind::Project(Box::new(self.expr(module, receiver, substitution)?), *field)
             }

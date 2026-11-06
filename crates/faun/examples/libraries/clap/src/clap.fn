@@ -134,14 +134,15 @@ ParsedArg(a) : [
   opt(Failed(message, doc)) -> lost(doc, Optional, message)
 
   # The fallback is generic, and its help entry shows it — so defaulting an
-  # option obliges its type to say what the default looks like.
+  # option obliges its type to say what the default looks like. A splice
+  # shows a string default as its text, unquoted.
   default : (ParsedArg(a), a) -> Match(a) where a.to_str : a -> Str
   default(Absent(doc), fallback) ->
-    won(doc, Defaulted(fallback.to_str()), fallback)
+    won(doc, Defaulted("${fallback}"), fallback)
   default(Value(found, doc), fallback) ->
-    won(doc, Defaulted(fallback.to_str()), found)
+    won(doc, Defaulted("${fallback}"), found)
   default(Failed(message, doc), fallback) ->
-    lost(doc, Defaulted(fallback.to_str()), message)
+    lost(doc, Defaulted("${fallback}"), message)
 )
 
 # The two outcomes every cardinality judges: a value carrying the doc's

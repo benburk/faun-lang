@@ -2447,6 +2447,7 @@ impl ClauseResolver<'_> {
                                 expression.span,
                                 h::ExprKind::Method(Box::new(value), to_str, Vec::new()),
                             );
+                            self.sites.splice(text.site);
                             let Some(width) = width else {
                                 return Ok(h::StringPart::Splice(text));
                             };
