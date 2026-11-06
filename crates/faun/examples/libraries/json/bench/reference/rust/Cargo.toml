@@ -1,0 +1,16 @@
+[package]
+name = "json-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Not one of the compiler's crates: built on its own by `run.py`.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# Correctly rounded floats, as the other programs read them.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[profile.release]
+codegen-units = 1

@@ -1,0 +1,38 @@
+# Benchmark: parse standard input into a `Json` tree and walk all of it,
+# answering how many values it holds, the sum of its integers, and the bytes
+# of its strings, member names included. `run.py` checks the answer against
+# the reference programs' and times each.
+
+package {
+  json: "../src/json"
+}
+
+import json {Json, Null, Bool, Int, Float, String, Array, Object}
+
+Tally = {values: Nat, ints: Int, strings: Nat}
+
+tally : (Tally, Json) -> Tally
+tally(sum, Int(n)) -> {values: sum.values + 1, ints: sum.ints + n, strings: sum.strings}
+tally(sum, String(text)) -> {values: sum.values + 1, ints: sum.ints, strings: sum.strings + text.len()}
+tally(sum, Array(values)) -> values.fold({values: sum.values + 1, ints: sum.ints, strings: sum.strings}, tally)
+tally(sum, Object(members)) -> members.fold(
+  {values: sum.values + 1, ints: sum.ints, strings: sum.strings},
+  |inner, (name, value)| tally({values: inner.values, ints: inner.ints, strings: inner.strings + name.len()}, value),
+)
+tally(sum, (Null | Bool(_) | Float(_))) -> {values: sum.values + 1, ints: sum.ints, strings: sum.strings}
+
+app : {stdin: List(U8), *} -> Str
+app(input) -> (
+  Str.from_utf8(input.stdin) is Ok(text) else return "error: standard input is not UTF-8"
+  Json.from_str(text) is (
+    Ok(document) then (
+      sum = tally({values: 0, ints: 0, strings: 0}, document)
+      "values ${sum.values} ints ${sum.ints} strings ${sum.strings}"
+    )
+    Err(error) then "error: ${error}"
+  )
+)
+
+expect app({stdin: "[1,{\"ab\":\"cd\",\"e\":[2,null,1.5]}]".to_utf8()}) == "values 8 ints 3 strings 5"
+
+main!(host) -> host.run_stdin!(app)

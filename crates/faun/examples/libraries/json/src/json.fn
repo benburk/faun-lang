@@ -126,7 +126,7 @@ Json : [
 
   # An array, each element by `decode`. A failure says at which index.
   array : (Json, Json -> Decode(a)) -> Decode(List(a))
-  array(Array(values), decode) -> decode_values(values, decode, 0)
+  array(Array(values), decode) -> decode_values(values, decode, 0, [])
   array(_, _) -> Failed(Expected("array"))
 
   # An object used as a map, each member's value by `decode`, in the order
@@ -368,7 +368,7 @@ parse_value(['n', 'u', 'l', 'l', *rest]) -> Ok(parsed_json(Null, rest))
 parse_value(['t', 'r', 'u', 'e', *rest]) -> Ok(parsed_json(Bool(True), rest))
 parse_value(['f', 'a', 'l', 's', 'e', *rest]) -> Ok(parsed_json(Bool(False), rest))
 parse_value(['"', *rest]) -> (
-  (text, after) = parse_string(rest, [])?
+  (text, after) = parse_text(rest)?
   Ok(parsed_json(String(text), after))
 )
 parse_value(['[', *rest]) -> parse_array(rest, [])
@@ -409,7 +409,7 @@ parse_object([], _) -> Err((UnexpectedEnd, []))
 parse_object([x, *rest], acc) if is_space(x) -> parse_object(rest, acc)
 parse_object(['}', *rest], acc) -> Ok(parsed_json(Object(acc.reverse()), rest))
 parse_object(['"', *key_bytes], acc) -> (
-  (key, after_key) = parse_string(key_bytes, [])?
+  (key, after_key) = parse_text(key_bytes)?
   parse_object_colon(skip_space(after_key), acc, key)
 )
 parse_object(bytes, _) -> Err((UnexpectedToken, bytes))
@@ -444,6 +444,23 @@ skip_space(bytes) -> bytes
 
 is_blank : List(U8) -> Bool
 is_blank(bytes) -> skip_space(bytes).is_empty()
+
+# A string's bytes after its opening quote. Where its first stretch runs to
+# the closing quote with no escape, the string is that stretch of the input,
+# taken without copying; otherwise it is read a byte at a time.
+parse_text : List(U8) -> Result((Str, List(U8)), Stop)
+parse_text(bytes) -> (
+  rest = bytes.drop_while(plain)
+  stretch = bytes.take(bytes.len() - rest.len())
+  rest is (
+    ['"', *after] then string_done(Str.from_utf8(stretch), after)
+    _ then parse_string(rest, stretch.reverse())
+  )
+)
+
+# A byte that stands for itself in a string.
+plain : U8 -> Bool
+plain(b) -> b != '"' & b != '\\' & b >= 32
 
 # A string's bytes after its opening quote, `acc` holding those read so far
 # backwards.
@@ -597,20 +614,20 @@ claimed(Decoded(_, used_b), used_a) if used_a.any(|name| used_b.contains(name)) 
   Failed(OverlappingFields)
 claimed(Decoded(value, used_b), used_a) -> Decoded(value, used_a.concat(used_b))
 
-# The member named `wanted`, found at most once: the rest of the members are
-# looked through after the one found, so a second outranks what the first
-# decoded to.
+# The member named `wanted`, found at most once: a second one outranks what
+# the first decodes to. A loop, so an object of any size is read in constant
+# stack.
 scan_field : (List((Str, Json)), Str, Json -> Decode(a)) -> Field(a)
 scan_field([], wanted, _) -> Missing(wanted)
-scan_field([(name, value), *rest], wanted, decode) if name == wanted ->
-  found_field(scan_field(rest, wanted, decode), wanted, decode(value))
+scan_field([(name, value), *rest], wanted, decode) if name == wanted -> (
+  if rest.any(|(other, _)| other == wanted) return Failed(DuplicateField(wanted))
+  found_field(decode(value), wanted)
+)
 scan_field([_, *rest], wanted, decode) -> scan_field(rest, wanted, decode)
 
-found_field : (Field(a), Str, Decode(a)) -> Field(a)
-found_field(Failed(error), _, _) -> Failed(error)
-found_field(Value(_, _), wanted, _) -> Failed(DuplicateField(wanted))
-found_field(Missing(_), wanted, Failed(error)) -> Failed(AtField(wanted, error))
-found_field(Missing(_), wanted, Decoded(found, _)) -> Value(wanted, found)
+found_field : (Decode(a), Str) -> Field(a)
+found_field(Failed(error), wanted) -> Failed(AtField(wanted, error))
+found_field(Decoded(found, _), wanted) -> Value(wanted, found)
 
 finish_object : (List((Str, Json)), Decode(a), Bool) -> Decode(a)
 finish_object(_, Failed(error), _) -> Failed(error)
@@ -622,19 +639,14 @@ no_unknown : (a, List((Str, Json))) -> Decode(a)
 no_unknown(value, []) -> Decoded(value, [])
 no_unknown(_, [(name, _), *]) -> Failed(UnknownField(name))
 
-decode_values : (List(Json), Json -> Decode(a), Nat) -> Decode(List(a))
-decode_values([], _, _) -> Decoded([], [])
-decode_values([value, *rest], decode, index) ->
-  decoded_head(decode(value), rest, decode, index)
-
-decoded_head : (Decode(a), List(Json), Json -> Decode(a), Nat) -> Decode(List(a))
-decoded_head(Failed(error), _, _, index) -> Failed(AtIndex(index, error))
-decoded_head(Decoded(found, _), rest, decode, index) ->
-  decoded_tail(found, decode_values(rest, decode, index + 1))
-
-decoded_tail : (a, Decode(List(a))) -> Decode(List(a))
-decoded_tail(_, Failed(error)) -> Failed(error)
-decoded_tail(found, Decoded(values, _)) -> Decoded([found, *values], [])
+# An array's elements from `index` on, `done` holding those decoded so far
+# backwards. A loop, so an array of any length is read in constant stack.
+decode_values : (List(Json), Json -> Decode(a), Nat, List(a)) -> Decode(List(a))
+decode_values([], _, _, done) -> Decoded(done.reverse(), [])
+decode_values([value, *rest], decode, index, done) -> decode(value) is (
+  Failed(error) then Failed(AtIndex(index, error))
+  Decoded(found, _) then decode_values(rest, decode, index + 1, [found, *done])
+)
 
 # An object's members into `map`, each value by `decode`.
 decode_members : (List((Str, Json)), Json -> Decode(a), Map(Str, a)) -> Decode(Map(Str, a))
@@ -650,7 +662,10 @@ member_decoded(Decoded(found, _), name, rest, decode, map) ->
 
 # Rendering ----------------------------------------------------------------
 
+# A string in quotes, escaped where it must be. Most need no escape, and are
+# quoted as they are.
 render_string : Str -> Str
+render_string(text) if text.to_utf8().all(plain) -> "\"${text}\""
 render_string(text) -> (
   escaped = Str.from_utf8(text.to_utf8().flat_map(escape_byte)).ok_or("")
   "\"${escaped}\""

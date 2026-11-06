@@ -121,6 +121,13 @@ it again catches a key misspelled one way:
 expect User.from_json(ada.to_json()).result() == Ok(ada)
 ```
 
+## Performance
+
+[`bench/`](bench) times parsing, and decoding with writing back, against
+serde_json, Node and Python on the same input; `python3 bench/run.py --cpu 3`
+runs it. The results and what they found are in the
+[JSON performance note](../../../../../notes/json-performance.md).
+
 ## Why it is shaped this way
 
 - **`Fields` is bound once, and decoders are called, not stored.** A Faun

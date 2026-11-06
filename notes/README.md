@@ -71,8 +71,9 @@ not needed.
 - [Lints](lints.md): what a linter should flag and the compiler leaves alone
 - [Grammar audit](grammar-audit.md): whether the grammar stays LL(1) and
   free of ambiguity
-- [N-body](nbody-performance.md) and
-  [spectral norm](spectralnorm-performance.md): performance investigations
+- [N-body](nbody-performance.md),
+  [spectral norm](spectralnorm-performance.md) and
+  [JSON](json-performance.md): performance investigations
 - [Faun and AI](ai-future.md)
 - `archive/`: notes kept for reference that no longer describe the compiler
 

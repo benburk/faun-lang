@@ -1,0 +1,87 @@
+# Benchmark: parse standard input, decode it into typed records, and encode
+# them again, answering how many users there are, how many are active, how
+# many tags they hold, and the bytes of the text written back, which is the
+# input's length when the round trip is exact.
+
+package {
+  json: "../src/json"
+}
+
+import json {Json, Decode, Fields}
+
+Address : {city: Str, zip: Str}.(
+  from_json : Json -> Decode(Address)
+  from_json(value) -> (
+    fields = Fields.of(value)
+    fields.finish(Decode.sequence({
+      city: fields.string("city").required(),
+      zip: fields.string("zip").required(),
+    })).map(Address)
+  )
+
+  to_json : Address -> Json
+  to_json(Address(address)) -> Json.object([
+    ("city", Json.of_str(address.city)),
+    ("zip", Json.of_str(address.zip)),
+  ])
+)
+
+User : {
+  id: Nat, name: Str, email: Str, active: Bool, score: F64, tags: List(Str),
+  address: Address, friends: List(Nat), note: Result(Str, [Missing])
+}.(
+  from_json : Json -> Decode(User)
+  from_json(value) -> (
+    fields = Fields.of(value)
+    fields.finish(Decode.sequence({
+      id: fields.nat("id").required(),
+      name: fields.string("name").required(),
+      email: fields.string("email").required(),
+      active: fields.boolean("active").required(),
+      score: fields.f64("score").required(),
+      tags: fields.list("tags", Json.string).required(),
+      address: fields.decode("address").required(),
+      friends: fields.list("friends", Json.nat).required(),
+      note: fields.field("note", |v| v.nullable(Json.string)).required(),
+    })).map(User)
+  )
+
+  to_json : User -> Json
+  to_json(User(user)) -> Json.object([
+    ("id", Json.of_nat(user.id)),
+    ("name", Json.of_str(user.name)),
+    ("email", Json.of_str(user.email)),
+    ("active", Json.of_bool(user.active)),
+    ("score", Json.of_f64(user.score)),
+    ("tags", Json.of_list(user.tags, Json.of_str)),
+    ("address", user.address.to_json()),
+    ("friends", Json.of_list(user.friends, Json.of_nat)),
+    ("note", user.note.map_ok(Json.of_str).ok_or(Json.Null)),
+  ])
+)
+
+summary : List(User) -> Str
+summary(users) -> (
+  active = users.count(|user| user.active)
+  tags = users.map(|user| user.tags.len()).sum()
+  written = Json.of_list(users, |user| user.to_json()).to_str()
+  "users ${users.len()} active ${active} tags ${tags} bytes ${written.len()}"
+)
+
+app : {stdin: List(U8), *} -> Str
+app(input) -> (
+  Str.from_utf8(input.stdin) is Ok(text) else return "error: standard input is not UTF-8"
+  Json.from_str(text) is Ok(document) else return "error: not JSON"
+  document.array(User.from_json).result() is (
+    Ok(users) then summary(users)
+    Err(error) then "error: ${error}"
+  )
+)
+
+one : Str
+one = "[{\"id\":0,\"name\":\"a\",\"email\":\"e\",\"active\":true,\"score\":1.5,\"tags\":[\"x\"],"
+  .concat("\"address\":{\"city\":\"Oslo\",\"zip\":\"01234\"},\"friends\":[7],\"note\":null}]")
+
+expect app({stdin: one.to_utf8()}) == "users 1 active 1 tags 1 bytes ${one.len()}"
+
+main!(host) -> host.run_stdin!(app)
