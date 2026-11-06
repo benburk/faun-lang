@@ -1,0 +1,8 @@
+error: `to_str` is asked where nothing decides a type it needs
+ --> a_result_spliced_needs_both_its_types_decided.fn:4:27
+  |
+4 | status(_) -> "finished: ${Ok("done")}"
+  |                           ^^^^^^^^^^
+  |
+  = note: `Result(Str, _)`'s `to_str` asks the `to_str` of its `_`, and nothing here says what that is
+  = help: let a signature decide it

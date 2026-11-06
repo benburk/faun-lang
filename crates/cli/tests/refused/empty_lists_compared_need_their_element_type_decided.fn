@@ -1,0 +1,4 @@
+import std.host {Host}
+
+nothing : Nat -> Bool
+nothing(_) -> [] == []

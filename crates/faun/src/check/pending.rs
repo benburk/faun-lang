@@ -1140,20 +1140,36 @@ impl Checker<'_> {
                         Ty::Var(variable) if generic.contains(&variable))
                 });
                 if final_pass && let Some(&index) = waiting {
-                    let pending = &self.pending_methods[index];
-                    return Err(failure(
-                        pending.module,
-                        pending.span,
-                        format!(
-                            "method `{}` is ambiguous for the inferred receiver type",
-                            self.symbols.text(pending.name)
-                        ),
-                    ));
+                    return Err(self.undecided(&self.pending_methods[index]));
                 }
                 return Ok(());
             }
             unresolved = next;
         }
+    }
+
+    /// A member asked of a value whose type nothing decides, where more
+    /// than one type has it. Where another member's bound asks it, the
+    /// value whose member was called is quoted, with the part left open.
+    fn undecided(&self, pending: &PendingMethod) -> Refusal {
+        let member = self.symbols.text(pending.name);
+        let message = format!("`{member}` is asked where nothing decides a type it needs");
+        let mut asked = pending;
+        while let Some(index) = asked.owing {
+            asked = &self.pending_methods[index];
+        }
+        let note = if std::ptr::eq(asked, pending) {
+            format!("more than one type has `{member}`, and nothing here says which this value is")
+        } else {
+            let receiver = show(&self.infer.resolve(&asked.receiver), self.symbols);
+            let owner = self.symbols.text(asked.name);
+            format!(
+                "`{receiver}`'s `{owner}` asks the `{member}` of its `_`, and nothing here says what that is"
+            )
+        };
+        failure(pending.module, pending.span, message)
+            .note(note)
+            .help("let a signature decide it")
     }
 
     /// Why a signed body's own variable has no `pending`: its signature

@@ -1,0 +1,4 @@
+import std.host {Host}
+
+status : Nat -> Str
+status(_) -> "finished: ${Ok("done")}"

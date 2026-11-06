@@ -1,0 +1,8 @@
+error: `equals` is asked where nothing decides a type it needs
+ --> empty_lists_compared_need_their_element_type_decided.fn:4:15
+  |
+4 | nothing(_) -> [] == []
+  |               ^^^^^^^^
+  |
+  = note: `List(_)`'s `equals` asks the `equals` of its `_`, and nothing here says what that is
+  = help: let a signature decide it
