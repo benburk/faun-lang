@@ -119,6 +119,29 @@ impl<I> Code<I> {
         inst
     }
 
+    /// Put `with` where the instruction at `at` was, so a label before it
+    /// stands before the first of them, and every label after it moves on
+    /// by as many as were added.
+    ///
+    /// # Panics
+    ///
+    /// If there is no instruction at `at`.
+    pub fn replace(&mut self, at: usize, with: Vec<I>) {
+        assert!(at < self.insts.len(), "an instruction to replace");
+        let added = with.len();
+        for position in self
+            .labels
+            .iter_mut()
+            .chain([&mut self.last_bound])
+            .flatten()
+        {
+            if *position > at {
+                *position = *position + added - 1;
+            }
+        }
+        self.insts.splice(at..=at, with);
+    }
+
     /// Keep the instructions `kept` says to, in order, and move every label
     /// that stood before a dropped one.
     ///

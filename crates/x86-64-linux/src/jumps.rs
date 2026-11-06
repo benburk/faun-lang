@@ -8,6 +8,12 @@
 //! that jump, taken the other way. What follows a jump or a return, up to
 //! the next place anything may jump to, is never reached.
 //!
+//! An edge's copies are a few moves and a jump, so a way through several
+//! edges jumps from run to run. Where one jump alone reaches such a run, and
+//! nothing falls into it, the run takes that jump's place, and the run left
+//! behind is reached by nothing: one jump fewer on the way, and no code
+//! added.
+//!
 //! Nothing a jump or a call lands on is dropped, and nothing before the
 //! first jump or return, so every place control may reach stays where it
 //! was, and so does the entry, which is the first instruction.
@@ -17,10 +23,96 @@ use std::collections::HashSet;
 use super::machine::{Condition, Inst};
 use faun_core::targets::code::{Code, Label};
 
+/// The most instructions a jump is replaced by, beside the jump or return
+/// that ends them.
+const COPIED: usize = 2;
+
 /// Rewrite `code` until none of those shapes is left.
 pub(crate) fn thread(code: &mut Code<Inst>) {
     // Each round drops an instruction or stops, so this ends.
     while retarget(code) | drop_redundant(code) {}
+    copy_short_runs(code);
+    while retarget(code) | drop_redundant(code) {}
+}
+
+/// Replace a jump to a few moves and then a jump or a return by those
+/// moves and that jump or return, so the way through takes one jump where
+/// it took two. Edges write their copies as such runs. Only a run that one
+/// jump reaches, and nothing falls into, is moved, so the run left behind
+/// is reached by nothing and goes, and no code grows. Decided over the
+/// code as it stands, so a run moved is never moved again.
+fn copy_short_runs(code: &mut Code<Inst>) {
+    let alone = reached_once(code);
+    // From the last, so each replacement leaves the earlier positions be.
+    for at in (0..code.insts().len()).rev() {
+        let Inst::Jump {
+            condition: None,
+            target,
+        } = code.insts()[at]
+        else {
+            continue;
+        };
+        let moves = alone[target.index()]
+            && code
+                .position(target)
+                .is_some_and(|start| !falls_into(code, start));
+        if moves && let Some(run) = short_run(code, target) {
+            code.replace(at, run);
+        }
+    }
+}
+
+/// Whether one jump or call alone lands where each label stands, as the
+/// code is before anything moves.
+fn reached_once(code: &Code<Inst>) -> Vec<bool> {
+    let mut reached = vec![0u32; code.insts().len() + 1];
+    for inst in code.insts() {
+        if let Inst::Jump { target, .. } | Inst::Call { target } = *inst
+            && let Some(position) = code.position(target)
+        {
+            reached[position] += 1;
+        }
+    }
+    code.labels()
+        .map(|(_, position)| position.is_some_and(|position| reached[position] == 1))
+        .collect()
+}
+
+/// Whether what stands before `at` goes on into it.
+fn falls_into(code: &Code<Inst>, at: usize) -> bool {
+    at > 0
+        && !matches!(
+            code.insts()[at - 1],
+            Inst::Jump {
+                condition: None,
+                ..
+            } | Inst::Return
+        )
+}
+
+/// The few plain instructions at `label` and the jump or return ending
+/// them, where that is what stands there and the jump leads elsewhere.
+fn short_run(code: &Code<Inst>, label: Label) -> Option<Vec<Inst>> {
+    let start = code.position(label)?;
+    let mut run = Vec::new();
+    for inst in code.insts().get(start..)?.iter().take(COPIED + 1) {
+        match *inst {
+            Inst::Move { .. } | Inst::XorSelf { .. } => run.push(*inst),
+            Inst::Jump {
+                condition: None,
+                target,
+            } if code.position(target) != Some(start) => {
+                run.push(*inst);
+                return (run.len() > 1).then_some(run);
+            }
+            Inst::Return => {
+                run.push(*inst);
+                return (run.len() > 1).then_some(run);
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// Point every jump past the unconditional jumps it lands on. Answers
@@ -188,6 +280,62 @@ mod tests {
         code.push(Inst::Return);
         thread(&mut code);
         assert_eq!(code.insts(), [Inst::Return]);
+    }
+
+    /// A run of moves one jump reaches, and nothing falls into, goes where
+    /// the jump was, and the run left behind goes.
+    #[test]
+    fn a_short_run_one_jump_reaches_takes_its_place() {
+        let mut code = Code::default();
+        let (other, run, away) = (code.label(), code.label(), code.label());
+        let moved = Inst::Move {
+            dst: Reg::Rax,
+            src: Reg::Rcx,
+            width: crate::machine::RegisterWidth::Word,
+        };
+        code.push(jump(Some(Condition::Equal), other));
+        code.push(Inst::XorSelf { dst: Reg::Rdi });
+        code.push(jump(None, run));
+        code.bind(other);
+        code.push(Inst::XorSelf { dst: Reg::Rdx });
+        code.push(Inst::Return);
+        code.bind(run);
+        code.push(moved);
+        code.push(jump(None, away));
+        code.push(Inst::XorSelf { dst: Reg::Rsi });
+        code.bind(away);
+        code.push(Inst::Return);
+        thread(&mut code);
+        assert_eq!(
+            code.insts(),
+            [
+                jump(Some(Condition::Equal), other),
+                Inst::XorSelf { dst: Reg::Rdi },
+                moved,
+                Inst::Return,
+                Inst::XorSelf { dst: Reg::Rdx },
+                Inst::Return
+            ]
+        );
+    }
+
+    /// A run two jumps reach stays, so no code grows.
+    #[test]
+    fn a_short_run_two_jumps_reach_stays_where_it_is() {
+        let mut code = Code::default();
+        let run = code.label();
+        let moved = Inst::Move {
+            dst: Reg::Rax,
+            src: Reg::Rcx,
+            width: crate::machine::RegisterWidth::Word,
+        };
+        code.push(jump(Some(Condition::Equal), run));
+        code.push(jump(None, run));
+        code.bind(run);
+        code.push(moved);
+        code.push(Inst::Return);
+        thread(&mut code);
+        assert_eq!(code.insts(), [moved, Inst::Return]);
     }
 
     #[test]

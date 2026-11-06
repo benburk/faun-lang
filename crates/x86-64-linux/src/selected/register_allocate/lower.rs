@@ -109,6 +109,8 @@ struct Lowering<'a> {
 struct Frame {
     outgoing: u32,
     words: u32,
+    /// How many words of arguments it reads from its caller's frame.
+    incoming: u32,
 }
 
 /// Where each value is defined and how often it is read, gathered once so
@@ -612,12 +614,23 @@ impl<'a> Lowering<'a> {
                 return Err("x86 stack frame is too large".to_owned());
             }
             frame.words = u32::try_from(words).expect("a checked frame");
+            frame.incoming = incoming[owner];
         }
         Ok(frames)
     }
 
     fn frame(&self, owner: FunctionId) -> u32 {
         self.frames[owner.index()].words
+    }
+
+    /// Whether the function starting at `label` may be jumped to in place
+    /// of a return: it reads no arguments from its caller's frame, which a
+    /// jump leaves as the caller's caller's.
+    fn callable_in_tail(&self, label: Label) -> bool {
+        self.function_labels
+            .iter()
+            .position(|&start| start == Some(label))
+            .is_some_and(|function| self.frames[function].incoming == 0)
     }
 
     fn local_slot(&self, owner: FunctionId, slot: FrameSlot) -> FrameSlot {
@@ -1191,12 +1204,25 @@ impl<'a> Lowering<'a> {
                         self.asm.syscall();
                     }
                 } else {
+                    // A call whose answer is the answer, made last, is a
+                    // jump once the frame is gone: what it calls returns
+                    // to this function's caller.
+                    let tail = self
+                        .asm
+                        .last_call()
+                        .filter(|&callee| self.callable_in_tail(callee));
+                    if tail.is_some() {
+                        self.asm.take_last_call();
+                    }
                     self.keep_for_caller(owner, false);
                     let frame = self.frame(owner);
                     if frame > 0 {
                         self.asm.close_frame(frame);
                     }
-                    self.asm.ret();
+                    match tail {
+                        Some(callee) => self.asm.jump(callee),
+                        None => self.asm.ret(),
+                    }
                 }
             }
             Terminator::Halt => {}

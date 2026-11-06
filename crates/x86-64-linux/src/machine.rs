@@ -810,6 +810,23 @@ impl AllocatedBuilder {
         self.push(Inst::Call { target });
     }
 
+    /// What the last instruction calls, where it is a call that nothing may
+    /// land after, so that what follows always follows the call.
+    pub(crate) fn last_call(&self) -> Option<Label> {
+        let at = self.code.insts().len().checked_sub(1)?;
+        match self.code.insts()[at] {
+            Inst::Call { target } if !self.code.labelled_from(at + 1) => Some(target),
+            _ => None,
+        }
+    }
+
+    /// Take back the call [`Self::last_call`] names.
+    pub(crate) fn take_last_call(&mut self) {
+        let at = self.code.insts().len() - 1;
+        debug_assert!(matches!(self.code.insts()[at], Inst::Call { .. }));
+        self.code.remove(at);
+    }
+
     pub(crate) fn ret(&mut self) {
         self.push(Inst::Return);
     }

@@ -250,6 +250,39 @@ mod tests {
         }));
     }
 
+    /// A call whose answer is the function's answer jumps to what it calls,
+    /// which returns to the caller's caller.
+    #[test]
+    fn a_call_in_tail_position_is_a_jump() {
+        let (mut program, main) = Program::new("main");
+        let helper = program.declare("helper", &[Class::Word], &[Class::Word]);
+        let inner = program.declare("inner", &[Class::Word], &[Class::Word]);
+        program.define(inner, |builder, args| {
+            let one = builder.constant(Class::Word, 1);
+            let sum = builder.binary(Binary::Add, args[0], one);
+            builder.ret(&[sum]);
+        });
+        program.define(helper, |builder, args| {
+            let two = builder.constant(Class::Word, 2);
+            let doubled = builder.binary(Binary::Mul, args[0], two);
+            let answer = builder.call_one(inner, &[doubled]);
+            builder.ret(&[answer]);
+        });
+        program.define(main, |builder, _| {
+            let one = builder.constant(Class::Word, 1);
+            let answer = builder.call_one(helper, &[one]);
+            builder.ret(&[answer]);
+        });
+        let allocated = crate::selected::select_and_allocate(&program).unwrap();
+        let calls = allocated
+            .instructions()
+            .iter()
+            .filter(|inst| matches!(inst, crate::machine::Inst::Call { .. }))
+            .count();
+        // `main` calls `helper`, and `helper` jumps to `inner`.
+        assert_eq!(calls, 1);
+    }
+
     /// One value across a call waits in a register the call leaves alone,
     /// and a function writing one of those puts it back before returning.
     #[test]
