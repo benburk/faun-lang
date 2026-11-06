@@ -57,7 +57,7 @@ written where it lies:
 - **Joining two sequences,** `a.concat(b)`, writes `b` into room after `a`
   where nothing else holds `a`'s buffer and it has the room. Otherwise, on
   x86-64 and wasm32, `a` is written into room before `b`, where nothing
-  else holds `b`'s buffer and it has room before or is the longer, so a
+  else holds `b`'s buffer and it has room before or is strictly longer, so a
   sequence built by joining pieces before it, `[x].concat(built)`, grows at
   its front as one built by joining pieces after it grows at its end. That
   choice is a routine for each element layout a program joins, which every

@@ -311,7 +311,7 @@ impl Library {
     ///
     /// Where the layout has a join routine, that is called instead, and it
     /// also writes the first before the second where nothing else holds the
-    /// second and it has room before or is the longer, so a sequence built
+    /// second and it has room before or is strictly longer, so a sequence built
     /// by joining pieces before it is copied a bounded number of times.
     ///
     /// # Panics
@@ -450,7 +450,7 @@ impl Library {
 
     /// Two sequences neither of which is empty, the second grown at its
     /// front where the first has no room after it, nothing else holds the
-    /// second, and the second has room before or is the longer: a long
+    /// second, and the second has room before or is strictly longer: a long
     /// sequence built by joining pieces before it grows at its front, as
     /// one built by joining pieces after it grows at its end.
     fn joined_either(
@@ -476,8 +476,11 @@ impl Library {
         let then_alone = b.compare(Relation::Equal, refs, one);
         let cramped = b.compare(Relation::Less, then_start, first_len);
         let roomy = b.binary(Binary::Sub, one, cramped);
-        let shorter = b.compare(Relation::Less, then_len, first_len);
-        let longer = b.binary(Binary::Sub, one, shorter);
+        // Strictly longer: two of a length, as a stream's chunks read onto
+        // what came before are, grow the first at its end, so a sequence
+        // built at its end never switches ends and leaves blocks of every
+        // size behind it.
+        let longer = b.compare(Relation::Less, first_len, then_len);
         let either = b.binary(Binary::Add, roomy, longer);
         let grows = b.compare(Relation::Less, zero, either);
         let no_after = b.binary(Binary::Sub, one, after);
