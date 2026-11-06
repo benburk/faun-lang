@@ -52,14 +52,15 @@ List(a) : [Nil, Cons(a, List(a))].(
   flatten(lists) -> flatten_into(lists, [])
 
   # The pieces, `separator` between neighbours and at neither edge: strings
-  # or lists alike, as each joins two by `concat`. Built from the right, so
-  # each piece is copied once.
+  # or lists alike, as each joins two by `concat`. Built from the left, each
+  # piece written after those before it, where nothing else holds them in
+  # the room a buffer keeps after its end, so each piece is copied once and
+  # joining is linear.
   join : (List(a), a) -> a where
     a.empty : a,
     a.concat : (a, a) -> a
   join([], _) -> a.empty
-  join([first, *rest], separator) ->
-    first.concat(rest.fold_right(a.empty, |piece, joined| separator.concat(piece.concat(joined))))
+  join([first, *rest], separator) -> rest.fold(first, |joined, piece| joined.concat(separator).concat(piece))
 
   filter : (List(a), a -> Bool) -> List(a)
   filter([], _) -> []
