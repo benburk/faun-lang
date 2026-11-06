@@ -36,6 +36,7 @@ fn schedules() -> Vec<(&'static str, Stages)> {
             normalize_with_limits(p, InlineLimits::default());
         }),
         ("fusion", super::fuse::fuse),
+        ("first elements", super::head::heads),
         ("identities", super::normalize::identities),
         ("folding", fold),
         ("simplifying each definition", |p| {
@@ -1678,4 +1679,101 @@ fn a_list_reversed_twice_is_prepended() {
             "{left:?} {right:?}"
         );
     }
+}
+
+/// `tree(n, k)`: the leaves of a tree of depth `n`, numbered from `k`, the
+/// left half's before the right's: `2^n` of them, built by joining what the
+/// two halves answer. With `effect`, each leaf is handed to it first.
+fn leaves(p: &mut Program, w: &Walks, effect: Option<FnId>) -> FnId {
+    let join = super::sequence::write_prepend(p, w.list, w.reverse);
+    let tree = p.declare("tree", &[w.nat, w.nat], w.list);
+    p.define(tree, |b, args| {
+        b.match_(args[0], w.nat, |b, ctor, fields| {
+            if ctor == w.zero {
+                let leaf = effect.map_or(args[1], |effect| b.call(effect, &[args[1]]));
+                let empty = b.con(w.nil, &[]);
+                b.con(w.cons, &[leaf, empty])
+            } else {
+                let left = b.call(tree, &[fields[0], args[1]]);
+                let next = b.con(w.succ, &[args[1]]);
+                let right = b.call(tree, &[fields[0], next]);
+                b.call(join, &[left, right])
+            }
+        })
+    });
+    tree
+}
+
+/// The first of what `tree(n, 0)` answers, or nought where it is empty.
+fn first_leaf(p: &mut Program, w: &Walks, tree: FnId) -> FnId {
+    let first = p.declare("first_leaf", &[w.nat], w.nat);
+    p.define(first, |b, args| {
+        let zero = b.con(w.zero, &[]);
+        let all = b.call(tree, &[args[0], zero]);
+        b.match_(all, w.list, |b, ctor, fields| {
+            if ctor == w.nil {
+                b.con(w.zero, &[])
+            } else {
+                fields[0]
+            }
+        })
+    });
+    first
+}
+
+/// A list read only for its first element, whose definition joins what its
+/// own calls answer, is built only as far as that: a copy tries the first
+/// half and the second only where the first is empty, so a tree of depth
+/// thirty, a billion leaves, answers its first in thirty calls.
+#[test]
+fn a_list_read_for_its_first_element_is_built_no_further() {
+    let (mut p, w) = walks();
+    let tree = leaves(&mut p, &w, None);
+    let first = first_leaf(&mut p, &w, tree);
+    validate(&p).unwrap();
+    let original = p.clone();
+    super::head::heads(&mut p);
+    validate(&p).unwrap();
+    let called = callees(&p, first);
+    assert!(!called.contains(&tree), "{}", p.render());
+    let copy = called[0];
+    assert_eq!(p.name(p.function(copy).name), "tree.head");
+    for depth in 0..5 {
+        let args = vec![super::tests::nat(&original, w.nat, depth)];
+        let expected = run(&original, first, args.clone(), &mut vec![]);
+        assert_eq!(run(&p, first, args, &mut vec![]), expected, "{depth}");
+    }
+    let deep = vec![super::tests::nat(&p, w.nat, 30)];
+    let zero = super::tests::nat(&p, w.nat, 0);
+    assert_eq!(run(&p, first, deep, &mut vec![]), zero);
+}
+
+/// A list whose rest is read is the whole list, and is built whole.
+#[test]
+fn a_list_whose_rest_is_read_is_built_whole() {
+    let (mut p, w) = walks();
+    let tree = leaves(&mut p, &w, None);
+    let summed = p.declare("summed", &[w.nat], w.nat);
+    p.define(summed, |b, args| {
+        let zero = b.con(w.zero, &[]);
+        let all = b.call(tree, &[args[0], zero]);
+        b.call(w.total, &[all, zero])
+    });
+    super::head::heads(&mut p);
+    validate(&p).unwrap();
+    assert!(callees(&p, summed).contains(&tree));
+    assert!(!p.functions().iter().any(|f| p.name(f.name) == "tree.head"));
+}
+
+/// A definition reaching something outside may do something for every
+/// element it builds, so it is never cut short.
+#[test]
+fn a_list_reaching_a_bodyless_call_is_built_whole() {
+    let (mut p, w) = walks();
+    let effect = p.declare("effect!", &[w.nat], w.nat);
+    let tree = leaves(&mut p, &w, Some(effect));
+    let first = first_leaf(&mut p, &w, tree);
+    super::head::heads(&mut p);
+    validate(&p).unwrap();
+    assert!(callees(&p, first).contains(&tree));
 }

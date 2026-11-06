@@ -276,6 +276,18 @@ x    ::= a parameter, a binding, or a field an arm bound
   turns a list reversed onto nothing and read once, by a reversal of it onto
   another, into one prepend in order: the recognized definition for that
   type, or one declared in the shape recognition reads.
+- `head.rs`: a call whose list is read once, by a match whose step never
+  reads the rest, needs only its first element. Where what it calls joins,
+  in tail position, what calls of itself answer -- every solution of a
+  search, the first branch's before the second's -- the call goes to a copy
+  named with `.head` after it, answering a list with that first element and
+  little else: a join becomes a match on the first list, whose empty arm
+  works out the second, and everything only the second needs, and whose
+  step answers the first; a call of the definition goes to the copy, and an
+  element pushed onto a rest is pushed onto nothing. A search asked for its
+  first solution stops at it. Only definitions reaching no bodyless call
+  are copied, since the copy leaves out pure work nothing needs, and
+  nothing is recognized by name: the join is the recognized prepend.
 - `inplace.rs`: a walk built front to back that appends, for each element
   it takes off what it walks, one element of the same type -- `map`, or
   `map_accum` beside its state -- is written again replacing each element
@@ -427,10 +439,12 @@ arm. A match that is the last binding of a body answering a match on it, and
 read nothing else there, becomes one match: where each of its arms ends by
 building a constructor, that arm goes on into the second's arm for it. Only
 where no arm of the second is taken by two of the first, so nothing is copied
-twice. Fusion, descent, specialization and writing in place add definitions;
-a copy's name is its original's and a number after a dot; a walk written in
-place is named with `.place` after it, and what starts it with `.enter`; a fused walk's name joins its two
-halves' with `+`, and what they replace stays until nothing calls it.
+twice. Fusion, descent, specialization, building a list's first element and
+writing in place add definitions; a copy's name is its original's and a number
+after a dot; a copy answering a list's first element is named with `.head`
+after it; a walk written in place is named with `.place` after it, and what
+starts it with `.enter`; a fused walk's name joins its two halves' with `+`,
+and what they replace stays until nothing calls it.
 
 Each stage runs once, always; there are no switches. Tests isolating one stage
 call it directly within the crate. Inlining is also what gives range analysis

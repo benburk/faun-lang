@@ -1,7 +1,12 @@
 # A SAT solver in the style of DPLL: choose a literal, assume it, simplify
-# the formula, and where that fails, assume its opposite. A literal standing
-# alone in its clause is chosen first: its opposite empties that clause at
-# once, so unit propagation needs no code of its own.
+# the formula, and assume its opposite too. A literal standing alone in its
+# clause is chosen first: its opposite empties that clause at once, so unit
+# propagation needs no code of its own.
+#
+# `models` answers every model, the first branch's before the second's, and
+# `solve` asks for the first of them. Only the first is read, so the
+# compiler builds no more than that: the second branch is searched only
+# where the first finds nothing.
 #
 # The solver works over any variables that can be compared, as SAT-MICRO by
 # Conchon, Kanig and Lescuyer works over any ordered type. Run, it colours
@@ -38,15 +43,18 @@ pick([[unit], *_], _) -> unit
 pick([_, *rest], first) -> pick(rest, first)
 pick([], first) -> first
 
-solve : (Formula(v), Model(v)) -> Result(Model(v), [Unsat]) where Equatable(v)
-solve([], model) -> Ok(model)
-solve(formula, model) -> (
-  formula is [[first, *_], *_] else return Err(Unsat)
-  if formula.any(|clause| clause.is_empty()) return Err(Unsat)
+models : (Formula(v), Model(v)) -> List(Model(v)) where Equatable(v)
+models([], model) -> [model]
+models(formula, model) -> (
+  formula is [[first, *_], *_] else return []
+  if formula.any(|clause| clause.is_empty()) return []
   literal = pick(formula, first)
-  solve(assume(formula, literal), [literal, *model])
-    .or_else(|_| solve(assume(formula, -literal), [-literal, *model]))
+  models(assume(formula, literal), [literal, *model])
+    .concat(models(assume(formula, -literal), [-literal, *model]))
 )
+
+solve : Formula(v) -> Result(Model(v), [Unsat]) where Equatable(v)
+solve(formula) -> models(formula, []).first().err_as(Unsat)
 
 satisfies : (Model(v), Formula(v)) -> Bool where Equatable(v)
 satisfies(model, formula) -> formula.all(|clause| clause.any(|literal| model.contains(literal)))
@@ -109,20 +117,29 @@ colour_of(model, region) -> colours.find(|colour| model.contains(Yes((region, co
 australia : Formula((Region, Colour))
 australia = colouring(regions, borders, colours)
 
-expect solve(australia, []).map_ok(|model| satisfies(model, australia)) == Ok(True)
+expect solve(australia).map_ok(|model| satisfies(model, australia)) == Ok(True)
 
 # (1 or 2) and (not 1 or 2) and (not 2 or 3): 2 and 3 must hold.
-expect solve([[Yes(1), Yes(2)], [Not(1), Yes(2)], [Not(2), Yes(3)]], [])
+expect solve([[Yes(1), Yes(2)], [Not(1), Yes(2)], [Not(2), Yes(3)]])
   .map_ok(|model| model.contains(Yes(2)) & model.contains(Yes(3)))
   == Ok(True)
 
-expect solve([[Yes(1)], [Not(1)]], []) == Err(Unsat)
+expect solve([[Yes(1)], [Not(1)]]) == Err(Unsat)
 
 # A triangle takes three colours, so two are not enough: the same formula
 # as three pigeons in two holes.
-expect solve(colouring([1, 2, 3], pairs([1, 2, 3]), [Red, Green]), []) == Err(Unsat)
+expect solve(colouring([1, 2, 3], pairs([1, 2, 3]), [Red, Green])) == Err(Unsat)
+
+# Six ways to colour the mainland, and three for Tasmania.
+expect models(australia, []).len() == 18
+
+# Forty variables, each free either way, have 2^40 models. Asking for the
+# first stops at the first: a program may not rely on that, since leaving
+# unneeded work out is allowed but not promised, so this checks the
+# compiler does it.
+expect solve(List.range(40).map(|n| [Yes(n), Not(n)])).is_ok()
 
 app : {args: List(Str)} -> Str
-app(_) -> solve(australia, []).map_ok(legend).ok_or("no colouring")
+app(_) -> solve(australia).map_ok(legend).ok_or("no colouring")
 
 main!(host) -> host.run!(app)

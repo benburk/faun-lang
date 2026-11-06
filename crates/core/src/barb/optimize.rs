@@ -27,6 +27,7 @@ pub fn optimize(program: &mut Program) {
     super::descent::descend(program);
     super::normalize::inline_with_identities(program, InlineLimits::default());
     super::fuse::fuse(program);
+    super::head::heads(program);
     super::inplace::in_place(program);
     super::normalize::simplify(program);
     super::specialize::specialize(program);

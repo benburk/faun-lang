@@ -69,6 +69,12 @@ main!(host) -> (
 The program may print `finished`, or may hang before it; a program must not
 rely on either. Host calls are never left out, reordered or repeated.
 
+The compiler leaves such work out where it can see it. A list read only for
+its first element, from a definition joining what its own calls answer, is
+built only as far as that: `models(formula).first()`, over a search
+answering every model, stops at the first, the second branch searched only
+where the first found none ([`head.rs`](../crates/core/src/barb/head.rs)).
+
 ## Termination is not checked
 
 A pure call either answers or never comes back. A needed call that never

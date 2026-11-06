@@ -614,7 +614,7 @@ fn newton_finds_the_square_root_of_two() {
 fn the_sat_solver_colours_australia_and_refutes_the_impossible() {
     let (failed, count) = support::test_file(&example("sat.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 4);
+    assert_eq!(count, 6);
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
         .arg("run")
@@ -735,6 +735,25 @@ fn appends_are_linear_work() {
          )",
     );
     assert_eq!(package.run(), 20000 % 256);
+}
+
+/// A search answering every leaf of a tree, asked only for the first, stops
+/// at the first: the joins of its two halves try the second only where the
+/// first is empty. Sixty levels are 2^60 leaves, which building them all
+/// would never finish. Leaving the rest out is allowed rather than
+/// promised, so this tests the compiler, not the language.
+#[test]
+fn a_search_asked_for_its_first_answer_stops_there() {
+    let package = support::Package::new(
+        "first-of-all",
+        "leaves : (Nat, Nat) -> List(Nat)
+         leaves(0, k) -> [k]
+         leaves(Succ(n), k) -> leaves(n, 2 * k).concat(leaves(n, 2 * k + 1))
+
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(leaves(60, 7).first().ok_or(0) % 256))",
+    );
+    assert_eq!(package.run(), 0);
 }
 
 /// Joining a short list before a long one nothing else holds writes it in
