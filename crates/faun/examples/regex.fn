@@ -39,22 +39,30 @@ Regex : [
   matches : (Regex, Str) -> Bool
   matches(regex, text) -> text.to_utf8().fold(regex, derive).nullable()
 
-  equals : (Regex, Regex) -> Bool
+  cmp : (Regex, Regex) -> Order
 )
 
 # A sequence and a choice, simplified as they are built, which keeps every
-# derivative small.
+# derivative small. A sequence nests to the right, so a derivative rebuilds
+# only its front, and a choice keeps its alternatives in order, each once,
+# so two choices of the same alternatives are the same regex.
 seq : (Regex, Regex) -> Regex
 seq(Nothing, _) -> Nothing
 seq(_, Nothing) -> Nothing
 seq(Empty, regex) -> regex
 seq(regex, Empty) -> regex
+seq(Seq(a, b), c) -> seq(a, seq(b, c))
 seq(a, b) -> Seq(a, b)
 
 alt : (Regex, Regex) -> Regex
 alt(Nothing, regex) -> regex
 alt(regex, Nothing) -> regex
-alt(regex, regex) -> regex
+alt(Alt(a, b), c) -> alt(a, alt(b, c))
+alt(a, Alt(b, c)) if a == b -> Alt(b, c)
+alt(a, Alt(b, c)) if a > b -> Alt(b, alt(a, c))
+alt(a, Alt(b, c)) -> Alt(a, Alt(b, c))
+alt(a, b) if a == b -> a
+alt(a, b) if a > b -> Alt(b, a)
 alt(a, b) -> Alt(a, b)
 
 # The usual syntax: `|` between alternatives, `*` after what repeats,
