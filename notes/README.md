@@ -72,8 +72,10 @@ not needed.
 - [Grammar audit](grammar-audit.md): whether the grammar stays LL(1) and
   free of ambiguity
 - [N-body](nbody-performance.md),
-  [spectral norm](spectralnorm-performance.md) and
-  [JSON](json-performance.md): performance investigations
+  [spectral norm](spectralnorm-performance.md),
+  [JSON](json-performance.md) and
+  [x86-64 code generation](x86-codegen-performance.md): performance
+  investigations
 - [Faun and AI](ai-future.md)
 - `archive/`: notes kept for reference that no longer describe the compiler
 
