@@ -80,8 +80,10 @@ read by name and kind, then told what its absence means:
 | `.opt()`             | `Err(Missing)`             |
 
 `Decode.sequence({...})` gathers a record's members, and `fields.finish`
-refuses any member no field read; `fields.finish_loose` lets them pass. A
-member written twice is refused either way.
+refuses any member no field read, a second member of a name read among
+them; `fields.finish_loose` lets them pass, reading the first of a name
+written twice. A field reads a member by finding it, and `finish` checks
+the whole object in one pass over it.
 
 The standard types decode with `Json.string`, `boolean`, `int`, `nat`,
 `u8` to `u64` and `f64`. `value.array(decoder)` reads an array,

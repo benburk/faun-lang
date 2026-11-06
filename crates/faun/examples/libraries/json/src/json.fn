@@ -242,18 +242,15 @@ DecodeError : [
   equals : (DecodeError, DecodeError) -> Bool
 )
 
-# A decode carries the names of the object members it read. Members read by
-# fields decoded separately are merged by name: one read twice is an
-# overlap, and `Fields.finish` refuses any member no field read.
-Decode(a) : [Decoded(a, List(Str)), Failed(DecodeError)].(
+# A decode carries the places, in their object, of the members it read, so
+# `Fields.finish` can refuse a member no field read, or one read twice, in
+# one pass over the object.
+Decode(a) : [Decoded(a, List(Nat)), Failed(DecodeError)].(
   # Two decodes as one, by `combine`; a record builder pairs a record's
   # fields this way, `Decode.sequence({name: ..., age: ...})`.
   sequence : (Decode(a), Decode(b), (a, b) -> c) -> Decode(c)
   sequence(Failed(error), _, _) -> Failed(error)
   sequence(_, Failed(error), _) -> Failed(error)
-  sequence(Decoded(_, used_a), Decoded(_, used_b), _)
-    if used_a.any(|name| used_b.contains(name)) ->
-    Failed(OverlappingFields)
   sequence(Decoded(a, used_a), Decoded(b, used_b), combine) ->
     Decoded(combine(a, b), used_a.concat(used_b))
 
@@ -267,8 +264,8 @@ Decode(a) : [Decoded(a, List(Str)), Failed(DecodeError)].(
 
   # A decode chosen by what an earlier one found, as a tagged union reads
   # its tag and then its fields. `context`, usually the fields, is handed
-  # to `choose` with the value. The members both read are merged as
-  # `sequence` merges them, so `finish` still sees every one.
+  # to `choose` with the value. The members both read are kept together,
+  # as `sequence` keeps them, so `finish` still sees every one.
   and_then : (Decode(a), c, (a, c) -> Decode(b)) -> Decode(b)
   and_then(Failed(error), _, _) -> Failed(error)
   and_then(Decoded(value, used), context, choose) -> claimed(choose(value, context), used)
@@ -276,20 +273,20 @@ Decode(a) : [Decoded(a, List(Str)), Failed(DecodeError)].(
 
 # One member looked for: absent, found and decoded, or found and refused.
 # `required`, `default` and `opt` say what an absent one means.
-Field(a) : [Missing(Str), Value(Str, a), Failed(DecodeError)].(
+Field(a) : [Missing(Str), Value(Nat, a), Failed(DecodeError)].(
   required : Field(a) -> Decode(a)
   required(Missing(name)) -> Decode.Failed(MissingField(name))
-  required(Value(name, value)) -> Decoded(value, [name])
+  required(Value(place, value)) -> Decoded(value, [place])
   required(Failed(error)) -> Decode.Failed(error)
 
   default : (Field(a), a) -> Decode(a)
   default(Missing(_), fallback) -> Decoded(fallback, [])
-  default(Value(name, value), _) -> Decoded(value, [name])
+  default(Value(place, value), _) -> Decoded(value, [place])
   default(Failed(error), _) -> Decode.Failed(error)
 
   opt : Field(a) -> Decode(Result(a, [Missing]))
   opt(Missing(_)) -> Decoded(Err(Missing), [])
-  opt(Value(name, value)) -> Decoded(Ok(value), [name])
+  opt(Value(place, value)) -> Decoded(Ok(value), [place])
   opt(Failed(error)) -> Decode.Failed(error)
 )
 
@@ -301,19 +298,21 @@ Fields : Result(List((Str, Json)), DecodeError).(
   of(Object(members)) -> Fields(Ok(members))
   of(_) -> Fields(Err(Expected("object")))
 
-  # `decoded`, refused where the object has a member nothing read.
+  # `decoded`, refused where the object has a member nothing read: one
+  # whose name nothing read, or a second of a name read.
   finish : (Fields, Decode(a)) -> Decode(a)
-  finish(Fields(Ok(members)), decoded) -> finish_object(members, decoded, True)
+  finish(Fields(Ok(members)), decoded) -> finish_object(members, decoded)
   finish(Fields(Err(error)), _) -> Failed(error)
 
   # `decoded`, with members nothing read let pass: for input that may grow.
+  # Of a name written twice, the first is read.
   finish_loose : (Fields, Decode(a)) -> Decode(a)
-  finish_loose(Fields(Ok(members)), decoded) -> finish_object(members, decoded, False)
+  finish_loose(Fields(Ok(_)), decoded) -> decoded.map(|value| value)
   finish_loose(Fields(Err(error)), _) -> Failed(error)
 
   # The member `name`, its value by `decode`.
   field : (Fields, Str, Json -> Decode(a)) -> Field(a)
-  field(Fields(Ok(members)), name, decode) -> scan_field(members, name, decode)
+  field(Fields(Ok(members)), name, decode) -> scan_field(members, name, decode, 0)
   field(Fields(Err(error)), _, _) -> Failed(error)
 
   # The member `name`, by its type's own `from_json`, which the type the
@@ -368,8 +367,8 @@ parse_value(['n', 'u', 'l', 'l', *rest]) -> Ok(parsed_json(Null, rest))
 parse_value(['t', 'r', 'u', 'e', *rest]) -> Ok(parsed_json(Bool(True), rest))
 parse_value(['f', 'a', 'l', 's', 'e', *rest]) -> Ok(parsed_json(Bool(False), rest))
 parse_value(['"', *rest]) -> (
-  (text, after) = parse_text(rest)?
-  Ok(parsed_json(String(text), after))
+  (piece, after) = parse_text(rest)?
+  Ok(parsed_json(String(piece), after))
 )
 parse_value(['[', *rest]) -> parse_array(rest, [])
 parse_value(['{', *rest]) -> parse_object(rest, [])
@@ -608,36 +607,44 @@ accepted(Ok(value)) -> Decoded(value, [])
 accepted(Err(error)) -> Failed(error)
 
 # The second stage of `and_then`, holding the first stage's claims.
-claimed : (Decode(b), List(Str)) -> Decode(b)
+claimed : (Decode(b), List(Nat)) -> Decode(b)
 claimed(Failed(error), _) -> Failed(error)
-claimed(Decoded(_, used_b), used_a) if used_a.any(|name| used_b.contains(name)) ->
-  Failed(OverlappingFields)
 claimed(Decoded(value, used_b), used_a) -> Decoded(value, used_a.concat(used_b))
 
-# The member named `wanted`, found at most once: a second one outranks what
-# the first decodes to. A loop, so an object of any size is read in constant
-# stack.
-scan_field : (List((Str, Json)), Str, Json -> Decode(a)) -> Field(a)
-scan_field([], wanted, _) -> Missing(wanted)
-scan_field([(name, value), *rest], wanted, decode) if name == wanted -> (
-  if rest.any(|(other, _)| other == wanted) return Failed(DuplicateField(wanted))
-  found_field(decode(value), wanted)
+# The first member named `wanted`, from place `at`, by `decode`.
+scan_field : (List((Str, Json)), Str, Json -> Decode(a), Nat) -> Field(a)
+scan_field([], wanted, _, _) -> Missing(wanted)
+scan_field([(name, value), *_], wanted, decode, at) if name == wanted -> found_field(decode(value), wanted, at)
+scan_field([_, *rest], wanted, decode, at) -> scan_field(rest, wanted, decode, at + 1)
+
+found_field : (Decode(a), Str, Nat) -> Field(a)
+found_field(Failed(error), name, _) -> Failed(AtField(name, error))
+found_field(Decoded(found, _), _, place) -> Value(place, found)
+
+# `decoded`, where it read each of the object's members once. Where one was
+# never read, the first such is refused: as a second of a name read, or as
+# unknown. One read twice is an overlap.
+finish_object : (List((Str, Json)), Decode(a)) -> Decode(a)
+finish_object(_, Failed(error)) -> Failed(error)
+finish_object(members, Decoded(value, used)) -> marked(used, List.repeat(False, members.len())) is (
+  Err(_) then Failed(OverlappingFields)
+  Ok(_) if used.len() == members.len() then Decoded(value, [])
+  Ok(marks) then Failed(unread(members.zip(marks), []))
 )
-scan_field([_, *rest], wanted, decode) -> scan_field(rest, wanted, decode)
 
-found_field : (Decode(a), Str) -> Field(a)
-found_field(Failed(error), wanted) -> Failed(AtField(wanted, error))
-found_field(Decoded(found, _), wanted) -> Value(wanted, found)
+# `marks` with each of `places` set, refused where one already is.
+marked : (List(Nat), List(Bool)) -> Result(List(Bool), [Overlap])
+marked([], marks) -> Ok(marks)
+marked([place, *_], marks) if marks.get_or(place, False) -> Err(Overlap)
+marked([place, *rest], marks) -> marked(rest, marks.put(place, True))
 
-finish_object : (List((Str, Json)), Decode(a), Bool) -> Decode(a)
-finish_object(_, Failed(error), _) -> Failed(error)
-finish_object(members, Decoded(value, used), True) ->
-  no_unknown(value, members.filter(|(name, _)| !used.contains(name)))
-finish_object(_, Decoded(value, _), False) -> Decoded(value, [])
-
-no_unknown : (a, List((Str, Json))) -> Decode(a)
-no_unknown(value, []) -> Decoded(value, [])
-no_unknown(_, [(name, _), *]) -> Failed(UnknownField(name))
+# Why the first member not marked was not read, `read` holding the names of
+# those before it that were.
+unread : (List(((Str, Json), Bool)), List(Str)) -> DecodeError
+unread([((name, _), True), *rest], read) -> unread(rest, [name, *read])
+unread([((name, _), False), *_], read) if read.contains(name) -> DuplicateField(name)
+unread([((name, _), False), *_], _) -> UnknownField(name)
+unread([], _) -> OverlappingFields
 
 # An array's elements from `index` on, `done` holding those decoded so far
 # backwards. A loop, so an array of any length is read in constant stack.
@@ -758,3 +765,27 @@ first_user_name(document) -> (
 
 expect Json.from_str("{\"users\":[{\"name\":\"Ada\"}]}").map_ok(first_user_name) == Ok(Ok(String("Ada")))
 expect Object([]).get("x") == Err(Missing) & Array([Null]).at(1) == Err(Missing) & Null.get("x") == Err(Missing)
+
+# A strict object refuses a member nothing read, a second of a name read as
+# written twice; a loose one reads the first. Reading one member twice is
+# an overlap.
+pair : (Str, Bool) -> Result({a: Nat, b: Nat}, DecodeError)
+pair(text, strict) -> (
+  value = Json.from_str(text).err_as(InvalidValue("not JSON"))?
+  fields = Fields.of(value)
+  decoded = Decode.sequence({a: fields.nat("a").required(), b: fields.nat("b").required()})
+  (if strict then fields.finish(decoded) else fields.finish_loose(decoded)).result()
+)
+
+doubled : Json -> Decode({a: Nat, again: Nat})
+doubled(value) -> (
+  fields = Fields.of(value)
+  fields.finish(Decode.sequence({a: fields.nat("a").required(), again: fields.nat("a").required()}))
+)
+
+expect pair("{\"b\":2,\"a\":1}", True) == Ok({a: 1, b: 2})
+expect pair("{\"a\":1,\"b\":2,\"a\":3}", True) == Err(DuplicateField("a"))
+expect pair("{\"a\":1,\"b\":2,\"c\":3}", True) == Err(UnknownField("c"))
+expect pair("{\"a\":1,\"b\":2,\"a\":3,\"c\":4}", False) == Ok({a: 1, b: 2})
+expect pair("{\"a\":1}", True) == Err(MissingField("b"))
+expect doubled(Object([("a", Int(1))])).result() == Err(OverlappingFields)
