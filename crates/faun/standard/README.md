@@ -620,8 +620,8 @@ be an assumption checked in development, which is not built.
 
 ## Loops
 
-`for pattern in list ( … )` runs its body, a round, once for each element
-in order, and `while condition ( … )` while the condition holds, what a
+`for pattern in list do ( … )` runs its body, a round, once for each
+element in order, and `while condition do ( … )` while the condition holds, what a
 test in it binds seen by the round. A name bound before a loop and again in
 its body, its `for` element or its `while` test carries from round to
 round and out of the loop, at one type where it is read in the next round

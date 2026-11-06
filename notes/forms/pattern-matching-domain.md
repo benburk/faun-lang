@@ -89,11 +89,12 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **Infallible destructure:** `(a, b) = pair`. A pattern that can fail is
   refused, with advice.
 - **Fallible destructure:** pattern and optional conditions, else leave by
-  `return`, `continue` or `break`: `expect r is Ok(v) else return 0`. A
+  `return`, `continue` or `break`: `r is Ok(v) else return 0`. A
   default is a ternary, `n = if r is Ok(v) then v else 0`, or `r.ok_or(0)`.
-- **Leave early on a test:** `expect n != 0 else return 0`.
+- **Leave early on a test:** `if n == 0 return 0`, or `n != 0 else
+  return 0` for what should hold.
 - **Many-way on a computed value:** `x is ( arms )`, each arm a pattern,
-  optional guard, `->` body; exhaustive. No `when`.
+  optional guard, `then` value; exhaustive. No `when`.
 - **Plain test:** is it this shape, as a `Bool`: `x is P`. Several values
   at once as a tuple, `(a, b) is (Ok(x), Ok(y))`; a chain, `x is Some(y) &
   f(y) is Some(z)`, where a test reads what an earlier one bound.
@@ -106,10 +107,10 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   rest, records open or closed, tuples, a repeated name as equality.
 - Or-patterns everywhere, not only in a clause's parameters.
 - The whole and its parts, `is` inside a pattern: `right is [y, *_]`.
-  Missing.
+  Built.
 - A list's end, `[*init, last]`: elements after a rest, in clauses. Built.
-- Against a name in scope: `==name`. Missing; with no rebinding, writing
-  the name alone is refused rather than a trap.
+- Against a name in scope: `==name`. Built; the name alone binds again,
+  as `=` does.
 
 **Rules**
 
@@ -120,8 +121,8 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   expression.
 - `&` and `|` short-circuit on `Bool`. Built.
 - Effects stand one to a line. Built.
-- `?` does not leave from a nested place for now: a branch, the right of
-  `&`. To lift with loops.
+- `?` leaves from a branch, an arm or a block inside either. Built. On the
+  right of `&` or `|` it is refused, since that side may not be worked out.
 
 **Constraints**
 
@@ -138,10 +139,10 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 
 ## Faun's forms, simplest first
 
-Every form programs keep writing, as Faun spells it under the current lean
-(design E below), from a plain binding to a match nested in a match. Several
-are the examples of the ultimate and penultimate conditional syntaxes,
-translated. Each comment says whether it is built or planned.
+Every form programs keep writing, as Faun spells it on `main`, from a plain
+binding to a match nested in a match. Several are the examples of the
+ultimate and penultimate conditional syntaxes, translated. Each comment says
+whether it is built or planned.
 
 ```faun
 # Take a value apart where it cannot fail. Built.
@@ -158,32 +159,32 @@ count = Nat.from_str(text)?
 # A default where it fails. Built.
 count = Nat.from_str(text).ok_or(0)
 
-# Ask whether a value has a shape, as a Bool. Planned.
+# Ask whether a value has a shape, as a Bool. Built.
 empty = list is []
 found = results.filter(|result| result is Ok(_))
 
-# Go on only where a test holds: else leave the function, a round, the loop. Planned.
-expect n != 0 else return 0
-expect !$seen.contains(node) else continue
-expect $total <= limit else break
+# Go on only where a test holds: else leave the function, a round, the loop. Built.
+n != 0 else return 0
+!seen.contains(node) else continue
+total <= limit else break
 
-# Take apart, or leave: what it binds goes on below. Planned.
-expect heap.pop() is Ok({key, value, rest}) else return state
-expect args is [_, name, *_] else return Err(Usage)
+# Take apart, or leave: what it binds goes on below. Built.
+heap.pop() is Ok({key, value, rest}) else return state
+args is [_, name, *_] else return Err(Usage)
 
-# The same, with conditions reading what it bound. Planned.
-expect entry is Ok({key, *}) & key < limit else return Rejected
+# The same, with conditions reading what it bound. Built.
+entry is Ok({key, *}) & key < limit else return Rejected
 
-# Compare with a name in scope, rather than bind. Planned.
-reached_from_itself = prev.get(node) is Some(==node)
+# Compare with a name in scope, rather than bind. Built.
+reached_from_itself = prev.get(node) is Ok(==node)
 
-# A default for a shape `ok_or` cannot reach. Planned.
+# A default for a shape `ok_or` cannot reach. Built.
 width = if config is {width: Ok(w), *} then w else 80
 
-# Several values at once, as a tuple. Planned.
+# Several values at once, as a tuple. Built.
 order = if (a, b) is (Ok(x), Ok(y)) & x <= y then Sorted else Unsorted
 
-# One test reading what another bound. The paper's context lookup. Planned.
+# One test reading what another bound. The paper's context lookup. Built.
 value = if expr is Var(name) & context.get(name) is Ok(found) then found else Unbound
 
 # Dispatch on a parameter's shape: clauses. Built.
@@ -198,75 +199,75 @@ kind(_) -> Other
 last([*_, x]) -> Ok(x)
 last([]) -> Err(Empty)
 
-# Many ways on a computed value: `is` and arms. Finch's sign. Planned.
+# Many ways on a computed value: `is` and arms. Finch's sign. Built.
 sign = n is (
-  _..-1 -> -1
-  0 -> 0
-  _ -> 1
+  _..-1 then -1
+  0 then 0
+  _ then 1
 )
 
-# Arms with guards. The paper's sizes, without its splits. Planned.
+# Arms with guards. The paper's sizes, without its splits. Built.
 size = foo(args) is (
-  0 -> "null"
-  n if n.abs() > 100 -> "large"
-  n if n.abs() < 10 -> "small"
-  _ -> "medium"
+  0 then "null"
+  n if n.abs() > 100 then "large"
+  n if n.abs() < 10 then "small"
+  _ then "medium"
 )
 
-# Two values at once, many ways. Planned.
+# Two values at once, many ways. Built.
 fizz(n) -> (n % 3, n % 5) is (
-  (0, 0) -> "FizzBuzz"
-  (0, _) -> "Fizz"
-  (_, 0) -> "Buzz"
-  _ -> n.to_str()
+  (0, 0) then "FizzBuzz"
+  (0, _) then "Fizz"
+  (_, 0) then "Buzz"
+  _ then n.to_str()
 )
 
-# An arm going on into a further match. The paper's cache. Planned.
+# An arm going on into a further match. The paper's cache. Built.
 answer = x is (
-  Right(Err(_)) -> default
-  Right(Ok(cached)) -> f(cached)
-  Left(input) -> compute(input) is (
-    Err(_) -> default
-    Ok(result) -> f(result)
+  Right(Err(_)) then default
+  Right(Ok(cached)) then f(cached)
+  Left(input) then compute(input) is (
+    Err(_) then default
+    Ok(result) then f(result)
   )
 )
 
-# Alternatives binding one name. The paper's evaluator. Planned.
+# Alternatives binding one name, at one type. The paper's evaluator. Built.
 simple = e is (
-  Lit(value) | Add(Lit(0), value) | Add(value, Lit(0)) -> Ok(value)
-  _ -> Err(NotSimple)
+  Lit(v) | Add(Lit(0), Lit(v)) | Add(Lit(v), Lit(0)) then Ok(Lit(v))
+  _ then Err(NotSimple)
 )
 
-# The whole and its parts: `is` inside a pattern, after Finch. Planned.
+# The whole and its parts: `is` inside a pattern, after Finch. Built.
 merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
 merge(left, [y, *ys]) -> [y, *merge(left, ys)]
 merge(left, []) -> left
 
-# A chain of steps in one condition. The paper's `_1234`. Planned.
+# A chain of steps in one condition. The paper's `_1234`. Built.
 identifier(name, arity) ->
-  if name.drop_prefix("_") is Ok(digits)
+  if digits_after(name) is Ok(digits)
     & Nat.from_str(digits) is Ok(index)
     & index < arity
   then Ok((index, name))
   else Err(Invalid(name))
 
-# The same as early exits, a step to a line. Planned.
+# The same as early exits, a step to a line. Built.
 identifier(name, arity) -> (
-  expect name.drop_prefix("_") is Ok(digits) else return Err(Invalid(name))
-  expect Nat.from_str(digits) is Ok(index) & index < arity else return Err(Invalid(name))
+  digits_after(name) is Ok(digits) else return Err(Invalid(name))
+  Nat.from_str(digits) is Ok(index) & index < arity else return Err(Invalid(name))
   Ok((index, name))
 )
 
-# Early exits instead of nesting. The paper's `normalize`, after Finch. Planned.
+# Early exits instead of nesting. The paper's `normalize`, after Finch. Built.
 meet(t1, t2) -> (
   n1 = normalize(t1)
-  expect !(n1 is Bot) else return Bot
+  if n1 is Bot return Bot
   n2 = normalize(t2)
-  expect !(n2 is Bot) else return Bot
+  if n2 is Bot return Bot
   if merge(n1, n2) is Ok(merged) then merged else glb(n1, n2)
 )
 
-# Clauses and `?` together. Finch's `zip_with`. Planned.
+# Clauses and `?` together. Finch's `zip_with`. Built.
 zip_with(f, [x, *xs], [y, *ys]) -> (
   tail = zip_with(f, xs, ys)?
   Ok([f(x, y), *tail])
@@ -274,11 +275,11 @@ zip_with(f, [x, *xs], [y, *ys]) -> (
 zip_with(_, [], []) -> Ok([])
 zip_with(_, _, _) -> Err(Mismatch)
 
-# A worklist taken apart as a loop goes round. Planned, with loops.
-while $stack is [node, *$stack] (
-  expect !$seen.contains(node) else continue
-  $seen.insert(node)
-  $stack.extend(graph.targets(node))
+# A worklist taken apart as a loop goes round. Built.
+while stack is [node, *stack] do (
+  if seen.contains(node) continue
+  seen = seen.insert(node)
+  stack = stack.concat(graph.targets(node))
 )
 ```
 
@@ -286,7 +287,11 @@ while $stack is [node, *$stack] (
 would, where the test holds; `Ok(==limit)` compares. Refused until
 2026-10-11.
 
-## What Faun has today
+## What Faun had on 2026-10-04
+
+This section and the questions after it describe the language when the
+exploration began. [Pattern matching](pattern-matching.md) says what holds
+now; Decided and the forms above are kept current.
 
 **Where a pattern stands:** a clause's parameters, a binding's left side, a
 lambda's parameters. A clause's patterns may fail, falling to the next
@@ -693,8 +698,9 @@ leaving where it fails is what a binding needs, since what the condition
 binds goes on with the lines below. A plain test could be written either
 way; the style is the first, unless the condition binds for what follows.
 
-Since decided otherwise: the two directions became one, `expect condition
-else …`, leaving where the condition fails. See Decided, at the top.
+Since decided otherwise: leaving where the condition fails became a line of
+its own, `condition else …`, first spelled `expect condition else …`, and
+leaving where it holds an `if` line beside it. See Decided, at the top.
 
 ### Comparing
 
