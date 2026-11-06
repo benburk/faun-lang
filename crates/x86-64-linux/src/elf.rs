@@ -399,8 +399,11 @@ mod tests {
     #[test]
     fn symbols_follow_what_is_loaded() {
         let plain = hello();
-        let named =
-            crate::X86_64Linux.emit_with(&faun_core::programs::hello_world(), SymbolTable::Written);
+        let named = crate::X86_64Linux.emit_with(
+            &faun_core::programs::hello_world(),
+            faun_core::targets::Favour::Speed,
+            SymbolTable::Written,
+        );
 
         assert!(named.len() > plain.len());
         assert_eq!(&named[96..104], &plain[96..104], "the segment is unchanged");

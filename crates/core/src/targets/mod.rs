@@ -85,11 +85,13 @@ pub trait Target: fmt::Debug {
     /// Prefer [`Self::compile_machine_ir`], which establishes these preconditions.
     fn emit(&self, program: &Program) -> Vec<u8>;
 
-    /// The image [`Self::emit`] makes, and with [`SymbolTable::Written`] a
-    /// symbol naming each function, for a profiler or a disassembler. A
-    /// target that writes no symbols makes the same image either way.
-    fn emit_with(&self, program: &Program, symbols: SymbolTable) -> Vec<u8> {
-        let _ = symbols;
+    /// The image [`Self::emit`] makes, its code favouring speed or size
+    /// where they pull apart, and with [`SymbolTable::Written`] a symbol
+    /// naming each function, for a profiler or a disassembler. A target
+    /// with no such choices, writing no symbols, makes the same image
+    /// whichever is asked; [`Self::emit`] favours speed.
+    fn emit_with(&self, program: &Program, favour: Favour, symbols: SymbolTable) -> Vec<u8> {
+        let _ = (favour, symbols);
         self.emit(program)
     }
 
@@ -162,14 +164,19 @@ pub trait Target: fmt::Debug {
         favour: Favour,
         symbols: SymbolTable,
     ) -> Result<Vec<u8>, String> {
-        let image = self.emit_with(&self.prepare_favouring(program, favour)?, symbols);
+        let image = self.emit_with(&self.prepare_favouring(program, favour)?, favour, symbols);
         if favour == Favour::Speed {
             return Ok(image);
         }
         // What favours size here is calls in place of inline cases and
         // joins, and which is smaller depends on how often a program makes
-        // them, so it is built both ways and the smaller kept.
-        let faster = self.emit_with(&self.prepare_favouring(program, Favour::Speed)?, symbols);
+        // them, so it is built both ways and the smaller kept: either way,
+        // its code is emitted favouring size.
+        let faster = self.emit_with(
+            &self.prepare_favouring(program, Favour::Speed)?,
+            Favour::Size,
+            symbols,
+        );
         Ok(if faster.len() < image.len() {
             faster
         } else {

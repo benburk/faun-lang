@@ -147,6 +147,15 @@ pub(crate) enum Opcode {
 }
 
 impl Opcode {
+    /// Whether it reads or writes the stack around a call: the arguments
+    /// a call hands on it, or those its function was handed there.
+    pub(crate) const fn reaches_the_stack(self) -> bool {
+        matches!(
+            self,
+            Self::LoadOutgoing | Self::StoreOutgoing | Self::LoadIncoming | Self::StoreIncoming
+        )
+    }
+
     /// Whether it is worked out where its first operand was, whichever
     /// register that is.
     const fn in_place(self) -> bool {
@@ -1370,9 +1379,18 @@ struct Selector<'a> {
     functions: Vec<Function>,
 }
 
+#[cfg(test)]
 pub(crate) fn select_and_allocate(source: &Program) -> Result<crate::machine::Allocated, String> {
+    select_and_allocate_favouring(source, faun_core::targets::Favour::Speed)
+}
+
+/// [`select_and_allocate`], favouring speed or size where they pull apart.
+pub(crate) fn select_and_allocate_favouring(
+    source: &Program,
+    favour: faun_core::targets::Favour,
+) -> Result<crate::machine::Allocated, String> {
     let selected = select(source)?;
-    register_allocate::allocate(&selected, source.entry())
+    register_allocate::allocate(&selected, source.entry(), favour)
 }
 
 #[expect(

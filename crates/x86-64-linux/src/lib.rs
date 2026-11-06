@@ -20,7 +20,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use faun_core::ir::{DataId, FunctionId, Program};
-use faun_core::targets::{SymbolTable, Target, write_image};
+use faun_core::targets::{Favour, SymbolTable, Target, write_image};
 
 /// How wide this machine's own word is, which is the widest value it holds
 /// and what any class but a fixed one means here.
@@ -89,11 +89,11 @@ impl Target for X86_64Linux {
     }
 
     fn emit(&self, program: &Program) -> Vec<u8> {
-        self.emit_with(program, SymbolTable::Omitted)
+        self.emit_with(program, Favour::Speed, SymbolTable::Omitted)
     }
 
-    fn emit_with(&self, program: &Program, symbols: SymbolTable) -> Vec<u8> {
-        let allocated = selected::select_and_allocate(program)
+    fn emit_with(&self, program: &Program, favour: Favour, symbols: SymbolTable) -> Vec<u8> {
+        let allocated = selected::select_and_allocate_favouring(program, favour)
             .expect("accepted machine IR has a valid x86 selected allocation");
         let code = encode::encode(&allocated);
         elf::image(&code, program, symbols)

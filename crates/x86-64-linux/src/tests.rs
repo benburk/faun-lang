@@ -147,3 +147,23 @@ fn low_word_multiplication_preserves_unsigned_high_bits() {
         assert_eq!(shared::status(&p), 1, "{left} * {right}");
     }
 }
+
+/// A recursion's way out, which touches nothing it keeps for its caller,
+/// returns without saving it, favouring speed; favouring size, the frame
+/// opens where the function starts.
+#[test]
+fn an_early_way_out_saves_nothing() {
+    use crate::machine::Inst;
+    use faun_core::targets::Favour;
+    let program = TARGET.prepare(&faun_core::programs::recurses()).unwrap();
+    let first = |favour| {
+        let allocated = crate::selected::select_and_allocate_favouring(&program, favour).unwrap();
+        let (_, start) = allocated
+            .functions()
+            .find(|&(function, _)| function != program.entry())
+            .unwrap();
+        allocated.instructions()[start]
+    };
+    assert!(!matches!(first(Favour::Speed), Inst::OpenFrame { .. }));
+    assert!(matches!(first(Favour::Size), Inst::OpenFrame { .. }));
+}

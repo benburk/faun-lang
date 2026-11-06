@@ -585,8 +585,14 @@ fn optimized(program: &Program) -> Program {
     faun_core::ir::optimize(program)
 }
 
+/// The image `program` makes favouring size, which the sizes recorded
+/// here hold to: a build favouring speed may spend bytes on it.
 pub(super) fn bytes(program: &Program) -> Vec<u8> {
-    TARGET.emit(program)
+    TARGET.emit_with(
+        program,
+        faun_core::targets::Favour::Size,
+        faun_core::targets::SymbolTable::Omitted,
+    )
 }
 
 /// Every program here and what it leaves with. What a program answers is a

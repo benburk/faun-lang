@@ -12,6 +12,7 @@ use crate::parallel_copy::{self, Copy as ParallelCopy, CopySource, Move as CopyM
 use crate::selected::{BlockId, Immediate, InstId, Opcode, Selected, Terminator, VReg};
 use faun_core::codegen::registers::SpillSlot;
 use faun_core::ir::{DataId, FunctionId, Offset, Width};
+use faun_core::targets::Favour;
 
 const SYS_READ: u64 = 0;
 const SYS_WRITE: u64 = 1;
@@ -75,9 +76,9 @@ pub(super) fn lower(
     selected: &Selected,
     liveness: &Liveness,
     allocation: &Allocation,
-    entry: FunctionId,
+    (entry, favour): (FunctionId, Favour),
 ) -> Result<Allocated, String> {
-    Lowering::new(selected, liveness, allocation).run(entry)
+    Lowering::new(selected, liveness, allocation).run(entry, favour)
 }
 
 struct Lowering<'a> {
@@ -100,6 +101,9 @@ struct Lowering<'a> {
     /// leaves alone that it writes, put back before it returns.
     saved: Vec<Vec<Reg>>,
     frames: Vec<Frame>,
+    /// Whether each block runs with its function's frame open: see
+    /// [`Lowering::open_blocks`].
+    opened: Vec<bool>,
 }
 
 /// The outgoing call area starts at rsp, followed by allocator spill slots
@@ -183,6 +187,7 @@ impl<'a> Lowering<'a> {
             final_block: None,
             uses: Uses::new(selected),
             saved: Vec::new(),
+            opened: Vec::new(),
             frames: Vec::new(),
         }
     }
@@ -191,10 +196,17 @@ impl<'a> Lowering<'a> {
         clippy::too_many_lines,
         reason = "one ordered lowering walk over allocated blocks"
     )]
-    fn run(mut self, entry: FunctionId) -> Result<Allocated, String> {
+    fn run(mut self, entry: FunctionId, favour: Favour) -> Result<Allocated, String> {
         self.configure_program(entry);
         self.saved = self.kept_for_callers(entry);
         self.frames = self.layout_frames()?;
+        // Favouring size, every function opens its frame where it starts:
+        // shrink-wrapped, it opens and closes it on each way into and out of
+        // the blocks needing it, more code than once at its start.
+        self.opened = match favour {
+            Favour::Speed => self.open_blocks(entry),
+            Favour::Size => vec![true; self.selected.blocks.len()],
+        };
         self.report_stack_overflow();
         self.ignore_broken_pipes();
         for (at, layout) in self.liveness.blocks.iter().enumerate() {
@@ -212,11 +224,9 @@ impl<'a> Lowering<'a> {
                 let label = self.block_labels[layout.block.index()];
                 self.asm.starts(function.source, label);
                 self.enter_function(function.source, entry);
-                let frame = self.frame(function.source);
-                if frame > 0 {
-                    self.asm.open_frame(frame);
+                if self.opened[layout.block.index()] {
+                    self.open_frame(function.source);
                 }
-                self.keep_for_caller(function.source, true);
             }
             self.emit_stores(layout.entry);
             for points in &layout.instructions {
@@ -635,6 +645,148 @@ impl<'a> Lowering<'a> {
 
     fn local_slot(&self, owner: FunctionId, slot: FrameSlot) -> FrameSlot {
         FrameSlot::at(self.frames[owner.index()].outgoing + slot.number())
+    }
+
+    /// Put back what `owner` keeps for its caller, and give up its frame.
+    fn close_frame(&mut self, owner: FunctionId) {
+        self.keep_for_caller(owner, false);
+        let frame = self.frame(owner);
+        if frame > 0 {
+            self.asm.close_frame(frame);
+        }
+    }
+
+    /// Make room for `owner`'s frame, and keep there what it keeps for its
+    /// caller.
+    fn open_frame(&mut self, owner: FunctionId) {
+        let frame = self.frame(owner);
+        if frame > 0 {
+            self.asm.open_frame(frame);
+        }
+        self.keep_for_caller(owner, true);
+    }
+
+    /// Which blocks run with their function's frame open.
+    ///
+    /// A block touches the frame where a value lives in memory or in a
+    /// register a call leaves alone during it, where it writes a value to
+    /// memory, where it reads or writes the stack around a call, or where
+    /// the way out of it writes memory. A block from which no such block
+    /// can be reached runs without the frame. Any other block that one
+    /// touching the frame reaches runs with it, and so does each touching
+    /// it. The rest run without it. A way from a block without the frame to
+    /// one with it opens the frame, and a way from one with it to one
+    /// without closes it, after the way's moves: so a function whose early
+    /// way out touches nothing returns from there without saving what it
+    /// keeps for its caller, or making room it never uses, and a way out
+    /// that one touching the frame shares closes it before going on. The
+    /// entry, which never returns, and a function with no frame open it at
+    /// once, as before.
+    fn open_blocks(&self, entry: FunctionId) -> Vec<bool> {
+        let blocks = &self.liveness.blocks;
+        let needs = self.needing_frame(entry);
+        // Whether no block needing the frame can be reached from each, as
+        // the largest set closed under going on.
+        let mut free: Vec<bool> = needs.iter().map(|&needed| !needed).collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for layout in blocks.iter().rev() {
+                let at = layout.block.index();
+                if free[at]
+                    && successors(self.selected.blocks[layout.block].terminator)
+                        .into_iter()
+                        .flatten()
+                        .any(|target| !free[target.index()])
+                {
+                    free[at] = false;
+                    changed = true;
+                }
+            }
+        }
+        let mut opened = needs;
+        let mut pending: Vec<_> = (0..opened.len()).filter(|&at| opened[at]).collect();
+        while let Some(at) = pending.pop() {
+            for target in successors(self.selected.blocks[BlockId::at(at)].terminator)
+                .into_iter()
+                .flatten()
+            {
+                if !opened[target.index()] && !free[target.index()] {
+                    opened[target.index()] = true;
+                    pending.push(target.index());
+                }
+            }
+        }
+        opened
+    }
+
+    /// Which blocks touch the frame, as [`Self::open_blocks`] says, or are
+    /// in a function that opens it at once.
+    fn needing_frame(&self, entry: FunctionId) -> Vec<bool> {
+        let touching = self.points_touching_frame();
+        let mut needs = vec![false; self.selected.blocks.len()];
+        for layout in &self.liveness.blocks {
+            let block = self.selected.blocks[layout.block];
+            let (first, last) = (layout.entry.index(), layout.terminator.index());
+            needs[layout.block.index()] = block.owner == entry
+                || self.frame(block.owner) == 0
+                || touching[last + 1] > touching[first]
+                || self.selected.order[block.instructions.range()]
+                    .iter()
+                    .any(|&id| self.selected.instructions[id].opcode.reaches_the_stack())
+                || successors(block.terminator)
+                    .into_iter()
+                    .flatten()
+                    .any(|target| self.edge_touches_frame(layout.block, target));
+        }
+        needs
+    }
+
+    /// How many points before each touch the frame: where a value in memory
+    /// or in a register a call leaves alone is live, or a value is stored.
+    fn points_touching_frame(&self) -> Vec<u32> {
+        let points = self
+            .liveness
+            .blocks
+            .last()
+            .map_or(0, |layout| layout.terminator.index() + 1);
+        // How many values touching the frame are live from each point on,
+        // and then whether any is, at each point.
+        let mut touched = vec![0i64; points + 1];
+        for segment in &self.allocation.segments {
+            let frame = match segment.location {
+                Location::Spill(_) => true,
+                Location::Register(reg) => CALLEE_SAVED.contains(&reg),
+            };
+            if frame {
+                touched[segment.start.index()] += 1;
+                touched[segment.end.index().min(points)] -= 1;
+            }
+        }
+        let mut live = 0;
+        let mut before = vec![0u32; points + 1];
+        for at in 0..points {
+            live += touched[at];
+            let stored = self
+                .allocation
+                .stores_at(Point::at(at).expect("a point"))
+                .next()
+                .is_some();
+            before[at + 1] = before[at] + u32::from(live > 0 || stored);
+        }
+        before
+    }
+
+    /// Whether the moves on the way from `from` to `target` read or write
+    /// memory.
+    fn edge_touches_frame(&self, from: BlockId, target: BlockId) -> bool {
+        self.edge_moves(from, target).is_ok_and(|moves| {
+            moves.iter().any(|movement| {
+                let CopySource::Place(source) = movement.source();
+                matches!(source, Place::Frame(_))
+                    || matches!(movement.destination(), Place::Frame(_))
+            })
+        })
     }
 
     /// Put what `owner` keeps for its caller in its frame, on entering, or
@@ -1155,8 +1307,8 @@ impl<'a> Lowering<'a> {
                     self.asm.alu(Alu::Test, condition, condition, 64);
                     (Condition::NotEqual, Condition::Equal)
                 };
-                let edges_are_empty = self.edge_moves(layout.block, then_target)?.is_empty()
-                    && self.edge_moves(layout.block, else_target)?.is_empty();
+                let edges_are_empty = self.edge_is_empty(layout.block, then_target)?
+                    && self.edge_is_empty(layout.block, else_target)?;
                 if Some(then_target) == next && edges_are_empty {
                     self.asm
                         .jump_if(when_false, self.block_labels[else_target.index()]);
@@ -1214,10 +1366,8 @@ impl<'a> Lowering<'a> {
                     if tail.is_some() {
                         self.asm.take_last_call();
                     }
-                    self.keep_for_caller(owner, false);
-                    let frame = self.frame(owner);
-                    if frame > 0 {
-                        self.asm.close_frame(frame);
+                    if self.opened[layout.block.index()] {
+                        self.close_frame(owner);
                     }
                     match tail {
                         Some(callee) => self.asm.jump(callee),
@@ -1246,7 +1396,22 @@ impl<'a> Lowering<'a> {
             })
     }
 
+    /// Whether the way from `from` to `target` writes nothing of its own.
+    fn edge_is_empty(&self, from: BlockId, target: BlockId) -> Result<bool, String> {
+        Ok(self.edge_moves(from, target)?.is_empty()
+            && self.opened[from.index()] == self.opened[target.index()])
+    }
+
+    /// Whether the way from `from` to `target` opens the frame: `from` runs
+    /// without it, and `target` with it.
+    fn opens(&self, from: BlockId, target: BlockId) -> bool {
+        !self.opened[from.index()] && self.opened[target.index()]
+    }
+
     fn emit_edge(&mut self, from: BlockId, target: BlockId) -> Result<(), String> {
+        if self.opens(from, target) {
+            self.open_frame(self.selected.blocks[from].owner);
+        }
         let moves = self.edge_moves(from, target)?.to_vec();
         let entry = self.liveness.blocks[target.index()].entry;
         let block = self.selected.blocks[target];
@@ -1257,7 +1422,11 @@ impl<'a> Lowering<'a> {
                 _ => None,
             })
             .collect();
-        self.emit_moves_keeping(&moves, &defining, self.selected.blocks[from].owner);
+        let owner = self.selected.blocks[from].owner;
+        self.emit_moves_keeping(&moves, &defining, owner);
+        if self.opened[from.index()] && !self.opened[target.index()] {
+            self.close_frame(owner);
+        }
         Ok(())
     }
 
@@ -1265,6 +1434,19 @@ impl<'a> Lowering<'a> {
         self.allocation
             .location(point, value)
             .ok_or_else(|| format!("x86 v{} has no allocated segment", value.index()))
+    }
+}
+
+/// The blocks a block may go on to.
+const fn successors(terminator: Terminator) -> [Option<BlockId>; 2] {
+    match terminator {
+        Terminator::Jump { target, .. } => [Some(target), None],
+        Terminator::Branch {
+            then_target,
+            else_target,
+            ..
+        } => [Some(then_target), Some(else_target)],
+        Terminator::Return { .. } | Terminator::Halt => [None, None],
     }
 }
 

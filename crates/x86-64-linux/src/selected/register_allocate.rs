@@ -53,10 +53,14 @@ const REGISTERS: [Reg; 29] = [
     Reg::Xmm15,
 ];
 
-pub(super) fn allocate(selected: &Selected, entry: FunctionId) -> Result<Allocated, String> {
+pub(super) fn allocate(
+    selected: &Selected,
+    entry: FunctionId,
+    favour: faun_core::targets::Favour,
+) -> Result<Allocated, String> {
     let code = selected.code(entry);
     let (liveness, allocation) = registers::allocate(&code)?;
-    lower::lower(selected, &liveness, &allocation, entry)
+    lower::lower(selected, &liveness, &allocation, (entry, favour))
 }
 
 fn set(held: RegSet) -> codegen::RegSet {
