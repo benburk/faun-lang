@@ -44,10 +44,8 @@ solve(formula, model) -> (
   formula is [[first, *_], *_] else return Err(Unsat)
   if formula.any(|clause| clause.is_empty()) return Err(Unsat)
   literal = pick(formula, first)
-  solve(assume(formula, literal), [literal, *model]) is (
-    Ok(found) then Ok(found)
-    Err(Unsat) then solve(assume(formula, -literal), [-literal, *model])
-  )
+  solve(assume(formula, literal), [literal, *model])
+    .or_else(|_| solve(assume(formula, -literal), [-literal, *model]))
 )
 
 satisfies : (Model(v), Formula(v)) -> Bool where Equatable(v)

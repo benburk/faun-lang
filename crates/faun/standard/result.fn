@@ -21,6 +21,12 @@ Result(a, e) : [Ok(a), Err(e)].(
   and_then(Ok(value), f) -> f(value)
   and_then(Err(error), _) -> Err(error)
 
+  # The value, or where there is none, what `alternative` makes of the
+  # error: the next thing to try, which is tried only where this failed.
+  or_else : (Result(a, e), e -> Result(a, f)) -> Result(a, f)
+  or_else(Ok(value), _) -> Ok(value)
+  or_else(Err(error), alternative) -> alternative(error)
+
   map2 : (Result(a, e), Result(b, e), (a, b) -> c) -> Result(c, e)
   map2(Ok(a), Ok(b), f) -> Ok(f(a, b))
   map2(Err(error), _, _) -> Err(error)
@@ -55,6 +61,8 @@ Result(a, e) : [Ok(a), Err(e)].(
 )
 
 expect Ok(1).err_as(Missing) == Ok(1) & Ok(1).err_as(Missing) != Ok(2)
+expect Nat.from_str("4").or_else(|_| Nat.from_str("7")) == Ok(4) & Nat.from_str("x").or_else(|_| Nat.from_str("7")) == Ok(7)
+expect Nat.from_str("x").or_else(|Malformed| Err(Gone)) == Err(Gone)
 expect Err(Missing).map_ok(|n| n + 1) == Err(Missing) & Ok(3).err_as(Missing) != Err(Missing)
 expect Nat.from_str("48") == Ok(48) & Nat.from_str("x") == Err(Malformed)
 expect Nat.from_str("48").to_str() == "Ok(48)" & Nat.from_str("x").to_str() == "Err(Malformed)"
