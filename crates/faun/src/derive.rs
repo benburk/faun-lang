@@ -124,6 +124,7 @@ fn equals_of(program: &n::Program, cx: &mut Context, at: usize, equals: Symbol) 
         spelling: equals,
         parameters: signature.parameters.clone(),
         result: h::Type::Named(cx.prelude.bool_, Vec::new()),
+        result_span: None,
         constraints: signature.constraints.clone(),
     });
     let clause = equal_order(order_name, name, span, &cx.prelude, &mut cx.sites);

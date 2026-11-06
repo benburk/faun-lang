@@ -73,6 +73,8 @@ pub struct SignatureDecl {
     pub spelling: Symbol,
     pub parameters: Vec<Type>,
     pub result: Type,
+    /// Where the result's type is written, where a signature writes it.
+    pub result_span: Option<Span>,
     pub constraints: Vec<Constraint>,
 }
 

@@ -1,7 +1,7 @@
-error: mismatched types
+error: `if` and `else` have incompatible types
  --> the_branches_of_an_if_answer_one_type.fn:4:40
   |
 4 | label(n) -> if n == 0 then "none" else n
-  |                                        ^ expected `Str`, found `Nat`
-  |
-  = note: both branches of an `if` answer one type
+  |                            ------      ^ expected `Str`, found `Nat`
+  |                            |
+  |                            expected because of this

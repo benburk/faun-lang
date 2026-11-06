@@ -1,0 +1,9 @@
+error: mismatched types
+ --> main_ends_by_leaving_rather_than_answering.fn:4:16
+  |
+3 | main! : Host -> []
+  |                 -- expected `[]` because of return type
+4 | main!(host) -> host.println!("hi")
+  |                ^^^^^^^^^^^^^^^^^^^ expected `[]`, found `Result({}, [BrokenPipe, NoSpace, Other(Nat), *])`
+  |
+  = help: end it with a call that never answers, as `host.exit!(0)`

@@ -60,7 +60,7 @@ impl Typed {
             || {
                 self.constraints
                     .as_ref()
-                    .map_or_else(|| type_span(&self.result), |constraints| constraints.1)
+                    .map_or_else(|| self.result.span(), |constraints| constraints.1)
             },
             |methods| methods.1,
         )
@@ -158,7 +158,7 @@ impl<'s> Grouping<'s> {
             Line::Value(head, value) => self.value(&head, value),
             Line::Typed(head, typed) => self.typed(head, typed),
             Line::Alias(head, ty) => {
-                let span = head.span.through(type_span(&ty));
+                let span = head.span.through(ty.span());
                 let (name, params) = self.type_head(head)?;
                 self.item(
                     span,
@@ -349,7 +349,7 @@ impl<'s> Grouping<'s> {
         let (name, params) = self.type_head(head)?;
         if let Some(parameter) = typed.parameters.first() {
             return Err(SyntaxError::new(
-                type_span(parameter),
+                parameter.span(),
                 "a type is represented by one type, not a function of some",
             ));
         }
@@ -576,17 +576,6 @@ fn thrown_away(body: &Body, source: &str) -> Result<(), SyntaxError> {
         }
     }
     Ok(())
-}
-
-const fn type_span(ty: &Type) -> Span {
-    match ty {
-        Type::Named { span, .. }
-        | Type::Function { span, .. }
-        | Type::Variants { span, .. }
-        | Type::Record { span, .. }
-        | Type::Tuple { span, .. }
-        | Type::Hole { span } => *span,
-    }
 }
 
 /// The patterns `exprs` spell.

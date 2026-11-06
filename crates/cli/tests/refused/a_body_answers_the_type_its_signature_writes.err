@@ -1,0 +1,7 @@
+error: mismatched types
+ --> a_body_answers_the_type_its_signature_writes.fn:4:12
+  |
+3 | next : Nat -> Str
+  |               --- expected `Str` because of return type
+4 | next(n) -> n + 1
+  |            ^^^^^ expected `Str`, found `Nat`

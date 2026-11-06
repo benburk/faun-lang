@@ -14,7 +14,7 @@
 
 use std::rc::Rc;
 
-use super::unify::Ty;
+use super::unify::{Mismatch, Ty, show};
 use super::{Checker, Marks};
 use crate::ModuleId;
 use crate::ast::Span;
@@ -26,8 +26,11 @@ use crate::hir as h;
 pub(super) struct Join {
     module: ModuleId,
     span: Span,
+    ways: Ways,
     /// What the join answers.
     answer: Ty,
+    /// Each way that met the answer, and its type, in the order they met.
+    answered: Vec<(Span, Ty)>,
     /// Whether a way of a type other than `[]` met the answer, or the
     /// answer was decided before any way did, as a signature decides it.
     met: bool,
@@ -37,11 +40,24 @@ pub(super) struct Join {
     closed: bool,
 }
 
+/// What a join's ways are, which says why one that does not fit was
+/// wanted to be of the type it was.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Ways {
+    /// The branches of an `if`.
+    Branches,
+    /// The arms of an `is`, taking apart the value at this span.
+    Arms(Span),
+    /// What a clause or lambda answers, by its body and its `return`s, and
+    /// where its signature writes that type, where one does.
+    Answers(Option<Span>),
+}
+
 /// How a way's value meets its join's answer.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Meeting {
-    /// Unified, with a note on what must agree where they do not.
-    Unified(Option<&'static str>),
+    /// Unified.
+    Unified,
     /// Subsumed, as a clause's body meets its signature: a closed row may
     /// be widened where it is answered, at this site.
     Subsumed(h::SiteId),
@@ -87,12 +103,14 @@ pub(super) fn may_never_answer(expression: &h::Expr) -> bool {
 impl Checker<'_> {
     /// A join answering `answer`, at `span`. An answer already decided,
     /// as a signature's is, counts as a way of its type.
-    pub(super) fn join(&mut self, module: ModuleId, span: Span, answer: Ty) -> usize {
+    pub(super) fn join(&mut self, module: ModuleId, span: Span, ways: Ways, answer: Ty) -> usize {
         let met = !matches!(self.infer.resolve(&answer), Ty::Var(_));
         self.joins.push(Join {
             module,
             span,
+            ways,
             answer,
+            answered: Vec::new(),
             met,
             waiting: 0,
             closed: false,
@@ -158,23 +176,81 @@ impl Checker<'_> {
         self.joins[join].met = true;
         let answer = self.joins[join].answer.clone();
         match meeting {
-            Meeting::Unified(note) => {
-                self.unify_at(module, span, ty, &answer)
-                    .map_err(|error| match note {
-                        Some(note) => error.note(note),
-                        None => error,
-                    })
-            }
+            Meeting::Unified => self
+                .infer
+                .unify(ty, &answer)
+                .map_err(|reason| self.unmet(join, module, span, ty, &reason))?,
             Meeting::Subsumed(site) => {
                 let widened = self
                     .infer
                     .subsume(ty, &answer)
-                    .map_err(|reason| self.mismatch(module, span, ty, &answer, &reason))?;
+                    .map_err(|reason| self.unmet(join, module, span, ty, &reason))?;
                 if widened {
                     self.widenings.push((module, span, site, answer));
                 }
-                Ok(())
             }
+        }
+        self.joins[join].answered.push((span, ty.clone()));
+        Ok(())
+    }
+
+    /// Why a way at `span`, of type `ty`, does not meet `join`'s answer,
+    /// pointing as Rust does at what made the answer the type it is: the
+    /// branch before it, the arms before it, or the signature.
+    fn unmet(
+        &self,
+        join: usize,
+        module: ModuleId,
+        span: Span,
+        ty: &Ty,
+        reason: &Mismatch,
+    ) -> Refusal {
+        let Join {
+            module: at,
+            ways,
+            ref answer,
+            ref answered,
+            ..
+        } = self.joins[join];
+        let refused = self.mismatch(module, span, ty, answer, reason);
+        let shown = |ty: &Ty| show(&self.infer.resolve(ty), self.symbols);
+        let among = matches!(reason, Mismatch::NotAmong { .. });
+        match ways {
+            Ways::Branches if !among => match answered.first() {
+                Some((first, _)) => refused
+                    .retitled("`if` and `else` have incompatible types")
+                    .also(at, *first, "expected because of this"),
+                None => refused,
+            },
+            Ways::Arms(tested) if !among => answered.iter().fold(
+                refused.retitled("`is` arms have incompatible types").also(
+                    at,
+                    tested,
+                    "`is` arms have incompatible types",
+                ),
+                |refused, (arm, ty)| {
+                    refused.also(
+                        at,
+                        *arm,
+                        format!("this is found to be of type `{}`", shown(ty)),
+                    )
+                },
+            ),
+            Ways::Answers(Some(written)) => {
+                let refused = refused.also(
+                    at,
+                    written,
+                    format!("expected `{}` because of return type", shown(answer)),
+                );
+                // Nothing answers `[]`, so a body of that type ends by
+                // leaving, as an exit does.
+                if never(&self.infer.resolve(answer)) {
+                    refused.help("end it with a call that never answers, as `host.exit!(0)`")
+                } else {
+                    refused
+                }
+            }
+            Ways::Branches | Ways::Arms(_) | Ways::Answers(None) => refused,
         }
     }
 
@@ -188,6 +264,7 @@ impl Checker<'_> {
             met,
             waiting,
             closed,
+            ..
         } = self.joins[join];
         if !closed || waiting > 0 || met {
             return Ok(());

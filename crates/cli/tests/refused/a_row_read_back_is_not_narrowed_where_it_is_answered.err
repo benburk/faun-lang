@@ -1,5 +1,7 @@
 error: `Other` is not among the tags of `[Gone]`, which admits no others
  --> a_row_read_back_is_not_narrowed_where_it_is_answered.fn:4:19
   |
+3 | first : List(Result(Nat, [Gone, Other])) -> Result(Nat, [Gone])
+  |                                             ------------------- expected `Result(Nat, [Gone])` because of return type
 4 | first(results) -> results.get_or(0, Err(Gone))
   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

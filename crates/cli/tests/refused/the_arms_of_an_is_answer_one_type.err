@@ -1,0 +1,11 @@
+error: `is` arms have incompatible types
+ --> the_arms_of_an_is_answer_one_type.fn:7:10
+  |
+4 | name(n) -> n is (
+  |            - `is` arms have incompatible types
+5 |   0 then "zero"
+  |          ------ this is found to be of type `Str`
+6 |   1 then "one"
+  |          ----- this is found to be of type `Str`
+7 |   _ then n
+  |          ^ expected `Str`, found `Nat`

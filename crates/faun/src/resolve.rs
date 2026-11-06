@@ -216,6 +216,7 @@ fn resolve_module(
                     spelling,
                     parameters: Vec::new(),
                     result: h::Type::Named(boolean.canonical, Vec::new()),
+                    result_span: None,
                     constraints: Vec::new(),
                 }));
                 items.push(h::Item::Clause(resolve_clause(
@@ -1071,6 +1072,7 @@ fn resolve_signature(
             .map(|ty| resolve_type(module, ty, source, scope, symbols))
             .collect::<Result<_, _>>()?,
         result: resolve_type(module, &signature.result, source, scope, symbols)?,
+        result_span: Some(signature.result.span()),
         constraints: signature
             .constraints
             .iter()

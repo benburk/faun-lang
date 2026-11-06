@@ -1,0 +1,8 @@
+import std.host {Host}
+
+name : Nat -> Str
+name(n) -> n is (
+  0 then "zero"
+  1 then "one"
+  _ then n
+)

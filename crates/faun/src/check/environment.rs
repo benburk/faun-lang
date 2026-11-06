@@ -41,6 +41,7 @@ impl<'a> Checker<'a> {
             joins: Vec::new(),
             pending_ways: Vec::new(),
             answers: Vec::new(),
+            written_result: None,
             clause_marks: None,
             merges: HashMap::new(),
             prefix_helps: HashMap::new(),

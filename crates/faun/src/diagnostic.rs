@@ -104,6 +104,25 @@ impl Refusal {
         self
     }
 
+    /// The same, saying too what is at another place explaining it.
+    #[must_use]
+    pub(crate) fn also(
+        mut self,
+        module: crate::ModuleId,
+        span: Span,
+        text: impl Into<String>,
+    ) -> Self {
+        self.secondary.push(((module, span), text.into()));
+        self
+    }
+
+    /// The same, saying another thing first.
+    #[must_use]
+    pub(crate) fn retitled(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
+
     /// Told as a diagnostic, each place read from the source of its module.
     pub(crate) fn told<'s>(self, source: impl Fn(crate::ModuleId) -> &'s Source) -> Diagnostic {
         let diagnostic = Diagnostic::new(self.message);

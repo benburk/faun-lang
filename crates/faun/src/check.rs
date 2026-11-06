@@ -138,7 +138,7 @@ mod pending;
 mod unify;
 
 use components::{binary_member, components, unary_member};
-use joins::{Join, Meeting, PendingWay};
+use joins::{Join, Meeting, PendingWay, Ways};
 use unify::{
     Infer, Mismatch, Scheme, Ty, free_scheme, free_variables, public_type, show, substitute,
 };
@@ -454,6 +454,9 @@ struct Checker<'a> {
     /// innermost last, which a `return` or a `?` in it answers early. A
     /// guard answers nothing.
     answers: Vec<Option<usize>>,
+    /// Where the signature of the definition being checked writes its
+    /// result's type, which a clause's answer is held to.
+    written_result: Option<super::ast::Span>,
     /// Where the pending lists stood when the clause being checked began:
     /// what an answer, or a `?`, settles before its row meets the
     /// signature's.
@@ -546,7 +549,13 @@ impl Checker<'_> {
                 let Ty::Function(_, result) = self.infer.resolve(&monotypes[name]) else {
                     unreachable!("a definition's type is a function")
                 };
-                let join = self.join(function.module, function.clauses[0].span, (*result).clone());
+                let ways = Ways::Answers(None);
+                let join = self.join(
+                    function.module,
+                    function.clauses[0].span,
+                    ways,
+                    (*result).clone(),
+                );
                 for clause in &function.clauses {
                     self.check_clause(function.module, clause, &monotypes[name], Some(join))?;
                 }
@@ -661,7 +670,13 @@ impl Checker<'_> {
                             .collect()
                     })
                     .unwrap_or_default();
-                self.check_clause(module, clause, &ty, None)?;
+                self.written_result = function
+                    .signature
+                    .as_ref()
+                    .and_then(|signature| signature.result_span);
+                let checked = self.check_clause(module, clause, &ty, None);
+                self.written_result = None;
+                checked?;
                 self.finish_pending(marks, Finish::Signed)?;
                 self.current.clear();
                 self.current_names.clear();
@@ -816,7 +831,8 @@ impl Checker<'_> {
             self.unify_at(module, guard.span, &actual, &self.bool_type())?;
         }
         let own = join.is_none();
-        let join = join.unwrap_or_else(|| self.join(module, clause.span, (*result).clone()));
+        let ways = Ways::Answers(self.written_result);
+        let join = join.unwrap_or_else(|| self.join(module, clause.span, ways, (*result).clone()));
         self.answers.push(Some(join));
         let checked = self.clause_body(module, clause, &mut locals, (join, marks));
         self.answers.pop();
@@ -1319,7 +1335,7 @@ impl Checker<'_> {
                         "`return` answers its clause or lambda, and a guard answers nothing",
                     ));
                 };
-                self.way(join, module, value, &answered, Meeting::Unified(None))?;
+                self.way(join, module, value, &answered, Meeting::Unified)?;
                 Ok(self.infer.fresh())
             }
             // A test answers a `Bool`; its pattern types what it binds,
@@ -1340,7 +1356,12 @@ impl Checker<'_> {
             h::ExprKind::Match(value, arms) => {
                 let tested = self.expr(module, value, locals)?;
                 let answer = self.infer.fresh();
-                let join = self.join(module, expression.span, answer.clone());
+                let join = self.join(
+                    module,
+                    expression.span,
+                    Ways::Arms(value.span),
+                    answer.clone(),
+                );
                 for arm in arms {
                     self.tested_pattern(module, &arm.pattern, &tested, locals, value.span)?;
                     if let Some(guard) = &arm.guard {
@@ -1349,8 +1370,7 @@ impl Checker<'_> {
                         self.unify_at(module, guard.span, &asked, &bool_)?;
                     }
                     let answered = self.expr(module, &arm.body, locals)?;
-                    let meeting = Meeting::Unified(Some("every arm of an `is` answers one type"));
-                    self.way(join, module, &arm.body, &answered, meeting)?;
+                    self.way(join, module, &arm.body, &answered, Meeting::Unified)?;
                 }
                 self.close_join(join)?;
                 // Arms close the row they take apart as clauses do; a test
@@ -1374,11 +1394,10 @@ impl Checker<'_> {
                 let bool_ = self.bool_type();
                 self.unify_at(module, condition.span, &asked, &bool_)?;
                 let answer = self.infer.fresh();
-                let join = self.join(module, expression.span, answer.clone());
-                let meeting = Meeting::Unified(Some("both branches of an `if` answer one type"));
+                let join = self.join(module, expression.span, Ways::Branches, answer.clone());
                 for branch in [yes, no] {
                     let answered = self.expr(module, branch, locals)?;
-                    self.way(join, module, branch, &answered, meeting)?;
+                    self.way(join, module, branch, &answered, Meeting::Unified)?;
                 }
                 self.close_join(join)?;
                 Ok(answer)
@@ -1522,12 +1541,12 @@ impl Checker<'_> {
                     self.pattern(module, pattern, parameter, locals, expression.span)?;
                 }
                 let answer = self.infer.fresh();
-                let join = self.join(module, body.span, answer.clone());
+                let join = self.join(module, body.span, Ways::Answers(None), answer.clone());
                 self.answers.push(Some(join));
                 let result = self.expr(module, body, locals);
                 self.answers.pop();
                 let result = result?;
-                self.way(join, module, body, &result, Meeting::Unified(None))?;
+                self.way(join, module, body, &result, Meeting::Unified)?;
                 self.close_join(join)?;
                 for (pattern, parameter) in patterns.iter().zip(&parameters) {
                     self.pending_closings.push(PendingClosing {

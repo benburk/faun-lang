@@ -1,0 +1,4 @@
+import std.host {Host}
+
+next : Nat -> Str
+next(n) -> n + 1

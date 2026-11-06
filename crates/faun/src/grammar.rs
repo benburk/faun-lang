@@ -806,7 +806,7 @@ impl Parser<'_> {
         self.expect(Kind::Colon, "`:`")?;
         let (parameters, result) = self.signature()?;
         Ok(Constraint::Member {
-            span: variable.span().through(type_span(&result)),
+            span: variable.span().through(result.span()),
             variable: name(variable),
             member: name(member),
             parameters,
@@ -829,7 +829,7 @@ impl Parser<'_> {
         Ok(match self.function()? {
             (None, ty) => ty,
             (Some(parameters), result) => Type::Function {
-                span: start.through(type_span(&result)),
+                span: start.through(result.span()),
                 parameters,
                 result: Box::new(result),
             },
@@ -1600,17 +1600,6 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr {
         span: left.span.through(right.span),
         kind: ExprKind::Binary(op, Box::new(left), Box::new(right)),
-    }
-}
-
-const fn type_span(ty: &Type) -> Span {
-    match ty {
-        Type::Named { span, .. }
-        | Type::Function { span, .. }
-        | Type::Variants { span, .. }
-        | Type::Record { span, .. }
-        | Type::Tuple { span, .. }
-        | Type::Hole { span } => *span,
     }
 }
 

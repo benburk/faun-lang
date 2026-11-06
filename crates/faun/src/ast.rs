@@ -263,6 +263,20 @@ pub enum Type {
     Hole { span: Span },
 }
 
+impl Type {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Named { span, .. }
+            | Self::Function { span, .. }
+            | Self::Variants { span, .. }
+            | Self::Record { span, .. }
+            | Self::Tuple { span, .. }
+            | Self::Hole { span } => *span,
+        }
+    }
+}
+
 /// One `name(patterns) if guard -> body` row. Consecutive rows are grouped later.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Clause {
