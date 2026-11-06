@@ -1,5 +1,10 @@
 error: mismatched types
   --> an_update_asks_for_a_record_not_a_declared_type.fn:12:44
    |
+9  | bumped(r) -> {x: r.x + 1, *r}
+   | ----------------------------- function defined here
+...
 12 | main!(host) -> host.exit!(U8.of_nat(bumped(Point.of(1, 2)).x))
-   |                                            ^^^^^^^^^^^^^^ expected `{x: _, *}`, found `Point`
+   |                                     ------ ^^^^^^^^^^^^^^ expected `{x: _, *}`, found `Point`
+   |                                     |
+   |                                     arguments to this function are incorrect

@@ -1,0 +1,7 @@
+import std.host {Host}
+
+shout : Str -> Str
+shout(text) -> "${text}!"
+
+count : Nat -> Str
+count(n) -> shout(n)

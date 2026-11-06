@@ -1,0 +1,10 @@
+error: mismatched types
+ --> an_argument_is_the_type_its_parameter_is.fn:7:19
+  |
+3 | shout : Str -> Str
+  | ------------------ function defined here
+...
+7 | count(n) -> shout(n)
+  |             ----- ^ expected `Str`, found `Nat`
+  |             |
+  |             arguments to this function are incorrect

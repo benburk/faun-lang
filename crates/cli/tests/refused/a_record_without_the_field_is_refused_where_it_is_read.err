@@ -1,5 +1,10 @@
 error: the record `{age: _}` has no field `name`
  --> a_record_without_the_field_is_refused_where_it_is_read.fn:7:46
   |
+3 | get_name : {name: Nat, *} -> Nat
+  | -------------------------------- function defined here
+...
 7 | main!(host) -> host.exit!(U8.of_nat(get_name({age: 3})))
-  |                                              ^^^^^^^^
+  |                                     -------- ^^^^^^^^
+  |                                     |
+  |                                     arguments to this function are incorrect

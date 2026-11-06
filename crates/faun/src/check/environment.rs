@@ -42,6 +42,7 @@ impl<'a> Checker<'a> {
             pending_ways: Vec::new(),
             answers: Vec::new(),
             written_result: None,
+            defined: HashMap::new(),
             clause_marks: None,
             merges: HashMap::new(),
             prefix_helps: HashMap::new(),
@@ -64,6 +65,14 @@ impl<'a> Checker<'a> {
         for function in &program.functions {
             if let Some(signature) = &function.signature {
                 checker.add_signature(function.module, signature, function.owner)?;
+            }
+            let introduced = function.signature.as_ref().map(|signature| signature.span);
+            if let Some(span) =
+                introduced.or_else(|| function.clauses.first().map(|clause| clause.span))
+            {
+                checker
+                    .defined
+                    .insert(function.name, (function.module, span));
             }
         }
         checker.validate_literal_protocols(program)?;

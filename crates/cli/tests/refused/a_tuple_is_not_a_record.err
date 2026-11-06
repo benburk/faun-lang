@@ -1,5 +1,10 @@
 error: mismatched types
  --> a_tuple_is_not_a_record.fn:9:41
   |
+5 | bad : {x: Nat} -> Nat
+  | --------------------- function defined here
+...
 9 | main!(host) -> host.exit!(U8.of_nat(bad(pair)))
-  |                                         ^^^^ expected `{x: Nat}`, found `(_, _)`
+  |                                     --- ^^^^ expected `{x: Nat}`, found `(_, _)`
+  |                                     |
+  |                                     arguments to this function are incorrect

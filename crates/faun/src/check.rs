@@ -457,6 +457,9 @@ struct Checker<'a> {
     /// Where the signature of the definition being checked writes its
     /// result's type, which a clause's answer is held to.
     written_result: Option<super::ast::Span>,
+    /// Where each definition is introduced: its signature, or where it has
+    /// none, its first clause.
+    defined: HashMap<Symbol, (ModuleId, super::ast::Span)>,
     /// Where the pending lists stood when the clause being checked began:
     /// what an answer, or a `?`, settles before its row meets the
     /// signature's.
@@ -1605,7 +1608,8 @@ impl Checker<'_> {
                     }
                     let given = arguments.iter().zip(&argument_types);
                     for ((argument, ty), parameter) in given.zip(parameters.iter()) {
-                        self.unify_at(module, argument.span, ty, parameter)?;
+                        self.unify_at(module, argument.span, ty, parameter)
+                            .map_err(|refused| self.misfit_argument(refused, module, head))?;
                     }
                     return Ok(Rc::unwrap_or_clone(result));
                 }
@@ -1990,6 +1994,24 @@ impl Checker<'_> {
     /// A call handing a known function more or fewer arguments than it
     /// takes. One handed fewer is not a function of the rest, as there is no
     /// partial application, so the help writes the lambda that would be.
+    /// An argument that does not fit `head`'s parameter, pointing as Rust
+    /// does at the function called and where it is defined.
+    fn misfit_argument(&self, refused: Refusal, module: ModuleId, head: &h::Expr) -> Refusal {
+        let refused = refused.also(
+            module,
+            head.span,
+            "arguments to this function are incorrect",
+        );
+        let defined = match head.kind {
+            h::ExprKind::Global(global) => self.defined.get(&global),
+            _ => None,
+        };
+        match defined {
+            Some(&(at, span)) => refused.also(at, span, "function defined here"),
+            None => refused,
+        }
+    }
+
     fn miscounted_call(
         &self,
         module: ModuleId,
