@@ -628,6 +628,33 @@ fn the_sat_solver_colours_australia_and_refutes_the_impossible() {
     );
 }
 
+/// Regular expressions by Brzozowski derivatives: its expectations hold,
+/// `(a*)*b` among them, and running it says which texts a pattern matches.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn regular_expressions_match_by_derivatives() {
+    let (failed, count) = support::test_file(&example("regex.fn"));
+    assert_eq!(failed, Vec::<String>::new());
+    assert_eq!(count, 6);
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .args([
+            "run",
+            example("regex.fn").to_str().unwrap(),
+            "a(b|c)*d",
+            "ad",
+            "abcbd",
+            "abx",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "yes  ad\nyes  abcbd\nno   abx\n"
+    );
+}
+
 /// Connected components after the Python cookbook's, without the graph
 /// library: its expectations hold.
 #[test]

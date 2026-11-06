@@ -1,0 +1,122 @@
+# Regular expressions by Brzozowski derivatives. The derivative of a regex
+# by a byte is the regex matching what may follow that byte, so a text
+# matches where the derivative by each of its bytes in turn matches the
+# empty text. No backtracking and no automaton: one pass over the text,
+# simplifying as it goes, so `(a*)*b`, which makes a backtracking matcher
+# take exponential time, takes linear time here.
+#
+#     faun run regex.fn 'a(b|c)*d' ad abcbd abx
+
+import std.host {Host}
+
+Regex : [
+  Nothing,
+  Empty,
+  Any,
+  Char(U8),
+  Seq(Regex, Regex),
+  Alt(Regex, Regex),
+  Star(Regex),
+].(
+  # Whether it matches the empty text.
+  nullable : Regex -> Bool
+  nullable(Nothing | Any | Char(_)) -> False
+  nullable(Empty | Star(_)) -> True
+  nullable(Seq(a, b)) -> a.nullable() & b.nullable()
+  nullable(Alt(a, b)) -> a.nullable() | b.nullable()
+
+  # What may follow `byte`.
+  derive : (Regex, U8) -> Regex
+  derive(Nothing | Empty, _) -> Nothing
+  derive(Any, _) -> Empty
+  derive(Char(byte), byte) -> Empty
+  derive(Char(_), _) -> Nothing
+  derive(Seq(a, b), byte) if a.nullable() -> alt(seq(a.derive(byte), b), b.derive(byte))
+  derive(Seq(a, b), byte) -> seq(a.derive(byte), b)
+  derive(Alt(a, b), byte) -> alt(a.derive(byte), b.derive(byte))
+  derive(Star(a), byte) -> seq(a.derive(byte), Star(a))
+
+  matches : (Regex, Str) -> Bool
+  matches(regex, text) -> text.to_utf8().fold(regex, derive).nullable()
+
+  equals : (Regex, Regex) -> Bool
+)
+
+# A sequence and a choice, simplified as they are built, which keeps every
+# derivative small.
+seq : (Regex, Regex) -> Regex
+seq(Nothing, _) -> Nothing
+seq(_, Nothing) -> Nothing
+seq(Empty, regex) -> regex
+seq(regex, Empty) -> regex
+seq(a, b) -> Seq(a, b)
+
+alt : (Regex, Regex) -> Regex
+alt(Nothing, regex) -> regex
+alt(regex, Nothing) -> regex
+alt(regex, regex) -> regex
+alt(a, b) -> Alt(a, b)
+
+# The usual syntax: `|` between alternatives, `*` after what repeats,
+# parentheses, `.` for any byte and `\` before a byte meant as itself.
+parse : Str -> Result(Regex, [Malformed])
+parse(text) -> (
+  (regex, rest) = alternatives(text.to_utf8())?
+  if rest is [] then Ok(regex) else Err(Malformed)
+)
+
+alternatives : List(U8) -> Result((Regex, List(U8)), [Malformed])
+alternatives(bytes) -> (
+  (first, rest) = sequence(bytes, Empty)?
+  rest is (
+    ['|', *more] then alternatives(more).map_ok(|(second, after)| (alt(first, second), after))
+    _ then Ok((first, rest))
+  )
+)
+
+sequence : (List(U8), Regex) -> Result((Regex, List(U8)), [Malformed])
+sequence([], built) -> Ok((built, []))
+sequence(bytes is ['|', *_], built) -> Ok((built, bytes))
+sequence(bytes is [')', *_], built) -> Ok((built, bytes))
+sequence(bytes, built) -> (
+  (one, rest) = atom(bytes)?
+  (repeated, after) = stars(one, rest)
+  sequence(after, seq(built, repeated))
+)
+
+stars : (Regex, List(U8)) -> (Regex, List(U8))
+stars(regex, ['*', *rest]) -> stars(Star(regex), rest)
+stars(regex, rest) -> (regex, rest)
+
+atom : List(U8) -> Result((Regex, List(U8)), [Malformed])
+atom(['(', *rest]) -> (
+  (inner, after) = alternatives(rest)?
+  after is [')', *more] else return Err(Malformed)
+  Ok((inner, more))
+)
+atom(['.', *rest]) -> Ok((Any, rest))
+atom(['\\', byte, *rest]) -> Ok((Char(byte), rest))
+atom([byte, *rest]) if byte != '*' -> Ok((Char(byte), rest))
+atom(_) -> Err(Malformed)
+
+matching : (Str, Str) -> Bool
+matching(pattern, text) -> parse(pattern).map_ok(|regex| regex.matches(text)).ok_or(False)
+
+expect matching("a(b|c)*d", "ad") & matching("a(b|c)*d", "abcbd") & !matching("a(b|c)*d", "abx")
+expect matching("(ab)*", "") & matching("(ab)*", "abab") & !matching("(ab)*", "aba")
+expect matching(".*cat.*", "concatenate") & !matching(".*cat.*", "dog")
+expect matching("a\\*", "a*") & !matching("a\\*", "aa") & matching("café|tea", "café")
+expect parse("(ab") == Err(Malformed) & parse("*a") == Err(Malformed) & parse("a)") == Err(Malformed)
+
+# The pattern that sends a backtracking matcher exponential, on forty
+# bytes that fail at the end, and on ten thousand.
+expect !matching("(a*)*b", "a".repeat(40)) & !matching("(a*)*b", "a".repeat(10000))
+
+app : {args: List(Str)} -> Str
+app(input) -> (
+  input.args is [_, pattern, *texts] else return "usage: regex PATTERN TEXT..."
+  parse(pattern) is Ok(regex) else return "error: `${pattern}` is not a pattern"
+  texts.map(|text| "${if regex.matches(text) then "yes" else "no "}  ${text}").join("\n")
+)
+
+main!(host) -> host.run!(app)
