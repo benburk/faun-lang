@@ -54,6 +54,7 @@ fn cost(source: &barb::Program) -> Cost {
         heap_bytes: HEAP_BYTES,
         grows: false,
         inline_small: true,
+        join_routines: false,
     };
     let scalar = legalize(&machine, config).unwrap();
     let result = evaluate::evaluate(
@@ -312,6 +313,7 @@ fn a_claim_read_last_by_a_branch_is_released_in_each_arm() {
         heap_bytes: 256,
         grows: false,
         inline_small: true,
+        join_routines: false,
     };
     let scalar = legalize(&p, config).unwrap();
     let release = scalar
@@ -444,6 +446,7 @@ fn run_machine(machine: &Program) -> (Vec<BigUint>, Cost) {
         heap_bytes: HEAP_BYTES,
         grows: false,
         inline_small: true,
+        join_routines: false,
     };
     let scalar = legalize(machine, config).unwrap();
     let result = evaluate::evaluate(

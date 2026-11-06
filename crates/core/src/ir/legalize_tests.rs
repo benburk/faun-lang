@@ -31,6 +31,7 @@ fn nested_cells_are_legalized_to_managed_objects_and_released() {
         heap_bytes: 512,
         grows: false,
         inline_small: true,
+        join_routines: false,
     };
     let legalized = legalize(&source, config).unwrap();
     assert!(legalized.ops.iter().all(|op| !matches!(
@@ -62,6 +63,7 @@ fn a_cell_holding_a_natural_retains_and_releases_that_field() {
         heap_bytes: 512,
         grows: false,
         inline_small: true,
+        join_routines: false,
     };
     let legalized = legalize(&source, config).unwrap();
     let evaluation = run(&legalized, main, &[], 64);
@@ -198,6 +200,7 @@ fn arithmetic_across_the_immediate_boundary_matches_the_reference() {
                 heap_bytes: 2048,
                 grows: false,
                 inline_small: true,
+                join_routines: false,
             };
             let scalar = legalize(&p, config).expect("legalized");
             for &x in &values {
@@ -263,6 +266,7 @@ fn exact_runtime_arithmetic_and_returned_ownership_at_each_word_size() {
                 heap_bytes: 2048,
                 grows: false,
                 inline_small: true,
+                join_routines: false,
             };
             let scalar = legalize(&p, config).expect("legalized");
             assert!(
@@ -307,6 +311,7 @@ fn zero_division_and_monus_alias_paths_keep_returned_values_live() {
                         heap_bytes: 256,
                         grows: false,
                         inline_small: true,
+                        join_routines: false,
                     },
                 )
                 .unwrap();
@@ -406,6 +411,7 @@ fn loops_rotate_aliases_reuse_tiny_heaps_and_clean_nested_early_returns() {
                 heap_bytes: 512,
                 grows: false,
                 inline_small: true,
+                join_routines: false,
             };
             let scalar = legalize(&p, config).unwrap();
             for seed in [0u64, 3, 200] {
@@ -504,6 +510,7 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
                 heap_bytes: 256,
                 grows: false,
                 inline_small: true,
+                join_routines: false,
             };
             let scalar = legalize(&p, config).unwrap();
             for seed in [0u64, 255, 256, 65535, u64::MAX >> (64 - bits)] {
@@ -537,6 +544,7 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
             heap_bytes: 256,
             grows: false,
             inline_small: true,
+            join_routines: false,
         },
     )
     .unwrap();
@@ -567,6 +575,7 @@ const fn fixed_heap(word_bits: u16, heap_bytes: usize) -> Config {
         heap_bytes,
         grows: false,
         inline_small: true,
+        join_routines: false,
     }
 }
 
@@ -628,6 +637,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
             heap_bytes: 256,
             grows: false,
             inline_small: true,
+            join_routines: false,
         },
     )
     .unwrap_err();
@@ -672,6 +682,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
                 heap_bytes: usize::from(bits / 8) * 4,
                 grows: false,
                 inline_small: true,
+                join_routines: false,
             },
         )
         .unwrap();
@@ -747,6 +758,7 @@ fn scalar_fast_path_has_no_runtime_code_data_or_globals() {
             heap_bytes: 0,
             grows: false,
             inline_small: true,
+            join_routines: false,
         },
     )
     .unwrap();
@@ -823,6 +835,7 @@ fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
                     heap_bytes: 4096,
                     grows: false,
                     inline_small: true,
+                    join_routines: false,
                 };
                 let scalar = legalize(&p, config).expect("legalized");
                 let args = [BigUint::from(5u8)];

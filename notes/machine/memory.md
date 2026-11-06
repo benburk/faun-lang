@@ -54,6 +54,17 @@ written where it lies:
 
 - **Adding to the front** writes into room before the sequence, where there
   is room.
+- **Joining two sequences,** `a.concat(b)`, writes `b` into room after `a`
+  where nothing else holds `a`'s buffer and it has the room. Otherwise, on
+  x86-64 and wasm32, `a` is written into room before `b`, where nothing
+  else holds `b`'s buffer and it has room before or is the longer, so a
+  sequence built by joining pieces before it, `[x].concat(built)`, grows at
+  its front as one built by joining pieces after it grows at its end. That
+  choice is a routine for each element layout a program joins, which every
+  join calls: a program joining often is smaller for it, and a tiny one
+  joining once larger, which `faun build --small` leaves out where it is.
+  The 6502 joins only after the first: its calls carry four values and
+  answer one, and the routine takes six and answers two.
 - **Replacing an element** writes over it.
 - **Otherwise** the sequence is copied first, to a new buffer with as much
   room again, which makes a run of additions cost a bounded number of

@@ -14,7 +14,7 @@ use std::process::{Command as Process, ExitCode};
 use args::{Command, Stage};
 use faun::diagnostic::{Diagnostic, Location};
 use faun_core::barb;
-use faun_core::targets::{SymbolTable, Target};
+use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
@@ -53,8 +53,9 @@ fn answer(command: Command) -> ExitCode {
             target,
             source,
             output,
+            favour,
             symbols,
-        } => build(&source, target, &output, symbols).map(|()| ExitCode::SUCCESS),
+        } => build(&source, target, &output, favour, symbols).map(|()| ExitCode::SUCCESS),
         Command::Run {
             target,
             source,
@@ -94,12 +95,14 @@ fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
     Ok(())
 }
 
-/// Compile an application and write its image to `output`. A library has
-/// nothing to build, so building one checks it.
+/// Compile an application and write its image to `output`, favouring speed
+/// or size, with symbols where `symbols` asks. A library has nothing to
+/// build, so building one checks it.
 fn build(
     source: &Path,
     target: &dyn Target,
     output: &Path,
+    favour: Favour,
     symbols: SymbolTable,
 ) -> Result<(), Diagnostic> {
     let barb = faun::lower_to_barb(source, target)?;
@@ -110,7 +113,7 @@ fn build(
         );
         return Ok(());
     }
-    let image = faun::compile_barb_to_image_with(barb, target, symbols)?;
+    let image = faun::compile_barb_to_image_with(barb, target, favour, symbols)?;
     let written = write(target, &image, output)?;
     println!("wrote {}", written.display());
     Ok(())

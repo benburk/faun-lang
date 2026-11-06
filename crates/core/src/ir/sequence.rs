@@ -83,6 +83,10 @@ pub(super) enum Growth {
     Extend,
     /// One element of a sequence written over.
     Replace,
+    /// Two sequences joined by a routine growing whichever is cheaper, the
+    /// second at its front where the first has no room after it. Asked for
+    /// only where a build favours speed and calls carry what a join does.
+    Join,
 }
 
 /// The generated routines: one release, one per way a layout is grown, and
@@ -305,14 +309,39 @@ impl Library {
     /// else holds it, and otherwise both copied to the start of a buffer
     /// with room after. The buffer and where the joined sequence starts.
     ///
+    /// Where the layout has a join routine, that is called instead, and it
+    /// also writes the first before the second where nothing else holds the
+    /// second and it has room before or is the longer, so a sequence built
+    /// by joining pieces before it is copied a bounded number of times.
+    ///
     /// # Panics
     /// If the layout was not said to be extended.
     pub(super) fn extend(
         &self,
         b: &mut Builder<'_>,
         element: &Packed,
+        first: (ValueId, ValueId, ValueId),
+        then: (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 2] {
+        match self.routines.get(&(Growth::Join, key(element))) {
+            Some(&join) => {
+                let args = [first.0, first.1, first.2, then.0, then.1, then.2];
+                let joined = b.call(join, &args);
+                [joined[0], joined[1]]
+            }
+            None => self.extended(b, element, first, then, false),
+        }
+    }
+
+    /// [`Library::extend`] written out, `either` saying whether the second
+    /// sequence may grow at its front.
+    fn extended(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
         (first, first_start, first_len): (ValueId, ValueId, ValueId),
         (then, then_start, then_len): (ValueId, ValueId, ValueId),
+        either: bool,
     ) -> [ValueId; 2] {
         let zero = number(b, 0);
         let no_first = b.compare(Relation::Equal, first_len, zero);
@@ -333,12 +362,13 @@ impl Library {
                         b.yield_(&[first, first_start]);
                     },
                     |b| {
-                        let joined = self.joined(
-                            b,
-                            element,
-                            (first, first_start, first_len),
-                            (then, then_start, then_len),
-                        );
+                        let first = (first, first_start, first_len);
+                        let then = (then, then_start, then_len);
+                        let joined = if either {
+                            self.joined_either(b, element, first, then)
+                        } else {
+                            self.joined(b, element, first, then)
+                        };
                         b.yield_(&joined);
                     },
                 );
@@ -416,6 +446,76 @@ impl Library {
         b.call(copies.copy, &[from, into, then_len, room]);
         b.call(self.release, &[then]);
         [room, start]
+    }
+
+    /// Two sequences neither of which is empty, the second grown at its
+    /// front where the first has no room after it, nothing else holds the
+    /// second, and the second has room before or is the longer: a long
+    /// sequence built by joining pieces before it grows at its front, as
+    /// one built by joining pieces after it grows at its end.
+    fn joined_either(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        first: (ValueId, ValueId, ValueId),
+        then: (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 2] {
+        let (first_buffer, first_start, first_len) = first;
+        let (then_buffer, then_start, then_len) = then;
+        let one = number(b, 1);
+        let zero = number(b, 0);
+        let refs = b.load(Width::Word, first_buffer, Offset::Words(1));
+        let first_alone = b.compare(Relation::Equal, refs, one);
+        let capacity = b.load(Width::Word, first_buffer, Offset::Words(CAPACITY));
+        let end = b.binary(Binary::Add, first_start, first_len);
+        let past = b.binary(Binary::Add, end, then_len);
+        let short = b.compare(Relation::Less, capacity, past);
+        let fits = b.binary(Binary::Sub, one, short);
+        let after = b.binary(Binary::Mul, first_alone, fits);
+        let refs = b.load(Width::Word, then_buffer, Offset::Words(1));
+        let then_alone = b.compare(Relation::Equal, refs, one);
+        let cramped = b.compare(Relation::Less, then_start, first_len);
+        let roomy = b.binary(Binary::Sub, one, cramped);
+        let shorter = b.compare(Relation::Less, then_len, first_len);
+        let longer = b.binary(Binary::Sub, one, shorter);
+        let either = b.binary(Binary::Add, roomy, longer);
+        let grows = b.compare(Relation::Less, zero, either);
+        let no_after = b.binary(Binary::Sub, one, after);
+        let free = b.binary(Binary::Mul, no_after, then_alone);
+        let before = b.binary(Binary::Mul, free, grows);
+        let joined = b.if_(
+            before,
+            &[A, W],
+            |b| {
+                let joined = self.joined_before(b, element, first, then);
+                b.yield_(&joined);
+            },
+            |b| {
+                let joined = self.joined(b, element, first, then);
+                b.yield_(&joined);
+            },
+        );
+        [joined[0], joined[1]]
+    }
+
+    /// `first` written before `then`, whose buffer nothing else holds: in
+    /// room before it, or in a copy of it with room before.
+    fn joined_before(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (first, first_start, first_len): (ValueId, ValueId, ValueId),
+        (then, then_start, then_len): (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 2] {
+        let before = self.routines[&(Growth::Prepend, key(element))];
+        let copies = self.copies.expect("growing by a sequence copies one");
+        let room = b.call_one(before, &[then, then_start, then_len, first_len]);
+        let front = started(b, (then, room), (then_start, then_len), first_len);
+        let into = self.element(b, room, element.size, front);
+        let from = self.element(b, first, element.size, first_start);
+        b.call(copies.copy, &[from, into, first_len, room]);
+        b.call(self.release, &[first]);
+        [room, front]
     }
 
     /// Where element `index` of `buffer` begins, its stride known.
@@ -507,29 +607,72 @@ pub(super) fn append(
         moving: define_move(program, word_bits),
     };
     define_release(program, runtime);
-    let mut routines = BTreeMap::new();
-    for (growth, element, descriptor) in wanted {
-        let key = (growth, key(&element));
-        if routines.contains_key(&key) {
-            continue;
-        }
-        let id = define_growth(
-            program,
-            growth,
-            (&element, descriptor),
-            (runtime, routines.len()),
-        );
-        routines.insert(key, id);
-    }
+    let (routines, joins) = define_growths(program, runtime, wanted);
     let copies = routines
         .keys()
         .any(|(growth, _)| matches!(growth, Growth::Prepend | Growth::Extend))
         .then(|| define_copies(program, runtime));
-    Library {
+    let mut library = Library {
         release,
         routines,
         copies,
         word_bits,
+    };
+    define_joins(program, &mut library, &joins);
+    library
+}
+
+/// One routine for each way each layout is grown, and the layouts a join
+/// routine is still to be made for.
+fn define_growths(
+    program: &mut Program,
+    runtime: Runtime,
+    wanted: impl IntoIterator<Item = (Growth, Packed, Option<DataId>)>,
+) -> (BTreeMap<(Growth, Key), FunctionId>, Vec<Packed>) {
+    let mut routines = BTreeMap::new();
+    let mut joins: Vec<Packed> = Vec::new();
+    for (growth, element, descriptor) in wanted {
+        // A join routine calls the layout's routines growing at either end,
+        // and is made once they and the copies are.
+        let growths: &[Growth] = if growth == Growth::Join {
+            if !joins.iter().any(|joined| key(joined) == key(&element)) {
+                joins.push(element.clone());
+            }
+            &[Growth::Extend, Growth::Prepend]
+        } else {
+            &[growth]
+        };
+        for &growth in growths {
+            let key = (growth, key(&element));
+            if routines.contains_key(&key) {
+                continue;
+            }
+            let id = define_growth(
+                program,
+                growth,
+                (&element, descriptor),
+                (runtime, routines.len()),
+            );
+            routines.insert(key, id);
+        }
+    }
+    (routines, joins)
+}
+
+/// `seq.join.n(first, start, len, then, start, len)` for each of `joins`'
+/// layouts: [`Library::extend`] with the second sequence growing at its
+/// front where that is cheaper, answering the buffer and where the joined
+/// sequence starts.
+fn define_joins(program: &mut Program, library: &mut Library, joins: &[Packed]) {
+    for (n, element) in joins.iter().enumerate() {
+        let id = program.declare(&format!("seq.join.{n}"), &[A, W, W, A, W, W], &[A, W]);
+        program.define(id, |b, args| {
+            let first = (args[0], args[1], args[2]);
+            let then = (args[3], args[4], args[5]);
+            let joined = library.extended(b, element, first, then, true);
+            b.ret(&joined);
+        });
+        library.routines.insert((Growth::Join, key(element)), id);
     }
 }
 
@@ -561,6 +704,7 @@ fn define_growth(
             define_own(program, id, layout, runtime);
             id
         }
+        Growth::Join => unreachable!("a join routine is made from the routines it calls"),
     }
 }
 

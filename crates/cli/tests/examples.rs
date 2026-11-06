@@ -715,3 +715,24 @@ fn appends_are_linear_work() {
     );
     assert_eq!(package.run(), 20000 % 256);
 }
+
+/// Joining a short list before a long one nothing else holds writes it in
+/// the room before the long one, and otherwise grows that with room
+/// before: two hundred thousand joins are linear work, which a copy of the
+/// long list per join would not finish.
+#[test]
+fn joins_before_a_list_are_linear_work() {
+    let package = support::Package::new(
+        "joins-before",
+        "built : (Nat, List(Nat)) -> List(Nat)
+         built(0, values) -> values
+         built(Succ(n), values) -> built(n, [n % 7, 1].concat(values))
+
+         main! : Host -> []
+         main!(host) -> (
+           values = built(200000, [])
+           host.exit!(U8.of_nat(values.len() % 256 + values.get_or(0, 9)))
+         )",
+    );
+    assert_eq!(package.run(), 400_000 % 256);
+}

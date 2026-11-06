@@ -22,6 +22,20 @@ use std::path::{Path, PathBuf};
 
 use crate::ir::{Budget, Class, Layout, Op, Program, Returns, ValueId};
 
+/// What a build favours where speed and size pull apart: speed by default.
+///
+/// Favouring size writes calls where speed would write the case they make,
+/// and joins sequences without a join routine, in place only after the
+/// first. A tiny program joining once is smaller so; one joining often is
+/// smaller with the routine, so a build favouring size keeps whichever
+/// image is smaller.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Favour {
+    #[default]
+    Speed,
+    Size,
+}
+
 /// A machine, and everything below the IR that reaching it takes.
 ///
 /// Shared preparation checks layout and representation; each target checks
@@ -134,21 +148,33 @@ pub trait Target: fmt::Debug {
     /// # Errors
     /// Reports invalid IR, unsupported representations or target constraints.
     fn compile_machine_ir(&self, program: &Program) -> Result<Vec<u8>, String> {
-        self.compile_machine_ir_with(program, SymbolTable::Omitted)
+        self.compile_machine_ir_with(program, Favour::Speed, SymbolTable::Omitted)
     }
 
-    /// [`Self::compile_machine_ir`], with symbols as [`Self::emit_with`]
-    /// writes them.
+    /// [`Self::compile_machine_ir`], favouring speed or size where they
+    /// pull apart, with symbols as [`Self::emit_with`] writes them.
     ///
     /// # Errors
     /// Reports invalid IR, unsupported representations or target constraints.
     fn compile_machine_ir_with(
         &self,
         program: &Program,
+        favour: Favour,
         symbols: SymbolTable,
     ) -> Result<Vec<u8>, String> {
-        let prepared = self.prepare(program)?;
-        Ok(self.emit_with(&prepared, symbols))
+        let image = self.emit_with(&self.prepare_favouring(program, favour)?, symbols);
+        if favour == Favour::Speed {
+            return Ok(image);
+        }
+        // What favours size here is calls in place of inline cases and
+        // joins, and which is smaller depends on how often a program makes
+        // them, so it is built both ways and the smaller kept.
+        let faster = self.emit_with(&self.prepare_favouring(program, Favour::Speed)?, symbols);
+        Ok(if faster.len() < image.len() {
+            faster
+        } else {
+            image
+        })
     }
 
     /// Fit boundaries to [`Self::budget`], then legalize representations
@@ -162,6 +188,15 @@ pub trait Target: fmt::Debug {
     /// # Errors
     /// Reports invalid IR or a representation this target cannot safely emit.
     fn prepare(&self, program: &Program) -> Result<Program, String> {
+        self.prepare_favouring(program, Favour::Speed)
+    }
+
+    /// [`Self::prepare`], favouring speed or size where they pull apart.
+    ///
+    /// # Errors
+    /// Reports invalid IR or a representation this target cannot safely emit.
+    fn prepare_favouring(&self, program: &Program, favour: Favour) -> Result<Program, String> {
+        let speed = favour == Favour::Speed;
         crate::ir::validate(program)?;
         let program = &crate::ir::expand_shifts(program, self.word(), self.shifts_by_register());
         // A number wider than the word becomes words first, which may make
@@ -179,7 +214,9 @@ pub trait Target: fmt::Debug {
                 grows: true,
                 // A 16-bit target runs short of room before it runs short of
                 // time, and a call is smaller than the case it saves.
-                inline_small: self.word() != 16,
+                inline_small: speed && self.word() != 16,
+                // A join routine takes six values and answers two.
+                join_routines: speed && self.budget().carries(6, 2),
             },
         )?;
         // What legalization wrote -- offsets from known sizes, steps by

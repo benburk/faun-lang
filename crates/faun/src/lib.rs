@@ -33,7 +33,7 @@
 use std::path::{Path, PathBuf};
 
 use faun_core::barb;
-use faun_core::targets::{SymbolTable, Target};
+use faun_core::targets::{Favour, SymbolTable, Target};
 
 use context::Context;
 use host::Main;
@@ -207,17 +207,19 @@ pub fn compile_barb_to_image(
     barb: barb::Program,
     target: &dyn Target,
 ) -> Result<Vec<u8>, Diagnostic> {
-    compile_barb_to_image_with(barb, target, SymbolTable::Omitted)
+    compile_barb_to_image_with(barb, target, Favour::Speed, SymbolTable::Omitted)
 }
 
-/// [`compile_barb_to_image`], with symbols naming each function where
-/// `symbols` asks and the target writes them.
+/// [`compile_barb_to_image`], favouring speed or size where they pull apart,
+/// with symbols naming each function where `symbols` asks and the target
+/// writes them.
 ///
 /// # Errors
 /// As [`compile_barb_to_image`].
 pub fn compile_barb_to_image_with(
     mut barb: barb::Program,
     target: &dyn Target,
+    favour: Favour,
     symbols: SymbolTable,
 ) -> Result<Vec<u8>, Diagnostic> {
     if barb.entry().is_none() {
@@ -228,7 +230,7 @@ pub fn compile_barb_to_image_with(
     let machine =
         faun_core::lower_to_machine_ir(&barb, &target.routines()).map_err(Diagnostic::new)?;
     target
-        .compile_machine_ir_with(&machine, symbols)
+        .compile_machine_ir_with(&machine, favour, symbols)
         .map_err(Diagnostic::new)
 }
 

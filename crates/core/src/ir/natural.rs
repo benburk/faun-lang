@@ -74,6 +74,14 @@ pub struct Config {
     /// or an order is asked, rather than left to the call it saves: faster
     /// wherever a count goes round a loop, and larger at every site.
     pub inline_small: bool,
+    /// Whether each layout two sequences are joined in has a routine the
+    /// joins call, which also grows the second at its front where the first
+    /// has no room after it: a sequence built by joining pieces before it,
+    /// `[x].concat(built)`, is then copied a bounded number of times rather
+    /// than at every piece. A program joining nothing is unchanged, and one
+    /// that joins is larger by the routine. Its calls take six values and
+    /// answer two, so a target whose calls carry fewer says no.
+    pub join_routines: bool,
 }
 
 /// One inventory for helper requests, generated handles and omission tests.

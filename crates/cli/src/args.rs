@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use bpaf::{Parser, choice, construct, long, positional, short};
-use faun_core::targets::{SymbolTable, Target};
+use faun_core::targets::{Favour, SymbolTable, Target};
 
 use crate::{NATIVE, TARGETS};
 
@@ -18,6 +18,7 @@ pub(crate) enum Command {
         target: &'static dyn Target,
         source: PathBuf,
         output: PathBuf,
+        favour: Favour,
         symbols: SymbolTable,
     },
     Run {
@@ -80,6 +81,10 @@ fn build() -> impl Parser<Command> {
         .argument::<PathBuf>("PATH")
         .fallback(PathBuf::from("a.out"))
         .debug_fallback();
+    let favour = long("small")
+        .help("Favour a smaller program over a faster one")
+        .switch()
+        .map(|small| if small { Favour::Size } else { Favour::Speed });
     let symbols = long("symbols")
         .help("Name each function in the image, for a profiler or a disassembler")
         .switch()
@@ -94,6 +99,7 @@ fn build() -> impl Parser<Command> {
         output,
         symbols,
         target,
+        favour,
         source,
     })
     .to_options()

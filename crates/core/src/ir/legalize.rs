@@ -107,13 +107,15 @@ fn managed_runtime(
             release,
             library,
             cells,
-            growths(source).into_iter().map(|(growth, shape)| {
-                (
-                    growth,
-                    shapes.packed[shape.index()].clone(),
-                    shapes.descriptors[shape.index()],
-                )
-            }),
+            growths(source, config.join_routines)
+                .into_iter()
+                .map(|(growth, shape)| {
+                    (
+                        growth,
+                        shapes.packed[shape.index()].clone(),
+                        shapes.descriptors[shape.index()],
+                    )
+                }),
             config.word_bits,
         )
     });
@@ -190,11 +192,12 @@ const fn top(scopes: &mut [Scope]) -> &mut Scope {
 }
 
 /// Each way a program grows a sequence, and the shape of its elements, each
-/// once.
-fn growths(source: &Program) -> std::collections::BTreeSet<(Growth, ShapeId)> {
+/// once. With `joins`, a join of two sequences is made a routine of its own.
+fn growths(source: &Program, joins: bool) -> std::collections::BTreeSet<(Growth, ShapeId)> {
     shapes_of(source, |op| match op {
         Op::BufferPush { shape, .. } => Some((Growth::Push, shape)),
         Op::BufferPrepend { shape, .. } => Some((Growth::Prepend, shape)),
+        Op::BufferExtend { shape, .. } if joins => Some((Growth::Join, shape)),
         Op::BufferAppend { shape, .. } | Op::BufferExtend { shape, .. } => {
             Some((Growth::Extend, shape))
         }
@@ -1331,6 +1334,7 @@ mod tests {
                 heap_bytes: 256,
                 grows: false,
                 inline_small: true,
+                join_routines: false,
             }
             .layout(),
         )

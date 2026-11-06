@@ -48,6 +48,12 @@ impl Budget {
             transfers,
         }
     }
+
+    /// Whether a call taking `params` values and answering `results` fits.
+    #[must_use]
+    pub const fn carries(self, params: usize, results: usize) -> bool {
+        params <= self.params && results <= self.results
+    }
 }
 
 /// Rebuild `source` so nothing crosses a boundary in more values than
