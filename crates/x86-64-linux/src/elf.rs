@@ -5,10 +5,12 @@
 //!
 //! Omitted, none of it consulted to execute a file:
 //!
-//! - Section headers, symbol table, notes, page alignment, dynamic linking.
-//! - The cost is already due: `objdump -d` prints nothing and `nm` finds no
-//!   symbols. Section headers and a `.symtab` go behind a flag when a
-//!   disassembly is wanted, at roughly 290 bytes on that path.
+//! - Notes, page alignment, dynamic linking.
+//! - Section headers and a symbol table, unless [`SymbolTable::Written`] asks
+//!   for them, as `faun build --symbols` does: then a `.symtab` names each
+//!   function, so `perf` and `objdump -d` can say where they are, after
+//!   everything that is loaded. Without them `nm` finds nothing, and the
+//!   file is as small as it was.
 //!
 //! Position independence, at two bytes:
 //!
@@ -35,10 +37,13 @@
 
 use super::Code;
 use faun_core::ir::{Origin, Program};
+use faun_core::targets::SymbolTable;
 use faun_core::targets::bytes::{Bytes, len32};
 
 pub(crate) const EHDR_LEN: u16 = 64;
 pub(crate) const PHDR_LEN: u16 = 56;
+const SHDR_LEN: u16 = 64;
+const SYM_LEN: u64 = 24;
 const PAGE_SIZE: u64 = 0x1000;
 const PAGE: usize = 0x1000;
 /// What the data and the globals each start on, where naturals are held.
@@ -59,11 +64,16 @@ struct Segment {
     vaddr: u32,
 }
 
-pub(crate) fn image(code: &Code, program: &Program) -> Vec<u8> {
+pub(crate) fn image(code: &Code, program: &Program, symbols: SymbolTable) -> Vec<u8> {
     let layout = Layout::new(code, program);
+    let end = layout.globals + program.globals().len();
+    let sections = match symbols {
+        SymbolTable::Omitted => None,
+        SymbolTable::Written => Some(Sections::new(code, program, (layout.text, end))),
+    };
     let mut out = Bytes::default();
 
-    header(&mut out, &layout);
+    header(&mut out, &layout, sections.as_ref());
     for segment in &layout.segments {
         program_header(&mut out, segment);
     }
@@ -75,8 +85,158 @@ pub(crate) fn image(code: &Code, program: &Program) -> Vec<u8> {
         layout.globals - layout.data - program.data().len()
     ]);
     out.bytes(program.globals());
+    if let Some(sections) = &sections {
+        sections.write(&mut out, code.bytes.len());
+    }
 
     out.finish()
+}
+
+/// What follows the loaded segments where functions are named: a symbol for
+/// each, their names, the section names, and the headers of the four
+/// sections, each table on a word.
+struct Sections {
+    /// Each function's name and where its code starts and ends in the text,
+    /// in order.
+    functions: Vec<(String, usize, usize)>,
+    /// File offsets of the text, of the end of what is loaded, and of the
+    /// symbol table, its names, the section names and the section headers.
+    text: usize,
+    end: usize,
+    symtab: usize,
+    strtab: usize,
+    shstrtab: usize,
+    headers: usize,
+    names: Vec<u8>,
+}
+
+/// The section names, each after a nought, and where each starts in them:
+/// the text, the symbols, their names, and these names.
+const SECTION_NAMES: &[u8] = b"\0.text\0.symtab\0.strtab\0.shstrtab\0";
+const TEXT_NAME: u32 = 1;
+const SYMTAB_NAME: u32 = 7;
+const STRTAB_NAME: u32 = 15;
+const SHSTRTAB_NAME: u32 = 23;
+
+impl Sections {
+    fn new(code: &Code, program: &Program, (text, end): (usize, usize)) -> Self {
+        // Code before the first function sets the program up; it is named
+        // for where it starts the program.
+        let mut starts: Vec<(String, usize)> = Vec::with_capacity(code.functions.len() + 1);
+        if code.functions.first().is_none_or(|&(_, at)| at > 0) {
+            starts.push(("_start".to_owned(), 0));
+        }
+        starts.extend(
+            code.functions.iter().map(|&(function, at)| {
+                (program.name(program.function(function).name).to_owned(), at)
+            }),
+        );
+        let functions: Vec<_> = starts
+            .iter()
+            .enumerate()
+            .map(|(at, (name, start))| {
+                let next = starts
+                    .get(at + 1)
+                    .map_or(code.bytes.len(), |&(_, next)| next);
+                (name.clone(), *start, next)
+            })
+            .collect();
+        let mut names = vec![0];
+        for (name, _, _) in &functions {
+            names.extend_from_slice(name.as_bytes());
+            names.push(0);
+        }
+        let symtab = end.next_multiple_of(ALIGN);
+        let count = u64::try_from(functions.len() + 1).expect("a count of functions");
+        let symtab_len = usize::try_from(count * SYM_LEN).expect("a symbol table in memory");
+        let strtab = symtab + symtab_len;
+        let shstrtab = strtab + names.len();
+        let headers = (shstrtab + SECTION_NAMES.len()).next_multiple_of(ALIGN);
+        Self {
+            functions,
+            text,
+            end,
+            symtab,
+            strtab,
+            shstrtab,
+            headers,
+            names,
+        }
+    }
+
+    /// Where the section headers start, how many there are, and which holds
+    /// the section names.
+    fn header_fields(&self) -> (u64, u16, u16) {
+        (as64(self.headers), 5, 4)
+    }
+
+    /// Everything after what is loaded: the tables, then the headers.
+    fn write(&self, out: &mut Bytes, text_len: usize) {
+        out.bytes(&vec![0; self.symtab - self.end]);
+        // The first symbol is nothing; each function's is local, as nothing
+        // links against the file.
+        out.bytes(&[0; 24]);
+        let mut name = 1;
+        for (function, from, to) in &self.functions {
+            out.le32(name);
+            out.byte(2); // st_info: STB_LOCAL, STT_FUNC
+            out.byte(0); // st_other
+            out.le16(1); // st_shndx: .text
+            out.le64(as64(self.text + from)); // st_value
+            out.le64(as64(to - from)); // st_size
+            name += len32(function.len()) + 1;
+        }
+        out.bytes(&self.names);
+        out.bytes(SECTION_NAMES);
+        out.bytes(&vec![0; self.headers - self.shstrtab - SECTION_NAMES.len()]);
+
+        let count = as64(self.functions.len() + 1);
+        out.bytes(&[0; 64]);
+        section(out, (TEXT_NAME, 1, 6), (self.text, text_len), (0, 0, 1, 0));
+        section(
+            out,
+            (SYMTAB_NAME, 2, 0),
+            (self.symtab, self.strtab - self.symtab),
+            (3, count, 8, SYM_LEN),
+        );
+        section(
+            out,
+            (STRTAB_NAME, 3, 0),
+            (self.strtab, self.names.len()),
+            (0, 0, 1, 0),
+        );
+        section(
+            out,
+            (SHSTRTAB_NAME, 3, 0),
+            (self.shstrtab, SECTION_NAMES.len()),
+            (0, 0, 1, 0),
+        );
+    }
+}
+
+/// One section header: its name, type and flags; where it lies; and its
+/// link, info, alignment and entry size. Only `.text` is loaded, at the
+/// address its offset is.
+fn section(
+    out: &mut Bytes,
+    (name, kind, flags): (u32, u32, u64),
+    (offset, len): (usize, usize),
+    (link, info, align, entry): (u32, u64, u64, u64),
+) {
+    out.le32(name);
+    out.le32(kind);
+    out.le64(flags);
+    out.le64(if flags == 0 { 0 } else { as64(offset) }); // sh_addr
+    out.le64(as64(offset));
+    out.le64(as64(len));
+    out.le32(link);
+    out.le32(u32::try_from(info).expect("a count of symbols"));
+    out.le64(align);
+    out.le64(entry);
+}
+
+fn as64(value: usize) -> u64 {
+    u64::try_from(value).expect("an offset in the file")
 }
 
 struct Layout {
@@ -167,7 +327,8 @@ fn relocated(code: &Code, layout: &Layout, program: &Program) -> Vec<u8> {
     text
 }
 
-fn header(out: &mut Bytes, layout: &Layout) {
+fn header(out: &mut Bytes, layout: &Layout, sections: Option<&Sections>) {
+    let (shoff, shnum, shstrndx) = sections.map_or((0, 0, 0), Sections::header_fields);
     out.bytes(b"\x7FELF"); // e_ident: magic
     out.byte(2); //             ELFCLASS64
     out.byte(1); //             ELFDATA2LSB
@@ -180,14 +341,14 @@ fn header(out: &mut Bytes, layout: &Layout) {
     out.le32(1); // e_version
     out.le64(u64::from(len32(layout.text))); // e_entry, before the load bias
     out.le64(u64::from(EHDR_LEN)); // e_phoff
-    out.le64(0); // e_shoff
+    out.le64(shoff); // e_shoff
     out.le32(0); // e_flags
     out.le16(EHDR_LEN); // e_ehsize
     out.le16(PHDR_LEN); // e_phentsize
     out.le16(len16(layout.segments.len())); // e_phnum
-    out.le16(0); // e_shentsize
-    out.le16(0); // e_shnum
-    out.le16(0); // e_shstrndx
+    out.le16(if shnum == 0 { 0 } else { SHDR_LEN }); // e_shentsize
+    out.le16(shnum); // e_shnum
+    out.le16(shstrndx); // e_shstrndx
 }
 
 /// A segment's address has to match its file offset modulo the page size,
@@ -230,6 +391,26 @@ mod tests {
         // The segment covers the file exactly, so no byte is wasted.
         let filesz = u64::from_le_bytes(image[96..104].try_into().unwrap());
         assert_eq!(usize::try_from(filesz).unwrap(), image.len());
+    }
+
+    /// Symbols, asked for, follow everything that is loaded: the segment
+    /// and what it holds are as they were, and the header points at five
+    /// sections naming the program's functions.
+    #[test]
+    fn symbols_follow_what_is_loaded() {
+        let plain = hello();
+        let named =
+            crate::X86_64Linux.emit_with(&faun_core::programs::hello_world(), SymbolTable::Written);
+
+        assert!(named.len() > plain.len());
+        assert_eq!(&named[96..104], &plain[96..104], "the segment is unchanged");
+        let text = usize::from(EHDR_LEN + PHDR_LEN);
+        assert_eq!(&named[text..plain.len()], &plain[text..]);
+        let shoff = u64::from_le_bytes(named[40..48].try_into().unwrap());
+        assert!(usize::try_from(shoff).unwrap() >= plain.len());
+        assert_eq!(&named[58..64], &[64, 0, 5, 0, 4, 0]); // shentsize, shnum, shstrndx
+        let tables = &named[plain.len()..];
+        assert!(tables.windows(6).any(|name| name == b".text\0"));
     }
 
     /// Nothing in the file names an address, which is what lets the kernel

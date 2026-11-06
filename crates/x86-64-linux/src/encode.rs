@@ -132,6 +132,10 @@ pub(crate) fn encode(program: &Allocated) -> Code {
     }
 
     let (bytes, raw_positions) = asm.finish();
+    let functions = program
+        .functions()
+        .map(|(function, at)| (function, raw_positions[positions[at]]))
+        .collect();
     let relocs = data_references
         .into_iter()
         .map(|(step, data)| Reloc {
@@ -140,7 +144,11 @@ pub(crate) fn encode(program: &Allocated) -> Code {
             data,
         })
         .collect();
-    Code { bytes, relocs }
+    Code {
+        bytes,
+        relocs,
+        functions,
+    }
 }
 
 const fn frame_bytes(slots: u32) -> u32 {

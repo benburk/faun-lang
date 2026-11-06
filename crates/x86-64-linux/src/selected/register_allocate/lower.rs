@@ -207,6 +207,8 @@ impl<'a> Lowering<'a> {
                 .iter()
                 .find(|function| function.entry == layout.block)
             {
+                let label = self.block_labels[layout.block.index()];
+                self.asm.starts(function.source, label);
                 self.enter_function(function.source, entry);
                 let frame = self.frame(function.source);
                 if frame > 0 {

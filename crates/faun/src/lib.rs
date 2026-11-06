@@ -33,7 +33,7 @@
 use std::path::{Path, PathBuf};
 
 use faun_core::barb;
-use faun_core::targets::Target;
+use faun_core::targets::{SymbolTable, Target};
 
 use context::Context;
 use host::Main;
@@ -204,8 +204,21 @@ pub fn compile_to_image(source: &Path, target: &dyn Target) -> Result<Vec<u8>, D
 /// Reports a library, which has no `main!` to build, and what the machine
 /// tier or the target cannot represent.
 pub fn compile_barb_to_image(
+    barb: barb::Program,
+    target: &dyn Target,
+) -> Result<Vec<u8>, Diagnostic> {
+    compile_barb_to_image_with(barb, target, SymbolTable::Omitted)
+}
+
+/// [`compile_barb_to_image`], with symbols naming each function where
+/// `symbols` asks and the target writes them.
+///
+/// # Errors
+/// As [`compile_barb_to_image`].
+pub fn compile_barb_to_image_with(
     mut barb: barb::Program,
     target: &dyn Target,
+    symbols: SymbolTable,
 ) -> Result<Vec<u8>, Diagnostic> {
     if barb.entry().is_none() {
         return Err(Diagnostic::new("a library has no `main!` to build")
@@ -214,7 +227,9 @@ pub fn compile_barb_to_image(
     barb::optimize(&mut barb);
     let machine =
         faun_core::lower_to_machine_ir(&barb, &target.routines()).map_err(Diagnostic::new)?;
-    target.compile_machine_ir(&machine).map_err(Diagnostic::new)
+    target
+        .compile_machine_ir_with(&machine, symbols)
+        .map_err(Diagnostic::new)
 }
 
 /// The x86-64 Linux host, which frontend tests load their programs with.

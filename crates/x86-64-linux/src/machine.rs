@@ -4,7 +4,7 @@
 //! physical registers, while labels, frame slots, and data references remain
 //! symbolic until encoding.
 
-use faun_core::ir::DataId;
+use faun_core::ir::{DataId, FunctionId};
 use faun_core::targets::code::Code;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -395,9 +395,20 @@ impl Inst {
 pub(crate) struct Allocated {
     /// Every label bound, which finishing the builder checked.
     code: Code<Inst>,
+    /// Each function and the label its code starts at, in the order laid
+    /// out.
+    functions: Vec<(FunctionId, Label)>,
 }
 
 impl Allocated {
+    /// Each function and the instruction its code starts at, in the order
+    /// laid out.
+    pub(super) fn functions(&self) -> impl Iterator<Item = (FunctionId, usize)> + '_ {
+        self.functions
+            .iter()
+            .map(|&(function, label)| (function, self.label_position(label)))
+    }
+
     pub(super) fn instructions(&self) -> &[Inst] {
         self.code.insts()
     }
@@ -465,6 +476,7 @@ impl Allocated {
 #[derive(Debug, Default)]
 pub(crate) struct AllocatedBuilder {
     code: Code<Inst>,
+    functions: Vec<(FunctionId, Label)>,
 }
 
 impl AllocatedBuilder {
@@ -479,13 +491,21 @@ impl AllocatedBuilder {
         self.code.bind(label);
     }
 
+    /// Say that `function`'s code starts at `label`.
+    pub(crate) fn starts(&mut self, function: FunctionId, label: Label) {
+        self.functions.push((function, label));
+    }
+
     pub(crate) fn finish(self) -> Result<Allocated, String> {
         if let Some((label, _)) = self.code.labels().find(|(_, position)| position.is_none()) {
             return Err(format!("x86 label l{} is not bound", label.index()));
         }
         let mut code = self.code;
         crate::jumps::thread(&mut code);
-        let program = Allocated { code };
+        let program = Allocated {
+            code,
+            functions: self.functions,
+        };
         program.verify()?;
         Ok(program)
     }

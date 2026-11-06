@@ -71,6 +71,14 @@ pub trait Target: fmt::Debug {
     /// Prefer [`Self::compile_machine_ir`], which establishes these preconditions.
     fn emit(&self, program: &Program) -> Vec<u8>;
 
+    /// The image [`Self::emit`] makes, and with [`SymbolTable::Written`] a
+    /// symbol naming each function, for a profiler or a disassembler. A
+    /// target that writes no symbols makes the same image either way.
+    fn emit_with(&self, program: &Program, symbols: SymbolTable) -> Vec<u8> {
+        let _ = symbols;
+        self.emit(program)
+    }
+
     /// Put an image [`Self::emit`] made at `output`, answering the path it
     /// was written to. The layout on disk is the target's: by default a
     /// plain file at `output`.
@@ -126,8 +134,21 @@ pub trait Target: fmt::Debug {
     /// # Errors
     /// Reports invalid IR, unsupported representations or target constraints.
     fn compile_machine_ir(&self, program: &Program) -> Result<Vec<u8>, String> {
+        self.compile_machine_ir_with(program, SymbolTable::Omitted)
+    }
+
+    /// [`Self::compile_machine_ir`], with symbols as [`Self::emit_with`]
+    /// writes them.
+    ///
+    /// # Errors
+    /// Reports invalid IR, unsupported representations or target constraints.
+    fn compile_machine_ir_with(
+        &self,
+        program: &Program,
+        symbols: SymbolTable,
+    ) -> Result<Vec<u8>, String> {
         let prepared = self.prepare(program)?;
-        Ok(self.emit(&prepared))
+        Ok(self.emit_with(&prepared, symbols))
     }
 
     /// Fit boundaries to [`Self::budget`], then legalize representations
@@ -311,6 +332,16 @@ fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Whether an image names its functions. Nothing a program does reads the
+/// names, so they are left out unless asked for, and an image without them
+/// is as small as it can be.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SymbolTable {
+    #[default]
+    Omitted,
+    Written,
 }
 
 /// Write `image` to `output` with `suffix` appended to its name, marked

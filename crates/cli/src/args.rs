@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use bpaf::{Parser, choice, construct, long, positional, short};
-use faun_core::targets::Target;
+use faun_core::targets::{SymbolTable, Target};
 
 use crate::{NATIVE, TARGETS};
 
@@ -18,6 +18,7 @@ pub(crate) enum Command {
         target: &'static dyn Target,
         source: PathBuf,
         output: PathBuf,
+        symbols: SymbolTable,
     },
     Run {
         target: &'static dyn Target,
@@ -79,8 +80,19 @@ fn build() -> impl Parser<Command> {
         .argument::<PathBuf>("PATH")
         .fallback(PathBuf::from("a.out"))
         .debug_fallback();
+    let symbols = long("symbols")
+        .help("Name each function in the image, for a profiler or a disassembler")
+        .switch()
+        .map(|named| {
+            if named {
+                SymbolTable::Written
+            } else {
+                SymbolTable::Omitted
+            }
+        });
     construct!(Command::Build {
         output,
+        symbols,
         target,
         source,
     })

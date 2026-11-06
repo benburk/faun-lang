@@ -19,8 +19,8 @@ mod tests;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use faun_core::ir::{DataId, Program};
-use faun_core::targets::{Target, write_image};
+use faun_core::ir::{DataId, FunctionId, Program};
+use faun_core::targets::{SymbolTable, Target, write_image};
 
 /// How wide this machine's own word is, which is the widest value it holds
 /// and what any class but a fixed one means here.
@@ -89,10 +89,14 @@ impl Target for X86_64Linux {
     }
 
     fn emit(&self, program: &Program) -> Vec<u8> {
+        self.emit_with(program, SymbolTable::Omitted)
+    }
+
+    fn emit_with(&self, program: &Program, symbols: SymbolTable) -> Vec<u8> {
         let allocated = selected::select_and_allocate(program)
             .expect("accepted machine IR has a valid x86 selected allocation");
         let code = encode::encode(&allocated);
-        elf::image(&code, program)
+        elf::image(&code, program, symbols)
     }
 
     /// An executable named `output`.
@@ -105,6 +109,8 @@ impl Target for X86_64Linux {
 struct Code {
     bytes: Vec<u8>,
     relocs: Vec<Reloc>,
+    /// Each function and where in `bytes` its code starts, in order.
+    functions: Vec<(FunctionId, usize)>,
 }
 
 struct Reloc {

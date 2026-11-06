@@ -409,7 +409,11 @@ fn execute(program: &Allocated) -> Vec<u8> {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    let image = crate::elf::image(&crate::encode::encode(program), &Program::default());
+    let image = crate::elf::image(
+        &crate::encode::encode(program),
+        &Program::default(),
+        faun_core::targets::SymbolTable::Omitted,
+    );
     write_image(&path, "", &image, true).unwrap();
     let mut command = std::process::Command::new(&path);
     let mut output = command.output();
