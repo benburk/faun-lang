@@ -1,24 +1,23 @@
 # JSON performance
 
-The JSON library parses 4.4 MB of user records in **202 ms** on x86-64, and
-reads them into typed records and writes them back in **559 ms**. Rust's
-serde_json does the same in 27 ms and 14 ms, Node in 67 ms and 64 ms, and
-Python's `json` in 99 ms and 110 ms: Faun is 7.6× slower than serde_json at
-parsing, 2× slower than Python, and 40× slower than serde_json at decoding.
+The JSON library parses 4.4 MB of user records in **205 ms** on x86-64, and
+reads them into typed records and writes them back in **503 ms**. Rust's
+serde_json does the same in 27 ms and 15 ms, Node in 66 ms and 67 ms, and
+Python's `json` in 101 ms and 115 ms: Faun is 7.5× slower than serde_json at
+parsing, 2× slower than Python, and 34× slower than serde_json at decoding.
 It is exact where the others are not: integers keep every digit, and a
 member named twice or not read is refused.
 
-Measured 2026-11-06 on a Ryzen 9 9950X, CPU 5, seven-run medians, against
-revision `0340454` with the changes below. Peak memory is the largest
-resident size.
+Measured 2026-11-06 on a Ryzen 9 9950X, CPU 5, seven-run medians, with
+every change below. Peak memory is the largest resident size.
 
 | 20,000 users, 4.4 MB | Parse  | Peak    | Decode | Peak    |
 | -------------------- | ------ | ------- | ------ | ------- |
-| Faun, x86-64         | 202 ms | 88 MiB  | 559 ms | 359 MiB |
-| Faun, wasm32         | 233 ms | 110 MiB | 561 ms | 348 MiB |
-| Rust, serde_json     | 27 ms  | 47 MiB  | 14 ms  | 21 MiB  |
-| Node 24              | 67 ms  | 92 MiB  | 64 ms  | 112 MiB |
-| Python 3.13          | 99 ms  | 42 MiB  | 110 ms | 55 MiB  |
+| Faun, x86-64         | 205 ms | 88 MiB  | 503 ms | 359 MiB |
+| Faun, wasm32         | 234 ms | 110 MiB | 511 ms | 327 MiB |
+| Rust, serde_json     | 27 ms  | 47 MiB  | 15 ms  | 21 MiB  |
+| Node 24              | 66 ms  | 92 MiB  | 67 ms  | 113 MiB |
+| Python 3.13          | 101 ms | 42 MiB  | 115 ms | 55 MiB  |
 
 At 2,000 users, 0.4 MB, Faun parses in 13.6 ms, ahead of Python's 19.0 ms and
 Node's 26.1 ms, which pay more to start; serde_json takes 2.4 ms.
@@ -59,7 +58,7 @@ Two programs the library ran on its own tests failed on real input:
   joined. Writing the decoded records back took 153 s and now takes 0.25 s;
   joining 400,000 strings takes 60 ms.
 
-And two shortcuts in the library itself:
+And three shortcuts in the library itself:
 
 - A string with no escape is taken from the input as a view, where it was
   read a byte at a time onto a list, turned round, and checked: parsing went
@@ -67,36 +66,62 @@ And two shortcuts in the library itself:
 - A string needing no escape is written in quotes as it is, where each byte
   went through `flat_map`: decoding went from 721 ms to 559 ms, and its peak
   from 693 MiB to 359 MiB.
+- A field finds its member and records its place, and `finish` marks the
+  places in one pass, where names were compared again at every field, at
+  every pairing of fields and at `finish`, about 200 comparisons an object.
+  Decoding alone went from 0.18 s to 0.12 s. Indexing each object's members
+  in a `Map` first was slower, 0.70 s for parsing and decoding against
+  0.38 s, and twice the memory: a map costs more to build than nine names
+  cost to compare.
 
 ## Where the rest goes
 
-The executables carry no symbols, so `perf` reports addresses alone, and
-these are reasoned from the code rather than measured:
+`faun build --symbols` names each function for `perf`. Parsing, by share of
+samples:
 
-- **Every value is a cell.** A record of nine members is a list of nine
-  pairs, each a cell holding a string buffer and a `Json` cell. serde_json's
-  typed decode never builds a tree at all.
-- **Member names are compared pairwise.** Looking a field up scans the
-  members and then the rest for a second one; `Decode.sequence` checks each
-  field's claims against those before it; `finish` checks every member
-  against every claim. For nine members that is about 200 string
-  comparisons an object.
-- **A string is checked as UTF-8 again.** The input is a `Str`, so every
-  stretch between quotes is valid already, but the library can only make a
-  `Str` from bytes through `Str.from_utf8`.
-- **The decoded records, their tree and the tree written back are alive at
-  once,** which is most of the peak.
+| Function        | Share | What it is                           |
+| --------------- | ----- | ------------------------------------ |
+| `seq.release`   | 10.0% | giving up a buffer                   |
+| `cell.release`  | 9.3%  | giving up a cell                     |
+| `nat.retain`    | 8.0%  | taking a claim                       |
+| `nat.allocate`  | 7.6%  | the private heap handing out a block |
+| `nat.coalesce`  | 5.2%  | the heap joining free blocks         |
+| `utf8`          | 5.0%  | checking a string's bytes            |
+| `List.fold`     | 3.7%  | the benchmark's own walk             |
+| `nat.mul`, etc. | ~8%   | integers read as arbitrary naturals  |
+
+About half the time is the memory runtime: every value is a cell or a
+buffer, every one is counted, and every one is given back. Decoding is the
+same, with `seq.release`, `nat.coalesce` and `nat.allocate` the first three
+at 32% together. serde_json's typed decode builds no tree at all.
+
+Checking each string as UTF-8 is 5%. `Str.slice`, taking part of a `Str`
+without checking it again, was tried and measured no faster, and the
+[strings](values/strings.md) note keeps its reasons against slicing text by
+byte, so it was not kept.
+
+## What changed in the compiler
+
+- **Joins.** Joining a short sequence before a long one nothing else holds
+  copied the long one, so `[x].concat(built)` in a loop was quadratic:
+  80,000 such joins took 21.6 s. On x86-64 and wasm32 each element layout a
+  program joins now has a routine every join calls, which writes the first
+  into room before the second where the second has room there or is
+  strictly longer; those take 6 ms. The 6502's calls carry four values and
+  one result, so it keeps the inline join, and its images are unchanged. A
+  program that joins often is smaller for the routine, and a tiny one
+  joining once is larger by it, so `faun build --small` builds both ways
+  and keeps the smaller. Requiring the second to be strictly longer, not as
+  long, keeps a stream's equal chunks growing at one end: growing at both
+  took parsing's peak from 90 MiB to 127 MiB.
+- **Symbols.** `faun build --symbols` writes a `.symtab` naming each
+  function. Without it, an image is byte for byte as before, so the size
+  ratchets hold.
 
 ## Next steps
 
-1. A `.symtab` in the x86-64 executable, so `perf` names functions.
-2. Member lookup and claims by one pass over the object, refusing a repeated
-   name where the object is bound, instead of where each field is read.
-3. A way to take part of a `Str` as a `Str` without checking it again.
-4. Joining a short sequence before a long one nothing else holds still
-   copies the long one: `[x].concat(acc)` in a loop is quadratic, and
-   `List.join` only avoids it. Growing the second sequence at its front
-   fixes it, at a cost of code at every join, which pushed a 6502 program
-   past 64 KiB. A routine called from every join would cost none, but the
-   6502 takes at most four arguments and one result, and a join has six and
-   two.
+1. The memory runtime is now the cost: fewer cells for small values, a
+   cheaper path for freeing a block the heap will soon reuse, and taking no
+   claim where a value is only read.
+2. Integers are arbitrary naturals however small; one that fits a word could
+   be read as one.
