@@ -3,126 +3,126 @@
 # alone in its clause is chosen first: its opposite empties that clause at
 # once, so unit propagation needs no code of its own.
 #
-# After SAT-MICRO by Conchon, Kanig and Lescuyer. Run, it colours the map of
-# Australia in three colours.
+# The solver works over any variables that can be compared, as SAT-MICRO by
+# Conchon, Kanig and Lescuyer works over any ordered type. Run, it colours
+# the map of Australia in three colours, a variable for each region in each
+# colour.
 
 import std.host {Host}
 
-Literal : [Yes(Str), Not(Str)].(
+Literal(v) : [Yes(v), Not(v)].(
   # The opposite literal, written `-literal`.
-  neg : Literal -> Literal
-  neg(Yes(name)) -> Not(name)
-  neg(Not(name)) -> Yes(name)
+  neg : Literal(v) -> Literal(v)
+  neg(Yes(x)) -> Not(x)
+  neg(Not(x)) -> Yes(x)
 
-  equals : (Literal, Literal) -> Bool
+  equals : (Literal(v), Literal(v)) -> Bool where v.equals : (v, v) -> Bool
 )
 
 # A clause holds where one of its literals does, and a formula where every
-# clause does. A model gives each variable it needed a value.
-Clause = List(Literal)
-Formula = List(Clause)
-Model = Map(Str, Bool)
+# clause does. A model is the literals assumed to make it hold.
+Clause(v) = List(Literal(v))
+Formula(v) = List(Clause(v))
+Model(v) = List(Literal(v))
 
 # What is left to hold once `literal` does: a clause it satisfies goes, and
 # its opposite is struck from the rest.
-assume : (Formula, Literal) -> Formula
+assume : (Formula(v), Literal(v)) -> Formula(v) where v.equals : (v, v) -> Bool
 assume(formula, literal) -> formula
   .filter(|clause| !clause.contains(literal))
   .map(|clause| clause.filter(|other| other != -literal))
 
 # The literal of a clause standing alone, or `first` where none does.
-pick : (Formula, Literal) -> Literal
+pick : (Formula(v), Literal(v)) -> Literal(v)
 pick([[unit], *_], _) -> unit
 pick([_, *rest], first) -> pick(rest, first)
 pick([], first) -> first
 
-holding : (Model, Literal) -> Model
-holding(model, Yes(name)) -> model.insert(name, True)
-holding(model, Not(name)) -> model.insert(name, False)
-
-solve : (Formula, Model) -> Result(Model, [Unsat])
+solve : (Formula(v), Model(v)) -> Result(Model(v), [Unsat]) where v.equals : (v, v) -> Bool
 solve([], model) -> Ok(model)
 solve(formula, model) -> (
   formula is [[first, *_], *_] else return Err(Unsat)
   if formula.any(|clause| clause.is_empty()) return Err(Unsat)
   literal = pick(formula, first)
-  solve(assume(formula, literal), holding(model, literal)) is (
+  solve(assume(formula, literal), [literal, *model]) is (
     Ok(found) then Ok(found)
-    Err(Unsat) then solve(assume(formula, -literal), holding(model, -literal))
+    Err(Unsat) then solve(assume(formula, -literal), [-literal, *model])
   )
 )
 
-holds : (Model, Literal) -> Bool
-holds(model, Yes(name)) -> model.get(name) == Ok(True)
-holds(model, Not(name)) -> model.get(name) == Ok(False)
+satisfies : (Model(v), Formula(v)) -> Bool where v.equals : (v, v) -> Bool
+satisfies(model, formula) -> formula.all(|clause| clause.any(|literal| model.contains(literal)))
 
-satisfies : (Model, Formula) -> Bool
-satisfies(model, formula) -> formula.all(|clause| clause.any(|literal| holds(model, literal)))
+# Colouring a map: a variable for each region in each colour, the pair of
+# the two. Every region is some colour and at most one, and neighbours are
+# never the same.
 
-# Colouring a map: a variable for each region in each colour. Every region
-# is some colour and at most one, and neighbours are never the same.
+Region : [WA, NT, SA, Q, NSW, V, T].(
+  equals : (Region, Region) -> Bool
 
-regions : List(Str)
-regions = ["WA", "NT", "SA", "Q", "NSW", "V", "T"]
+  to_str : Region -> Str
+)
 
-borders : List((Str, Str))
-borders = [
-  ("WA", "NT"), ("WA", "SA"), ("NT", "SA"), ("NT", "Q"), ("SA", "Q"),
-  ("SA", "NSW"), ("SA", "V"), ("Q", "NSW"), ("NSW", "V"),
-]
+Colour : [Red, Green, Blue].(
+  equals : (Colour, Colour) -> Bool
 
-painted : (Str, Str) -> Str
-painted(region, colour) -> "${region} ${colour}"
+  to_str : Colour -> Str
+)
 
-# Each pair of colours once, in order.
-pairs : List(Str) -> List((Str, Str))
+regions : List(Region)
+regions = [WA, NT, SA, Q, NSW, V, T]
+
+borders : List((Region, Region))
+borders = [(WA, NT), (WA, SA), (NT, SA), (NT, Q), (SA, Q), (SA, NSW), (SA, V), (Q, NSW), (NSW, V)]
+
+colours : List(Colour)
+colours = [Red, Green, Blue]
+
+# Each pair of a list's elements once, in order.
+pairs : List(a) -> List((a, a))
 pairs([]) -> []
 pairs([first, *rest]) -> rest.map(|other| (first, other)).concat(pairs(rest))
 
 # Each region is some colour, and at most one.
-painted_once : (Str, List(Str)) -> Formula
+painted_once : (r, List(c)) -> Formula((r, c))
 painted_once(region, colours) -> [
-  colours.map(|colour| Yes(painted(region, colour))),
-  *pairs(colours).map(|(a, b)| [Not(painted(region, a)), Not(painted(region, b))]),
+  colours.map(|colour| Yes((region, colour))),
+  *pairs(colours).map(|(a, b)| [Not((region, a)), Not((region, b))]),
 ]
 
 # Neighbours are never the same colour.
-apart : ((Str, Str), List(Str)) -> Formula
-apart((here, there), colours) -> colours.map(|colour| [Not(painted(here, colour)), Not(painted(there, colour))])
+apart : ((r, r), List(c)) -> Formula((r, c))
+apart((here, there), colours) -> colours.map(|colour| [Not((here, colour)), Not((there, colour))])
 
-colouring : (List(Str), List((Str, Str)), List(Str)) -> Formula
+colouring : (List(r), List((r, r)), List(c)) -> Formula((r, c))
 colouring(regions, borders, colours) -> regions
   .flat_map(|region| painted_once(region, colours))
   .concat(borders.flat_map(|border| apart(border, colours)))
 
-colours : List(Str)
-colours = ["red", "green", "blue"]
-
 # Each region and the colour the model gives it.
-legend : Model -> Str
+legend : Model((Region, Colour)) -> Str
 legend(model) -> regions
-  .map(|region| (region, colours.find(|colour| holds(model, Yes(painted(region, colour)))).ok_or("any")))
-  .map(|(region, colour)| "${region:<4}${colour}")
+  .map(|region| (region, colours.find(|colour| model.contains(Yes((region, colour))))))
+  .map(|(region, colour)| "${region:<4}${colour.map_ok(|c| c.to_str()).ok_or("any")}")
   .join("\n")
 
-australia : Formula
+australia : Formula((Region, Colour))
 australia = colouring(regions, borders, colours)
 
-expect solve(australia, Map.empty).map_ok(|model| satisfies(model, australia)) == Ok(True)
+expect solve(australia, []).map_ok(|model| satisfies(model, australia)) == Ok(True)
 
-# (a or b) and (not a or b) and (not b or c): b and c must hold.
-expect solve([[Yes("a"), Yes("b")], [Not("a"), Yes("b")], [Not("b"), Yes("c")]], Map.empty)
-  .map_ok(|model| holds(model, Yes("b")) & holds(model, Yes("c")))
+# (1 or 2) and (not 1 or 2) and (not 2 or 3): 2 and 3 must hold.
+expect solve([[Yes(1), Yes(2)], [Not(1), Yes(2)], [Not(2), Yes(3)]], [])
+  .map_ok(|model| model.contains(Yes(2)) & model.contains(Yes(3)))
   == Ok(True)
 
-expect solve([[Yes("a")], [Not("a")]], Map.empty) == Err(Unsat)
+expect solve([[Yes(1)], [Not(1)]], []) == Err(Unsat)
 
-# A triangle takes three colours, so two are not enough; and three pigeons
-# do not fit in two holes.
-expect solve(colouring(["x", "y", "z"], [("x", "y"), ("y", "z"), ("x", "z")], ["red", "green"]), Map.empty) == Err(Unsat)
-expect solve(colouring(["1", "2", "3"], pairs(["1", "2", "3"]), ["left", "right"]), Map.empty) == Err(Unsat)
+# A triangle takes three colours, so two are not enough: the same formula
+# as three pigeons in two holes.
+expect solve(colouring([1, 2, 3], pairs([1, 2, 3]), [Red, Green]), []) == Err(Unsat)
 
 app : {args: List(Str)} -> Str
-app(_) -> solve(australia, Map.empty).map_ok(legend).ok_or("no colouring")
+app(_) -> solve(australia, []).map_ok(legend).ok_or("no colouring")
 
 main!(host) -> host.run!(app)

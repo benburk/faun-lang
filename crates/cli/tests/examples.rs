@@ -614,7 +614,7 @@ fn newton_finds_the_square_root_of_two() {
 fn the_sat_solver_colours_australia_and_refutes_the_impossible() {
     let (failed, count) = support::test_file(&example("sat.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 5);
+    assert_eq!(count, 4);
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
         .arg("run")
@@ -624,7 +624,7 @@ fn the_sat_solver_colours_australia_and_refutes_the_impossible() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "WA  red\nNT  green\nSA  blue\nQ   red\nNSW green\nV   red\nT   red\n"
+        "WA  Red\nNT  Green\nSA  Blue\nQ   Red\nNSW Green\nV   Red\nT   Red\n"
     );
 }
 
