@@ -1,0 +1,72 @@
+# Benchmark: the solver of `sat.fn`, copied here so the workload holds still
+# while the compiler changes, on `n + 1` pigeons in `n` holes, which has no
+# model and makes the search try every way. `run.py` times it.
+#
+#     faun run sat.fn 7
+
+import std.host {Host}
+
+Literal(v) : [Yes(v), Not(v)].(
+  # The opposite literal, written `-literal`.
+  neg : Literal(v) -> Literal(v)
+  neg(Yes(x)) -> Not(x)
+  neg(Not(x)) -> Yes(x)
+
+  equals : (Literal(v), Literal(v)) -> Bool where Equatable(v)
+)
+
+# A clause holds where one of its literals does, and a formula where every
+# clause does. A model is the literals assumed to make it hold.
+Clause(v) = List(Literal(v))
+Formula(v) = List(Clause(v))
+Model(v) = List(Literal(v))
+
+# What is left to hold once `literal` does: a clause it satisfies goes, and
+# its opposite is struck from the rest.
+assume : (Formula(v), Literal(v)) -> Formula(v) where Equatable(v)
+assume(formula, literal) -> formula
+  .filter(|clause| !clause.contains(literal))
+  .map(|clause| clause.filter(|other| other != -literal))
+
+# The literal of a clause standing alone, or `first` where none does.
+pick : (Formula(v), Literal(v)) -> Literal(v)
+pick([[unit], *_], _) -> unit
+pick([_, *rest], first) -> pick(rest, first)
+pick([], first) -> first
+
+models : (Formula(v), Model(v)) -> List(Model(v)) where Equatable(v)
+models([], model) -> [model]
+models(formula, model) -> (
+  formula is [[first, *_], *_] else return []
+  if formula.any(|clause| clause.is_empty()) return []
+  literal = pick(formula, first)
+  models(assume(formula, literal), [literal, *model])
+    .concat(models(assume(formula, -literal), [-literal, *model]))
+)
+
+solve : Formula(v) -> Result(Model(v), [Unsat]) where Equatable(v)
+solve(formula) -> models(formula, []).first().err_as(Unsat)
+
+# A variable for each pigeon in each hole: every pigeon is in some hole,
+# and no hole holds two.
+pigeons : Nat -> Formula((Nat, Nat))
+pigeons(holes) -> (
+  all = List.range(holes + 1)
+  somewhere = all.map(|pigeon| List.range(holes).map(|hole| Yes((pigeon, hole))))
+  alone = List.range(holes).flat_map(|hole| pairs(all).map(|(p, q)| [Not((p, hole)), Not((q, hole))]))
+  somewhere.concat(alone)
+)
+
+pairs : List(a) -> List((a, a))
+pairs([]) -> []
+pairs([first, *rest]) -> rest.map(|other| (first, other)).concat(pairs(rest))
+
+app : {args: List(Str)} -> Str
+app(input) -> (
+  holes = input.args.get(1).and_then(|text| Nat.from_str(text).err_as(OutOfBounds)).ok_or(7)
+  if solve(pigeons(holes)).is_ok() then "sat" else "unsat"
+)
+
+expect app({args: ["sat", "3"]}) == "unsat"
+
+main!(host) -> host.run!(app)

@@ -85,6 +85,11 @@ helix:
     ln -sfn ../tree-sitter-faun/parser "$runtime/grammars/faun.so"
     ln -sfn ../tree-sitter-faun/queries "$runtime/queries/faun"
 
+# Time the benchmark programs pinned to `cpu`; `--faun LABEL=PATH` compares compilers
+bench cpu *args:
+    cargo build --release -q -p faun-cli
+    python3 crates/faun/examples/bench/run.py --cpu {{ cpu }} {{ args }}
+
 # Write every refused program's .err from what the compiler says now; read the diff
 bless:
     FAUN_BLESS=1 cargo nextest run -p faun-cli --test refused

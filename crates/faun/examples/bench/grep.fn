@@ -1,0 +1,117 @@
+# Benchmark: how many lines of standard input a pattern matches whole, by
+# the derivative matcher of `regex.fn`, copied here so the workload holds
+# still while the compiler changes. `run.py` times it.
+#
+#     faun run grep.fn '.*(error|warn).*timeout.*' < log.txt
+
+import std.host {Host}
+
+Regex : [
+  Nothing,
+  Empty,
+  Any,
+  Char(U8),
+  Seq(Regex, Regex),
+  Alt(Regex, Regex),
+  Star(Regex),
+].(
+  # Whether it matches the empty text.
+  nullable : Regex -> Bool
+  nullable(Nothing | Any | Char(_)) -> False
+  nullable(Empty | Star(_)) -> True
+  nullable(Seq(a, b)) -> a.nullable() & b.nullable()
+  nullable(Alt(a, b)) -> a.nullable() | b.nullable()
+
+  # What may follow `byte`.
+  derive : (Regex, U8) -> Regex
+  derive(Nothing | Empty, _) -> Nothing
+  derive(Any, _) -> Empty
+  derive(Char(byte), byte) -> Empty
+  derive(Char(_), _) -> Nothing
+  derive(Seq(a, b), byte) if a.nullable() -> alt(seq(a.derive(byte), b), b.derive(byte))
+  derive(Seq(a, b), byte) -> seq(a.derive(byte), b)
+  derive(Alt(a, b), byte) -> alt(a.derive(byte), b.derive(byte))
+  derive(Star(a), byte) -> seq(a.derive(byte), Star(a))
+
+  matches : (Regex, Str) -> Bool
+  matches(regex, text) -> text.to_utf8().fold(regex, derive).nullable()
+
+  cmp : (Regex, Regex) -> Order
+)
+
+# A sequence and a choice, simplified as they are built, which keeps every
+# derivative small. A sequence nests to the right, so a derivative rebuilds
+# only its front, and a choice keeps its alternatives in order, each once,
+# so two choices of the same alternatives are the same regex.
+seq : (Regex, Regex) -> Regex
+seq(Nothing, _) -> Nothing
+seq(_, Nothing) -> Nothing
+seq(Empty, regex) -> regex
+seq(regex, Empty) -> regex
+seq(Seq(a, b), c) -> seq(a, seq(b, c))
+seq(a, b) -> Seq(a, b)
+
+alt : (Regex, Regex) -> Regex
+alt(Nothing, regex) -> regex
+alt(regex, Nothing) -> regex
+alt(Alt(a, b), c) -> alt(a, alt(b, c))
+alt(a, Alt(b, c)) if a == b -> Alt(b, c)
+alt(a, Alt(b, c)) if a > b -> Alt(b, alt(a, c))
+alt(a, Alt(b, c)) -> Alt(a, Alt(b, c))
+alt(a, b) if a == b -> a
+alt(a, b) if a > b -> Alt(b, a)
+alt(a, b) -> Alt(a, b)
+
+# The usual syntax: `|` between alternatives, `*` after what repeats,
+# parentheses, `.` for any byte and `\` before a byte meant as itself.
+parse : Str -> Result(Regex, [Malformed])
+parse(text) -> (
+  (regex, rest) = alternatives(text.to_utf8())?
+  if rest is [] then Ok(regex) else Err(Malformed)
+)
+
+alternatives : List(U8) -> Result((Regex, List(U8)), [Malformed])
+alternatives(bytes) -> (
+  (first, rest) = sequence(bytes, Empty)?
+  rest is (
+    ['|', *more] then alternatives(more).map_ok(|(second, after)| (alt(first, second), after))
+    _ then Ok((first, rest))
+  )
+)
+
+sequence : (List(U8), Regex) -> Result((Regex, List(U8)), [Malformed])
+sequence([], built) -> Ok((built, []))
+sequence(bytes is ['|', *_], built) -> Ok((built, bytes))
+sequence(bytes is [')', *_], built) -> Ok((built, bytes))
+sequence(bytes, built) -> (
+  (one, rest) = atom(bytes)?
+  (repeated, after) = stars(one, rest)
+  sequence(after, seq(built, repeated))
+)
+
+stars : (Regex, List(U8)) -> (Regex, List(U8))
+stars(regex, ['*', *rest]) -> stars(Star(regex), rest)
+stars(regex, rest) -> (regex, rest)
+
+atom : List(U8) -> Result((Regex, List(U8)), [Malformed])
+atom(['(', *rest]) -> (
+  (inner, after) = alternatives(rest)?
+  after is [')', *more] else return Err(Malformed)
+  Ok((inner, more))
+)
+atom(['.', *rest]) -> Ok((Any, rest))
+atom(['\\', byte, *rest]) -> Ok((Char(byte), rest))
+atom([byte, *rest]) if byte != '*' -> Ok((Char(byte), rest))
+atom(_) -> Err(Malformed)
+
+app : {args: List(Str), stdin: List(U8), *} -> Str
+app(input) -> (
+  input.args is [_, pattern] else return "usage: grep PATTERN < TEXT"
+  parse(pattern) is Ok(regex) else return "error: `${pattern}` is not a pattern"
+  Str.from_utf8(input.stdin) is Ok(text) else return "error: standard input is not UTF-8"
+  "${text.lines().count(|line| regex.matches(line))}"
+)
+
+expect app({args: ["grep", ".*b.*"], stdin: "abc\nxyz\nb\n".to_utf8()}) == "2"
+
+main!(host) -> host.run_stdin!(app)

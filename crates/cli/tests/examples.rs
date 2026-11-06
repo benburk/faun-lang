@@ -628,6 +628,17 @@ fn the_sat_solver_colours_australia_and_refutes_the_impossible() {
     );
 }
 
+/// The benchmark programs' own expectations hold, so a timing measures a
+/// program that answers rightly.
+#[test]
+fn the_benchmark_programs_hold() {
+    for name in ["bench/grep.fn", "bench/sat.fn"] {
+        let (failed, count) = support::test_file(&example(name));
+        assert_eq!(failed, Vec::<String>::new(), "{name}");
+        assert_eq!(count, 1, "{name}");
+    }
+}
+
 /// Regular expressions by Brzozowski derivatives: its expectations hold,
 /// `(a*)*b` among them, and running it says which texts a pattern matches.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
