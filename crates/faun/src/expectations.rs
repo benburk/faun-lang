@@ -100,13 +100,13 @@ fn entry(cx: &mut Context, main: &Main, asked: &[Symbol]) -> h::Clause {
     let receiver = sites.expr(span, h::ExprKind::Local(h::LocalId(0)));
     let printed = sites.expr(
         span,
-        h::ExprKind::Method(Box::new(receiver), print, vec![text]),
+        h::ExprKind::Method(Box::new(receiver), print, span, vec![text]),
     );
     let status = sites.expr(span, h::ExprKind::Number(0u8.into()));
     let receiver = sites.expr(span, h::ExprKind::Local(h::LocalId(0)));
     let exited = sites.expr(
         span,
-        h::ExprKind::Method(Box::new(receiver), exit, vec![status]),
+        h::ExprKind::Method(Box::new(receiver), exit, span, vec![status]),
     );
     h::Clause {
         site: sites.fresh(),
@@ -147,7 +147,7 @@ fn failures(
         );
         let selected = sites.expr(
             span,
-            h::ExprKind::Method(Box::new(held), select, vec![nothing, numbered]),
+            h::ExprKind::Method(Box::new(held), select, span, vec![nothing, numbered]),
         );
         failures.push(h::StringPart::Splice(selected));
     }

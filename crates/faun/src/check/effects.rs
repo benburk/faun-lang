@@ -98,7 +98,7 @@ fn expr(
             }
             _ => expression.try_for_each_child(|inner| within(inner, false)),
         },
-        h::ExprKind::Member(_, name) | h::ExprKind::Method(_, name, _) => {
+        h::ExprKind::Member(_, name) | h::ExprKind::Method(_, name, _, _) => {
             if effect(*name) {
                 called(*name)?;
             }

@@ -2447,7 +2447,12 @@ impl ClauseResolver<'_> {
                             let to_str = self.symbols.intern("to_str");
                             let text = self.sites.expr(
                                 expression.span,
-                                h::ExprKind::Method(Box::new(value), to_str, Vec::new()),
+                                h::ExprKind::Method(
+                                    Box::new(value),
+                                    to_str,
+                                    expression.span,
+                                    Vec::new(),
+                                ),
                             );
                             self.sites.splice(text.site);
                             let Some(width) = width else {
@@ -2467,7 +2472,12 @@ impl ClauseResolver<'_> {
                             );
                             let padded = self.sites.expr(
                                 expression.span,
-                                h::ExprKind::Method(Box::new(text), pad, vec![columns]),
+                                h::ExprKind::Method(
+                                    Box::new(text),
+                                    pad,
+                                    width.columns.span,
+                                    vec![columns],
+                                ),
                             );
                             Ok(h::StringPart::Splice(padded))
                         }
@@ -2593,6 +2603,7 @@ impl ClauseResolver<'_> {
                     h::ExprKind::Method(
                         Box::new(receiver),
                         self.symbols.intern(member.text(self.source)),
+                        member.0,
                         arguments,
                     )
                 }

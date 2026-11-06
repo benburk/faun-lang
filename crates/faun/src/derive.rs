@@ -389,13 +389,19 @@ impl Writer<'_> {
             let mut fed = self.local(count);
             if constructors.len() > 1 {
                 let place = self.expr(h::ExprKind::Number(at.into()));
-                fed = self.expr(h::ExprKind::Method(Box::new(fed), write_u64, vec![place]));
+                fed = self.expr(h::ExprKind::Method(
+                    Box::new(fed),
+                    write_u64,
+                    self.span,
+                    vec![place],
+                ));
             }
             for index in 0..count {
                 let field = self.local(index);
                 fed = self.expr(h::ExprKind::Method(
                     Box::new(field),
                     self.spelling,
+                    self.span,
                     vec![fed],
                 ));
             }
@@ -445,6 +451,7 @@ impl Writer<'_> {
         self.expr(h::ExprKind::Method(
             Box::new(left),
             self.spelling,
+            self.span,
             vec![right],
         ))
     }
@@ -455,6 +462,7 @@ impl Writer<'_> {
         self.expr(h::ExprKind::Method(
             Box::new(field),
             self.spelling,
+            self.span,
             Vec::new(),
         ))
     }

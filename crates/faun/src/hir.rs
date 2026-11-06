@@ -463,7 +463,7 @@ impl Expr {
             | ExprKind::Try(inner)
             | ExprKind::Return(inner)
             | ExprKind::Is(inner, _) => visit(inner),
-            ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
+            ExprKind::Call(head, arguments) | ExprKind::Method(head, _, _, arguments) => {
                 visit(head)?;
                 arguments.iter().try_for_each(visit)
             }
@@ -543,7 +543,7 @@ impl Expr {
             | ExprKind::Try(inner)
             | ExprKind::Return(inner)
             | ExprKind::Is(inner, _) => visit(inner),
-            ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
+            ExprKind::Call(head, arguments) | ExprKind::Method(head, _, _, arguments) => {
                 visit(head);
                 arguments.iter_mut().for_each(visit);
             }
@@ -605,7 +605,8 @@ pub enum ExprKind {
     Lambda(Vec<Pattern>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     Member(Box<Expr>, Symbol),
-    Method(Box<Expr>, Symbol, Vec<Expr>),
+    /// `receiver.member(arguments)`, and where the member is written.
+    Method(Box<Expr>, Symbol, Span, Vec<Expr>),
     Unary(UnaryOp, Box<Expr>),
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
     /// `value?`: an `Ok`'s value, or the `Err` answered at once by the

@@ -353,7 +353,7 @@ impl Elaborator<'_> {
                         None => t::ExprKind::Method(self.target(site, true), vec![receiver]),
                     }
                 }
-                h::ExprKind::Method(receiver, _, arguments) if self.sites.is_spliced(site) => {
+                h::ExprKind::Method(receiver, _, _, arguments) if self.sites.is_spliced(site) => {
                     debug_assert!(
                         arguments.is_empty(),
                         "a splice's `to_str` takes no arguments"
@@ -361,7 +361,7 @@ impl Elaborator<'_> {
                     let target = self.target(site, false);
                     t::ExprKind::Spliced(target, Box::new(self.expr(*receiver)))
                 }
-                h::ExprKind::Method(receiver, _, arguments) => {
+                h::ExprKind::Method(receiver, _, _, arguments) => {
                     let target = self.target(site, false);
                     let arguments = std::iter::once(*receiver)
                         .chain(arguments)

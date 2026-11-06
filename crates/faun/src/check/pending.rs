@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use super::unify::{Scheme, Ty, free_variables, replaced, show, ty_embeds};
 use super::{
-    Bound, Checker, Finish, Marks, MethodImpl, PendingMethod, PendingNumeral, PendingTag, Reach,
-    Reading, apply_signature, failure,
+    Bound, Checker, Finish, Marks, MethodImpl, Misfit, PendingMethod, PendingNumeral, PendingTag,
+    Places, Reach, Reading, apply_signature, failure,
 };
 use crate::blessed::{self, NumeralType};
 use crate::diagnostic::{Advised, Refusal, counted};
@@ -87,21 +87,28 @@ impl Checker<'_> {
         )
     }
 
+    /// A call of `name` on `receiver`, a method's where the member is
+    /// written at a place, and otherwise an operator's.
     pub(super) fn method(
         &mut self,
         module: ModuleId,
         (site, span): (h::SiteId, crate::ast::Span),
-        receiver: &h::Expr,
-        name: Symbol,
+        (receiver, name, member): (&h::Expr, Symbol, Option<crate::ast::Span>),
         arguments: &[h::Expr],
         locals: &mut Vec<Option<Scheme>>,
     ) -> Result<Ty, Refusal> {
+        let places = Places {
+            receiver: receiver.span,
+            member,
+            arguments: arguments.iter().map(|argument| argument.span).collect(),
+        };
         let receiver = self.expr(module, receiver, locals)?;
         let mut argument_types = Vec::with_capacity(arguments.len());
         for argument in arguments {
             argument_types.push(self.expr(module, argument, locals)?);
         }
-        Ok(self.defer_method(module, (site, span), receiver, name, argument_types, false))
+        let how = (false, Some(places));
+        Ok(self.defer_method(module, (site, span), receiver, name, argument_types, how))
     }
 
     pub(super) fn defer_method(
@@ -111,7 +118,7 @@ impl Checker<'_> {
         receiver: Ty,
         name: Symbol,
         arguments: Vec<Ty>,
-        member: bool,
+        (member, places): (bool, Option<Places>),
     ) -> Ty {
         let result = self.infer.fresh();
         self.pending_methods.push(PendingMethod {
@@ -127,6 +134,7 @@ impl Checker<'_> {
             owed: None,
             owing: None,
             numeral: false,
+            places,
         });
         result
     }
@@ -177,6 +185,7 @@ impl Checker<'_> {
                 owed: Some((definition, bound.through)),
                 owing: self.obliging,
                 numeral: bound.numeral,
+                places: None,
             });
         }
         Ok(())
@@ -663,6 +672,7 @@ impl Checker<'_> {
             owed: None,
             owing: None,
             numeral: true,
+            places: None,
         });
         if numeral.negative {
             let neg = self.method_symbol(numeral.module, numeral.span, "neg")?;
@@ -679,6 +689,7 @@ impl Checker<'_> {
                 owed: None,
                 owing: None,
                 numeral: true,
+                places: None,
             });
         }
         if let Some(site) = numeral.site {
@@ -1445,6 +1456,7 @@ impl Checker<'_> {
                 owed: None,
                 owing: None,
                 numeral: false,
+                places: None,
             });
         }
         if let Some(site) = pending.site {
@@ -1512,12 +1524,60 @@ impl Checker<'_> {
 
     fn apply_field(&mut self, pending: &PendingMethod, scheme: &Scheme) -> Result<(), Refusal> {
         apply_signature(&mut self.infer, pending, scheme, self.symbols)
-            .map_err(|message| failure(pending.module, pending.span, message))?;
+            .map_err(|misfit| self.misfit(pending, misfit, None))?;
         // A bound a use owes, met by a field, names nothing where it stands.
         if let Some(site) = pending.site {
             self.checked.projections.insert(site, pending.name);
         }
         Ok(())
+    }
+
+    /// Why `pending` does not fit the member it reaches, `target` where that
+    /// is a definition. An argument that does not fit is pointed at where it
+    /// is written, as Rust does, with the method whose arguments are
+    /// incorrect, or for an operator, the operand whose type it wanted.
+    fn misfit(&self, pending: &PendingMethod, misfit: Misfit, target: Option<Symbol>) -> Refusal {
+        let module = pending.module;
+        let (at, wanted, given) = match misfit {
+            Misfit::Said(message) => return failure(module, pending.span, message),
+            Misfit::Argument { at, wanted, given } => (at, wanted, given),
+        };
+        let written = pending.places.as_ref().and_then(|places| {
+            let argument = *places.arguments.get(at.checked_sub(1)?)?;
+            Some((places, argument))
+        });
+        let Some((places, argument)) = written else {
+            let which = if at == 0 {
+                "the receiver".to_owned()
+            } else {
+                format!("argument {at}")
+            };
+            let name = self.symbols.text(pending.name);
+            return failure(
+                module,
+                pending.span,
+                format!("{which} of `{name}` should be `{wanted}`, but is `{given}`"),
+            );
+        };
+        let refused = failure(module, argument, "mismatched types")
+            .label(format!("expected `{wanted}`, found `{given}`"));
+        let Some(member) = places.member else {
+            let receiver = show(&self.infer.resolve(&pending.receiver), self.symbols);
+            return if receiver == wanted {
+                refused.also(
+                    module,
+                    places.receiver,
+                    format!("expected because this is `{wanted}`"),
+                )
+            } else {
+                refused
+            };
+        };
+        let refused = refused.also(module, member, "arguments to this method are incorrect");
+        match target.and_then(|target| self.defined.get(&target)) {
+            Some(&(at, span)) => refused.also(at, span, "method defined here"),
+            None => refused,
+        }
     }
 
     fn apply_method(
@@ -1531,7 +1591,7 @@ impl Checker<'_> {
             &implementation.scheme,
             self.symbols,
         )
-        .map_err(|message| failure(pending.module, pending.span, message))?;
+        .map_err(|misfit| self.misfit(pending, misfit, Some(implementation.target)))?;
         // An obligation names nothing where it stands; a call through a
         // bound names its implementation only once it is specialized; a call
         // of an implementation owes that implementation's own bounds.

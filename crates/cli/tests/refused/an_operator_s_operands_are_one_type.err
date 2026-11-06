@@ -1,0 +1,7 @@
+error: mismatched types
+ --> an_operator_s_operands_are_one_type.fn:4:18
+  |
+4 | named(n) -> n == "seven"
+  |             -    ^^^^^^^ expected `Nat`, found `Str`
+  |             |
+  |             expected because this is `Nat`

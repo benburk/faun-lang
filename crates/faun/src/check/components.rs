@@ -134,7 +134,7 @@ fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Sy
         }
         // A member's spelling too, which names every method spelled so
         // that a definition without a signature may be.
-        h::ExprKind::Method(_, member, _) | h::ExprKind::Member(_, member) => {
+        h::ExprKind::Method(_, member, _, _) | h::ExprKind::Member(_, member) => {
             output.insert(*member);
         }
         _ => {}

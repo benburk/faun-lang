@@ -268,6 +268,30 @@ struct PendingMethod {
     owing: Option<usize>,
     /// Whether a numeral of the receiver asks it; see [`Bound::numeral`].
     numeral: bool,
+    /// Where a written call's parts are, which says which does not fit.
+    places: Option<Places>,
+}
+
+/// Where a written method call's or operator's parts are.
+#[derive(Clone, Debug)]
+struct Places {
+    receiver: super::ast::Span,
+    /// Where the method is named, or none for an operator.
+    member: Option<super::ast::Span>,
+    arguments: Vec<super::ast::Span>,
+}
+
+/// Why a call does not fit the member it reaches.
+enum Misfit {
+    /// Said in a sentence, at the call.
+    Said(String),
+    /// What it hands at `at`, the receiver first, is `given` where `wanted`
+    /// is.
+    Argument {
+        at: usize,
+        wanted: String,
+        given: String,
+    },
 }
 
 /// How a member is reached.
@@ -1219,7 +1243,7 @@ impl Checker<'_> {
             }
             h::ExprKind::Tuple(members) => members.iter().collect(),
             h::ExprKind::Call(_, arguments) => arguments.iter().collect(),
-            h::ExprKind::Method(receiver, _, arguments) => std::iter::once(receiver.as_ref())
+            h::ExprKind::Method(receiver, _, _, arguments) => std::iter::once(receiver.as_ref())
                 .chain(arguments)
                 .collect(),
             _ => return,
@@ -1626,14 +1650,13 @@ impl Checker<'_> {
                     receiver,
                     *member,
                     Vec::new(),
-                    true,
+                    (true, None),
                 ))
             }
-            h::ExprKind::Method(receiver, method, arguments) => self.method(
+            h::ExprKind::Method(receiver, method, member, arguments) => self.method(
                 module,
                 (expression.site, expression.span),
-                receiver,
-                *method,
+                (receiver, *method, Some(*member)),
                 arguments,
                 locals,
             ),
@@ -1682,8 +1705,7 @@ impl Checker<'_> {
                 self.method(
                     module,
                     (expression.site, expression.span),
-                    value,
-                    method,
+                    (value, method, None),
                     &[],
                     locals,
                 )
@@ -1694,8 +1716,7 @@ impl Checker<'_> {
                 let result = self.method(
                     module,
                     (expression.site, expression.span),
-                    left,
-                    method,
+                    (left, method, None),
                     std::slice::from_ref(right),
                     locals,
                 )?;
@@ -2211,22 +2232,24 @@ fn apply_signature(
     pending: &PendingMethod,
     scheme: &Scheme,
     symbols: &Symbols,
-) -> Result<HashMap<u32, Ty>, String> {
+) -> Result<HashMap<u32, Ty>, Misfit> {
     let (instantiated, replacements) = infer.instantiated(scheme);
     let Ty::Function(parameters, result) = instantiated else {
-        return Err("a method declaration is not a function".to_string());
+        return Err(Misfit::Said(
+            "a method declaration is not a function".to_string(),
+        ));
     };
     // A member reached through its type takes no receiver; its answer is a
     // value of that type.
     let through_type = pending.reach == Reach::Type;
     let receiver = usize::from(!through_type);
     if parameters.len() != pending.arguments.len() + receiver {
-        return Err(format!(
+        return Err(Misfit::Said(format!(
             "`{}` takes {}, but {} given",
             symbols.text(pending.name),
             counted(parameters.len() - receiver, "argument"),
             given(pending.arguments.len())
-        ));
+        )));
     }
     let given: Vec<&Ty> = if through_type {
         pending.arguments.iter().collect()
@@ -2237,31 +2260,25 @@ fn apply_signature(
     };
     for (at, (argument, parameter)) in given.into_iter().zip(parameters.iter()).enumerate() {
         let at = at + usize::from(through_type);
-        infer.unify(argument, parameter).map_err(|_| {
-            let which = if at == 0 {
-                "the receiver".to_owned()
-            } else {
-                format!("argument {at}")
-            };
-            format!(
-                "{which} of `{}` should be `{}`, but is `{}`",
-                symbols.text(pending.name),
-                show(&infer.resolve(parameter), symbols),
-                show(&infer.resolve(argument), symbols)
-            )
-        })?;
+        infer
+            .unify(argument, parameter)
+            .map_err(|_| Misfit::Argument {
+                at,
+                wanted: show(&infer.resolve(parameter), symbols),
+                given: show(&infer.resolve(argument), symbols),
+            })?;
     }
     let wanted = infer.resolve(&pending.result);
     infer
         .unify(&pending.result, &result)
         .map_err(|reason| match reason {
-            Mismatch::NotAmong { .. } => reason.describe(symbols),
-            _ => format!(
+            Mismatch::NotAmong { .. } => Misfit::Said(reason.describe(symbols)),
+            _ => Misfit::Said(format!(
                 "`{}` answers `{}`, where `{}` is wanted",
                 symbols.text(pending.name),
                 show(&infer.resolve(&result), symbols),
                 show(&wanted, symbols)
-            ),
+            )),
         })?;
     Ok(replacements)
 }

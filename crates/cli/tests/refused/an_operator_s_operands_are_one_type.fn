@@ -1,0 +1,4 @@
+import std.host {Host}
+
+named : Nat -> Bool
+named(n) -> n == "seven"
