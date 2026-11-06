@@ -1,14 +1,18 @@
-# Integer-only JSON parsing plus statically typed object decoding. The Ori field
-# `display_name` deliberately reads and writes the stable wire key `name`, so a
-# domain rename does not silently change the JSON format.
+# Typed codecs over the JSON library: a record, a tagged union, and a record
+# holding both. Each type writes its own `from_json` and `to_json`, a line a
+# member, and a type holding another reads it with `fields.decode`, which
+# finds that type's `from_json` by the type alone.
+#
+# `User.display_name` reads and writes the wire key `name`, so renaming the
+# field in Faun does not change the format.
 
 package {
-  json_lib: "../src/json"
+  json: "../src/json"
 }
 
-import json_lib {
-  Json, Array, Number,
-  ParseError, DecodeError, Decode, Decoded, Failed, Field, Fields, Members,
+import json {
+  Json, Null, Float, String, Array,
+  ParseError, DecodeError, Decode, Decoded, Failed, Fields,
   InvalidValue
 }
 
@@ -19,150 +23,170 @@ User : {
   from_json(value) -> (
     fields = Fields.of(value)
     fields.finish(Decode.sequence({
-      display_name: fields.string("name").arg(),
-      age: fields.nat("age").arg(),
+      display_name: fields.string("name").required(),
+      age: fields.nat("age").required(),
       balance: fields.int("balance").default(0),
       active: fields.boolean("active").default(False),
-      scores: fields.field("scores", decode_nats).default([])
+      scores: fields.list("scores", Json.nat).default([]),
     })).map(User)
   )
 
   to_json : User -> Json
-  to_json(User(user)) -> Members.sequence({
-    display_name: Members.string("name", user.display_name),
-    age: Members.nat("age", user.age),
-    balance: Members.int("balance", user.balance),
-    active: Members.boolean("active", user.active),
-    scores: Members.member("scores", user.scores, score_array)
-  }).object()
+  to_json(User(user)) -> Json.object([
+    ("name", Json.of_str(user.display_name)),
+    ("age", Json.of_nat(user.age)),
+    ("balance", Json.of_int(user.balance)),
+    ("active", Json.of_bool(user.active)),
+    ("scores", Json.of_list(user.scores, Json.of_nat)),
+  ])
 
   equals : (User, User) -> Bool
+
+  to_str : User -> Str
 )
 
-# Encode and decode the one shape the record builders do not cover directly:
-# a list of naturals as a JSON array of numbers.
-decode_nats : Json -> Decode(List(Nat))
-decode_nats(value) -> value.array(Json.nat)
-
-score_array : List(Nat) -> Json
-score_array(values) -> Array(values.map(nat_number))
-
-nat_number : Nat -> Json
-nat_number(v) -> Number(Int.of_nat(v))
-
-user_text : Str
-user_text = "{\"name\":\"Ada\",\"age\":37,\"balance\":-4,"
-  .concat("\"active\":true,\"scores\":[3,5]}")
-
-decode_user : Str -> Result(User, _)
-decode_user(text) -> (
-  value = Json.from_str(text).map_err(InvalidJson)?
-  User.from_json(value).result().map_err(Undecodable)
-)
-
-app : {stdin: List(U8), *} -> Result(Str, _)
-app(input) -> (
-  stdin = Str.from_utf8(input.stdin)?
-  decode_user(stdin).map_ok(|user| user.to_json().to_str())
-)
-
-expect decode_user(user_text) == Ok(User({
-  display_name: "Ada", age: 37, balance: -4, active: True, scores: [3, 5]
-}))
-# Decoding then re-encoding round-trips to the original text.
-expect decode_user(user_text).map_ok(|user| user.to_json().to_str()) == Ok(user_text)
-
-# Missing defaulted fields are accepted.
-minimal_text : Str
-minimal_text = "{\"name\":\"A\",\"age\":1}"
-expect decode_user(minimal_text) == Ok(User({
-  display_name: "A", age: 1, balance: 0, active: False, scores: []
-}))
-
-# Strict object decoding rejects unknown and duplicate members.
-unknown_text : Str
-unknown_text = "{\"name\":\"A\",\"age\":1,\"x\":0}"
-expect decode_user(unknown_text).is_err()
-
-duplicate_text : Str
-duplicate_text = "{\"name\":\"A\",\"name\":\"B\",\"age\":1}"
-expect decode_user(duplicate_text).is_err()
-
-# Integers are arbitrary precision; fractions and exponents are intentionally
-# outside this first library version.
-expect Json.from_str("-12345678901234567890").is_ok()
-expect Json.from_str("1.5").is_err()
-expect Json.from_str("1e3").is_err()
-
-# The grammar is JSON's, exactly: a comma promises another element.
-expect Json.from_str("[1,]").is_err()
-expect Json.from_str("{\"a\":1,}").is_err()
-
-# A tagged union rides an object with a discriminator. `and_then` decodes
-# the tag, and its value chooses the payload decode; the claims of both
-# stages merge, so strict checking still covers every member across the
-# dispatch. Widths check on the way in: 70000 does not fit a `u16`.
+# A tagged union rides an object whose `"type"` member says which variant it
+# is. `and_then` reads the tag, and its value chooses which members to read
+# next; the members both stages read are merged, so `finish` still refuses
+# one that neither read.
 Event : [Click(U16, U16), Scroll(Int), Quit].(
   from_json : Json -> Decode(Event)
   from_json(value) -> (
     fields = Fields.of(value)
-    fields.finish(fields.string("type").arg().and_then(fields, body))
+    fields.finish(fields.string("type").required().and_then(fields, body))
   )
 
   body : (Str, Fields) -> Decode(Event)
   body("click", fields) -> Decode.sequence({
-    x: fields.u16("x").arg(),
-    y: fields.u16("y").arg()
-  }).map(click_at)
-  body("scroll", fields) -> fields.int("amount").arg().map(Scroll)
+    x: fields.u16("x").required(),
+    y: fields.u16("y").required(),
+  }).map(|{x, y}| Click(x, y))
+  body("scroll", fields) -> fields.int("amount").required().map(Scroll)
   body("quit", _) -> Decoded(Quit, [])
   body(other, _) -> Failed(InvalidValue("unknown event `${other}`"))
 
+  to_json : Event -> Json
+  to_json(Click(x, y)) ->
+    Json.object([("type", Json.of_str("click")), ("x", Json.of_u16(x)), ("y", Json.of_u16(y))])
+  to_json(Scroll(amount)) ->
+    Json.object([("type", Json.of_str("scroll")), ("amount", Json.of_int(amount))])
+  to_json(Quit) -> Json.object([("type", Json.of_str("quit"))])
+
   equals : (Event, Event) -> Bool
+
+  to_str : Event -> Str
 )
 
-# The decoded fields arrive as a record; `Click` takes them positionally.
-click_at : {x: U16, y: U16} -> Event
-click_at({x, y}) -> Click(x, y)
+# A record of the two above. `fields.decode("owner")` reads a `User`
+# because `owner` is one; the events, a list, name their element's decoder.
+Log : {owner: User, events: List(Event)}.(
+  from_json : Json -> Decode(Log)
+  from_json(value) -> (
+    fields = Fields.of(value)
+    fields.finish(Decode.sequence({
+      owner: fields.decode("owner").required(),
+      events: fields.list("events", Event.from_json).default([]),
+    })).map(Log)
+  )
 
-event : Str -> Result(Event, DecodeError)
-event(text) -> (
-  value = Json.from_str(text).err_as(InvalidValue("bad JSON"))?
-  Event.from_json(value).result()
+  to_json : Log -> Json
+  to_json(Log(log)) -> Json.object([
+    ("owner", log.owner.to_json()),
+    ("events", Json.of_list(log.events, |event| event.to_json())),
+  ])
+
+  equals : (Log, Log) -> Bool
+
+  to_str : Log -> Str
 )
 
-expect event("{\"type\":\"click\",\"x\":3,\"y\":9}") == Ok(Click(3, 9))
-expect event("{\"type\":\"scroll\",\"amount\":-2}").is_ok()
-expect event("{\"type\":\"quit\"}") == Ok(Quit)
-expect event("{\"type\":\"click\",\"x\":70000,\"y\":9}").is_err()
-expect event("{\"type\":\"quit\",\"extra\":1}").is_err()
-expect event("{\"type\":\"jump\"}").is_err()
+# Text to a `Log` and back: parsing and decoding fail differently, and the
+# caller sees which.
+read_log : Str -> Result(Log, [Unparsed(ParseError), Undecoded(DecodeError)])
+read_log(text) -> (
+  value = Json.from_str(text).map_err(Unparsed)?
+  Log.from_json(value).result().map_err(Undecoded)
+)
 
-# A nullary enum is just a string on the wire: `string_as` runs the union's
-# own reader, and its refusal is the decode error verbatim.
-level_of : Str -> Result([Low, High], DecodeError)
-level_of("low") -> Ok(Low)
-level_of("high") -> Ok(High)
-level_of(other) -> Err(InvalidValue("unknown level `${other}`"))
+ada : User
+ada = User({display_name: "Ada", age: 37, balance: -4, active: True, scores: [3, 5]})
 
-reads_high : Json -> Bool
-reads_high(v) -> decoded_high(v.string_as(level_of).result())
+log_text : Str
+log_text = "{\"owner\":{\"name\":\"Ada\",\"age\":37,\"balance\":-4,\"active\":true,\"scores\":[3,5]},"
+  .concat("\"events\":[{\"type\":\"click\",\"x\":3,\"y\":9},{\"type\":\"scroll\",\"amount\":-2},{\"type\":\"quit\"}]}")
 
-decoded_high : Result([Low, High], DecodeError) -> Bool
-decoded_high(Ok(High)) -> True
-decoded_high(_) -> False
+sample : Log
+sample = Log({owner: ada, events: [Click(3, 9), Scroll(-2), Quit]})
 
-rejects_level : Json -> Bool
-rejects_level(v) -> v.string_as(level_of).result().is_err()
+# Decoding then encoding gives back the text, and encoding then decoding the
+# value: the round trip that catches a wire name misspelled one way.
+expect read_log(log_text) == Ok(sample)
+expect sample.to_json().to_str() == log_text
+expect Log.from_json(sample.to_json()).result() == Ok(sample)
 
-expect Json.from_str("\"high\"").map_ok(reads_high).ok_or(False)
-expect Json.from_str("\"warm\"").map_ok(rejects_level).ok_or(False)
+# Members with a default may be left out.
+expect read_log("{\"owner\":{\"name\":\"A\",\"age\":1}}")
+  == Ok(Log({owner: User({display_name: "A", age: 1, balance: 0, active: False, scores: []}), events: []}))
 
-# UTF-16 escapes, including a surrogate pair, decode to UTF-8.
-unicode_text : Str
-unicode_text = "\"\\u0041\\uD83D\\uDE00\""
-decoded_smiley : Json
-decoded_smiley = Json.String(Str.from_utf8(['A', 0xf0, 0x9f, 0x98, 0x80]).ok_or(""))
-expect Json.from_str(unicode_text) == Ok(decoded_smiley)
+# A member nothing reads, and a member written twice, are refused, and a
+# failure inside says where it is.
+expect "${read_log("{\"owner\":{\"name\":\"A\",\"age\":1},\"extra\":1}")}"
+  == "Err(Undecoded(unknown JSON field `extra`))"
+expect "${read_log("{\"owner\":{\"name\":\"A\",\"name\":\"B\",\"age\":1}}")}"
+  == "Err(Undecoded(at field `owner`: JSON field `name` appears more than once))"
+expect "${read_log("{\"owner\":{\"name\":\"A\",\"age\":1},\"events\":[{\"type\":\"quit\"},{\"type\":\"click\",\"x\":70000,\"y\":9}]}")}"
+  == "Err(Undecoded(at field `events`: at array index 1: at field `x`: expected u16))"
+expect "${read_log("{\"owner\":{\"name\":\"A\",\"age\":1,}}")}"
+  == "Err(Unparsed(unexpected JSON token at line 1, column 30))"
+
+# A tag spelled as a string is read by the tag's own reader.
+Level : [Low, High].(
+  from_str : Str -> Result(Level, DecodeError)
+  from_str("low") -> Ok(Low)
+  from_str("high") -> Ok(High)
+  from_str(other) -> Err(InvalidValue("unknown level `${other}`"))
+
+  equals : (Level, Level) -> Bool
+
+  to_str : Level -> Str
+)
+
+expect String("high").string_as(Level.from_str).result() == Ok(High)
+expect "${String("warm").string_as(Level.from_str).result()}" == "Err(unknown level `warm`)"
+
+# An object used as a map, and a member that may be `null`.
+Prices : {currency: Str, prices: Map(Str, F64), discount: Result(F64, [Missing])}.(
+  from_json : Json -> Decode(Prices)
+  from_json(value) -> (
+    fields = Fields.of(value)
+    fields.finish(Decode.sequence({
+      currency: fields.string("currency").required(),
+      prices: fields.field("prices", |v| v.object_of(Json.f64)).required(),
+      discount: fields.field("discount", |v| v.nullable(Json.f64)).default(Err(Missing)),
+    })).map(Prices)
+  )
+)
+
+prices : Str -> Result(Prices, _)
+prices(text) -> (
+  value = Json.from_str(text).map_err(Unparsed)?
+  Prices.from_json(value).result().map_err(Undecoded)
+)
+
+expect prices("{\"currency\":\"EUR\",\"prices\":{\"tea\":2.5,\"cake\":4},\"discount\":null}")
+  .map_ok(|p| p.prices.get("cake") == Ok(4.0) & p.prices.keys() == ["tea", "cake"] & p.discount.is_err())
+  .ok_or(False)
+expect prices("{\"currency\":\"EUR\",\"prices\":{},\"discount\":0.1}").map_ok(|p| p.discount == Ok(0.1)).ok_or(False)
+
+# A log read from standard input, written back for people, or what was
+# wrong with it. The app answers text, which a runner prints as it is.
+app : {stdin: List(U8), *} -> Str
+app(input) -> (
+  Str.from_utf8(input.stdin) is Ok(text) else return "error: standard input is not UTF-8"
+  read_log(text) is (
+    Ok(log) then log.to_json().pretty()
+    Err(error) then "error: ${error}"
+  )
+)
 
 main!(host) -> host.run_stdin!(app)

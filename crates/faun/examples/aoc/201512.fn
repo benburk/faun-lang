@@ -2,8 +2,9 @@
 # The Accounting-Elves' books are a JSON document, and the balance is the
 # sum of every number in it. The JSON library does the reading; what is
 # left is one walk over the value it returns, which is the whole point of
-# parsing into a type: the traversal cannot forget a case, because `when`
-# checks the six shapes right here.
+# parsing into a type: the walk cannot forget a case, because its clauses
+# must cover every shape. The books hold integers; a float would count as
+# its integer part.
 #
 # Part two ignores any object with a "red" member — the elves double-counted
 # those — and only objects, never arrays. The rule rides along as a mode:
@@ -16,12 +17,13 @@ package {
 }
 
 import json {
-  Json, Null, Bool, Number, String, Array, Object
+  Json, Null, Bool, Int, Float, String, Array, Object
 }
 
 total : (Json, [Gross, Net]) -> Int
 total((Null | Bool(_) | String(_)), _) -> 0
-total(Number(number), _) -> number
+total(Int(number), _) -> number
+total(Float(number), _) -> number.integer_part().ok_or(0)
 total(Array(values), books) -> values.map(|value| total(value, books)).sum()
 total(Object(members), Net) if red_handed(members) -> 0
 total(Object(members), books) -> members.map(|(_, member)| total(member, books)).sum()

@@ -112,11 +112,11 @@ and parse a record's fields with their own `sequence`:
 
 ```ruby
 fields.finish(Decode.sequence({
-  display_name: fields.string("name").arg(),
-  age: fields.nat("age").arg(),
+  display_name: fields.string("name").required(),
+  age: fields.nat("age").required(),
   balance: fields.int("balance").default(0),
   active: fields.boolean("active").default(False),
-  scores: fields.field("scores", decode_nats).default([])
+  scores: fields.list("scores", Json.nat).default([]),
 }))
 ```
 
@@ -168,7 +168,7 @@ takes the rest from the value `r`, not from a type variable.
 The shape is the whole requirement. A function that pairs two `F`s with a
 combiner is enough to fold any number of fields, whatever it is called:
 `map2` for `Result` and `List`, `sequence` for the command-line `Match` and
-the JSON `Decode` and `Members`. Keying the feature to a name would bless
+the JSON `Decode`. Keying the feature to a name would bless
 one spelling, and a library whose pairing reads better as `sequence` or
 `both` would lose it or have to adopt the blessed name. By shape, nothing
 is registered and any library gets builders by writing the signature.
