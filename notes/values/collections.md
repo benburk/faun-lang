@@ -89,6 +89,18 @@ expect groups.to_list() == [(1, [1, 3, 5]), (0, [2, 4])]
 
 `Set` and `SortedSet` have `of_list`.
 
+## Writing a container
+
+A container's `to_str` writes it as the call building it, its entries in
+the order `to_list` answers them, each by its own `to_str`. It asks only
+that the keys and values have one.
+
+```ruby
+expect "${Map.of_list([("b", 2), ("a", 1)])}" == "Map.of_list([(\"b\", 2), (\"a\", 1)])"
+expect "${SortedSet.of_list([3, 1])}" == "SortedSet.of_list([1, 3])"
+expect Map.counted([0].drop(1)).to_str() == "Map.of_list([])"
+```
+
 ## Hashing
 
 A key says what it is made of through `hash_into : (T, h) -> h`, generic
@@ -183,6 +195,24 @@ ascending order and needs `cmp`. As methods on `List`, `group_by` and
 map module. On the container, the same names serve both, and `List` depends
 on neither. The cost is that a count reads `Map.counted(words)` rather than
 chaining `words.counted()`.
+
+### Why is a map written as the call that builds it?
+
+Because every `to_str` writes a value as source writes it, and source has
+no map literal: a map is written by calling `of_list`. The text reads back
+as an equal map, and names its container, so a `Map` and a `SortedMap`
+holding the same entries are not taken for each other. Python's braces,
+`{"a": 1}` and `{1, 2}`, are shorter, but braces are records in Faun: an
+empty map would be written `{}`, as an empty record is, and the text would
+not read back.
+
+A `Map` is written in insertion order, as `to_list` answers, so two equal
+maps built in different orders are written differently, as Python's are.
+Writing the keys in order would ask a `cmp` of them that nothing else a
+map does asks; the order is already observable through `to_list`, and a
+`SortedMap` is written in key order by construction. A seeded map is
+written without its seed, which its equality ignores too. See
+[container text](../proposals/approved/container-text.md).
 
 ### Why is `hash_into` generic over a hasher it cannot read?
 

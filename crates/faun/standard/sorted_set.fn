@@ -61,6 +61,11 @@ SortedSet(k) : SortedMap(k, Bool).(
   to_list : SortedSet(k) -> List(k)
   to_list(SortedSet(members)) -> SortedMap.keys(members)
 
+  # The set as the call building it is written, its members in ascending
+  # order: `SortedSet.of_list([1, 2, 3])`.
+  to_str : SortedSet(k) -> Str where k.to_str : k -> Str
+  to_str(set) -> "SortedSet.of_list(${to_list(set)})"
+
   # The set whose members are the items of `list`, later duplicates winning as
   # repeated `insert` calls would.
   of_list : List(k) -> SortedSet(k) where k.cmp : (k, k) -> Order
@@ -74,3 +79,4 @@ SortedSet(k) : SortedMap(k, Bool).(
 
 expect SortedSet.of_list([3, 1, 2]) == SortedSet.of_list([1, 2, 3, 1])
 expect SortedSet.of_list([1]) != SortedSet.of_list([2])
+expect "${SortedSet.of_list(["b", "a", "b"])}" == "SortedSet.of_list([\"a\", \"b\"])"

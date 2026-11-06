@@ -45,6 +45,11 @@ Set(k) : Map(k, Bool).(
   to_list : Set(k) -> List(k)
   to_list(Set(members)) -> Map.keys(members)
 
+  # The set as the call building it is written, its members in insertion
+  # order: `Set.of_list([1, 2, 3])`.
+  to_str : Set(k) -> Str where k.to_str : k -> Str
+  to_str(set) -> "Set.of_list(${to_list(set)})"
+
   # The result of combining the members of `set` in insertion order,
   # beginning with `initial`.
   fold : (Set(k), a, (a, k) -> a) -> a
@@ -81,3 +86,5 @@ Set(k) : Map(k, Bool).(
     k.equals : (k, k) -> Bool
   equals(set, other) -> len(set) == len(other) & to_list(set).all(|key| contains(other, key))
 )
+
+expect "${Set.of_list([3, 1, 3])}" == "Set.of_list([3, 1])" & Set.of_list(["x"]).to_str() == "Set.of_list([\"x\"])"
