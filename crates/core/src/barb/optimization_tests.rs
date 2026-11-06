@@ -1249,6 +1249,10 @@ struct Walks {
     running: FnId,
     total: FnId,
     index_over: FnId,
+    less_than: FnId,
+    bool_: TypeId,
+    false_: super::CtorId,
+    true_: super::CtorId,
 }
 
 #[expect(
@@ -1259,6 +1263,7 @@ fn walks() -> (Program, Walks) {
     let library = super::fixture::Library::new();
     let (nat, zero, succ, add) = (library.nat, library.zero, library.succ, library.add);
     let (less_than, true_, bool_) = (library.less_than, library.true_, library.bool_);
+    let false_ = library.false_;
     let mut p = library.program;
     let list = p.declare_type("List");
     p.define_type(list, &[("Nil", &[]), ("Cons", &[nat, list])]);
@@ -1342,6 +1347,10 @@ fn walks() -> (Program, Walks) {
         running,
         total,
         index_over,
+        less_than,
+        bool_,
+        false_,
+        true_,
     };
     (p, walks)
 }
@@ -1776,4 +1785,245 @@ fn a_list_reaching_a_bodyless_call_is_built_whole() {
     super::head::heads(&mut p);
     validate(&p).unwrap();
     assert!(callees(&p, first).contains(&tree));
+}
+
+/// What a fold's step is handed: the element, the bound, what is built so
+/// far, the rest, the fold itself, and the append it builds with.
+#[derive(Clone, Copy)]
+struct Step {
+    element: super::Atom,
+    bound: super::Atom,
+    built: super::Atom,
+    rest: super::Atom,
+    walk: FnId,
+    append: FnId,
+}
+
+/// `name(list, bound, built)`: `built` with what `step` appends for each
+/// element of `list`, in order: a fold written front to back, as `filter`
+/// and `map` become.
+fn fold_walk(
+    p: &mut Program,
+    w: &Walks,
+    name: &str,
+    step: impl Fn(&mut super::Builder<'_>, Step) -> super::Atom + Copy,
+) -> FnId {
+    let prepend = super::sequence::write_prepend(p, w.list, w.reverse);
+    let append = super::sequence::write_append(p, w.list, w.nat, prepend);
+    let walk = p.declare(name, &[w.list, w.nat, w.list], w.list);
+    p.define(walk, |b, args| {
+        b.match_(args[0], w.list, |b, ctor, fields| {
+            if ctor == w.nil {
+                args[2]
+            } else {
+                let handed = Step {
+                    element: fields[0],
+                    bound: args[1],
+                    built: args[2],
+                    rest: fields[1],
+                    walk,
+                    append,
+                };
+                step(b, handed)
+            }
+        })
+    });
+    walk
+}
+
+/// `kept`: the elements no less than the bound, a filter.
+fn kept(p: &mut Program, w: &Walks) -> FnId {
+    let (less_than, bool_, true_) = (w.less_than, w.bool_, w.true_);
+    fold_walk(p, w, "kept", move |b, s| {
+        let small = b.call(less_than, &[s.element, s.bound]);
+        b.match_(small, bool_, |b, ctor, _| {
+            if ctor == true_ {
+                b.call(s.walk, &[s.rest, s.bound, s.built])
+            } else {
+                let more = b.call(s.append, &[s.built, s.element]);
+                b.call(s.walk, &[s.rest, s.bound, more])
+            }
+        })
+    })
+}
+
+/// `bumped`: each element and one, a map.
+fn bumped(p: &mut Program, w: &Walks) -> FnId {
+    let succ = w.succ;
+    fold_walk(p, w, "bumped", move |b, s| {
+        let next = b.con(succ, &[s.element]);
+        let more = b.call(s.append, &[s.built, next]);
+        b.call(s.walk, &[s.rest, s.bound, more])
+    })
+}
+
+/// `upto`: the elements before the first no less than the bound, a walk
+/// that stops before the end of its list.
+fn upto(p: &mut Program, w: &Walks) -> FnId {
+    let (less_than, bool_, true_) = (w.less_than, w.bool_, w.true_);
+    fold_walk(p, w, "upto", move |b, s| {
+        let small = b.call(less_than, &[s.element, s.bound]);
+        b.match_(small, bool_, |b, ctor, _| {
+            if ctor == true_ {
+                let more = b.call(s.append, &[s.built, s.element]);
+                b.call(s.walk, &[s.rest, s.bound, more])
+            } else {
+                s.built
+            }
+        })
+    })
+}
+
+/// The first element `walk(tree(n, 0), bound, [])` answers, or nought.
+fn first_walked(p: &mut Program, w: &Walks, tree: FnId, walk: FnId) -> FnId {
+    let first = p.declare("first_walked", &[w.nat, w.nat], w.nat);
+    p.define(first, |b, args| {
+        let zero = b.con(w.zero, &[]);
+        let all = b.call(tree, &[args[0], zero]);
+        let none = b.con(w.nil, &[]);
+        let walked = b.call(walk, &[all, args[1], none]);
+        b.match_(walked, w.list, |b, ctor, fields| {
+            if ctor == w.nil {
+                b.con(w.zero, &[])
+            } else {
+                fields[0]
+            }
+        })
+    });
+    first
+}
+
+/// That `walk`, read for its first element, is pushed into `tree`: its
+/// caller calls the copy `name`, which agrees with the original on small
+/// trees and answers on a tree of a billion leaves `deep.1` for the bound
+/// `deep.0`.
+fn walked_no_further(walk: fn(&mut Program, &Walks) -> FnId, name: &str, deep: (u64, u64)) {
+    let (mut p, w) = walks();
+    let tree = leaves(&mut p, &w, None);
+    let walk = walk(&mut p, &w);
+    let first = first_walked(&mut p, &w, tree, walk);
+    validate(&p).unwrap();
+    let original = p.clone();
+    // The walk's call goes to the copy, and what it walked is read by
+    // nothing; cleanup drops it, as it does after every pass.
+    super::head::heads(&mut p);
+    super::cleanup::cleanup(&mut p);
+    validate(&p).unwrap();
+    let called = callees(&p, first);
+    assert!(!called.contains(&tree), "{}", p.render());
+    assert!(
+        called.iter().any(|&id| p.name(p.function(id).name) == name),
+        "{}",
+        p.render()
+    );
+    let nat = |program: &Program, n| super::tests::nat(program, w.nat, n);
+    for depth in 0..5 {
+        for bound in [0, 3, 40] {
+            let args = vec![nat(&original, depth), nat(&original, bound)];
+            let expected = run(&original, first, args.clone(), &mut vec![]);
+            assert_eq!(
+                run(&p, first, args, &mut vec![]),
+                expected,
+                "{depth} {bound}"
+            );
+        }
+    }
+    let args = vec![nat(&p, 30), nat(&p, deep.0)];
+    assert_eq!(run(&p, first, args, &mut vec![]), nat(&p, deep.1));
+}
+
+/// A filter over a joined list, read for its first element, keeps that of
+/// the first list's where it has one, so it is pushed into what joins:
+/// each list it does not join is filtered, and the second only where the
+/// first kept nothing.
+#[test]
+fn a_filter_read_for_its_first_element_walks_no_further() {
+    walked_no_further(kept, "tree+kept", (5, 5));
+}
+
+/// So is a map.
+#[test]
+fn a_map_read_for_its_first_element_walks_no_further() {
+    walked_no_further(bumped, "tree+bumped", (0, 1));
+}
+
+/// A walk that may stop before the end of its list answers on a joined
+/// list what walking the second from where the first left off need not,
+/// so it is not pushed into what joins, and the list is built whole.
+#[test]
+fn a_walk_stopping_early_is_not_pushed_into_a_join() {
+    let (mut p, w) = walks();
+    let tree = leaves(&mut p, &w, None);
+    let walk = upto(&mut p, &w);
+    let first = first_walked(&mut p, &w, tree, walk);
+    super::head::heads(&mut p);
+    validate(&p).unwrap();
+    assert!(callees(&p, first).contains(&tree), "{}", p.render());
+}
+
+/// `any_from(list, bound)`: whether an element is no less than `bound`, a
+/// search answering `False` on the empty list and `True` where it accepts.
+fn any_from(p: &mut Program, w: &Walks) -> FnId {
+    let any = p.declare("any_from", &[w.list, w.nat], w.bool_);
+    p.define(any, |b, args| {
+        b.match_(args[0], w.list, |b, ctor, fields| {
+            if ctor == w.nil {
+                b.con(w.false_, &[])
+            } else {
+                let small = b.call(w.less_than, &[fields[0], args[1]]);
+                b.match_(small, w.bool_, |b, ctor, _| {
+                    if ctor == w.true_ {
+                        b.call(any, &[fields[1], args[1]])
+                    } else {
+                        b.con(w.true_, &[])
+                    }
+                })
+            }
+        })
+    });
+    any
+}
+
+/// A search answering at the first element it accepts answers on a joined
+/// list what it answers on the first, or where that found nothing, on the
+/// second, so it too is pushed into what joins.
+#[test]
+fn a_search_over_a_joined_list_stops_at_what_it_accepts() {
+    let (mut p, w) = walks();
+    let tree = leaves(&mut p, &w, None);
+    let any = any_from(&mut p, &w);
+    let some = p.declare("some_from", &[w.nat, w.nat], w.bool_);
+    p.define(some, |b, args| {
+        let zero = b.con(w.zero, &[]);
+        let all = b.call(tree, &[args[0], zero]);
+        b.call(any, &[all, args[1]])
+    });
+    validate(&p).unwrap();
+    let original = p.clone();
+    super::head::heads(&mut p);
+    super::cleanup::cleanup(&mut p);
+    validate(&p).unwrap();
+    let called = callees(&p, some);
+    assert!(!called.contains(&tree), "{}", p.render());
+    assert!(
+        called
+            .iter()
+            .any(|&id| p.name(p.function(id).name) == "tree+any_from"),
+        "{}",
+        p.render()
+    );
+    let nat = |program: &Program, n| super::tests::nat(program, w.nat, n);
+    for depth in 0..5 {
+        for bound in [0, 3, 40] {
+            let args = vec![nat(&original, depth), nat(&original, bound)];
+            let expected = run(&original, some, args.clone(), &mut vec![]);
+            assert_eq!(
+                run(&p, some, args, &mut vec![]),
+                expected,
+                "{depth} {bound}"
+            );
+        }
+    }
+    let args = vec![nat(&p, 30), nat(&p, 5)];
+    assert_eq!(run(&p, some, args, &mut vec![]), Value(w.true_, vec![]));
 }

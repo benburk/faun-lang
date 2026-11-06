@@ -614,7 +614,7 @@ fn newton_finds_the_square_root_of_two() {
 fn the_sat_solver_colours_australia_and_refutes_the_impossible() {
     let (failed, count) = support::test_file(&example("sat.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 6);
+    assert_eq!(count, 7);
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
         .arg("run")
@@ -754,6 +754,42 @@ fn a_search_asked_for_its_first_answer_stops_there() {
          main!(host) -> host.exit!(U8.of_nat(leaves(60, 7).first().ok_or(0) % 256))",
     );
     assert_eq!(package.run(), 0);
+}
+
+/// The same search walked, by a filter or a map before its first element,
+/// a test of whether it is empty, or a `find` or an `any`, stops at what
+/// the walk settles on. Each walk of 2^60 leaves answers at once; on a tree
+/// of sixteen they agree with the leaves worked out by hand, a search that
+/// finds nothing included. This tests the compiler, not the language.
+#[test]
+fn a_search_walked_for_its_first_answer_stops_there() {
+    let package = support::Package::new(
+        "walked-first",
+        "leaves : (Nat, Nat) -> List(Nat)
+         leaves(0, k) -> [k]
+         leaves(Succ(n), k) -> leaves(n, 2 * k).concat(leaves(n, 2 * k + 1))
+
+         main! : Host -> []
+         main!(host) -> (
+           deep = [
+             leaves(60, 1).filter(|n| n % 2 == 1).first() == Ok(1152921504606846977),
+             leaves(60, 2).map(|n| n % 1000).first() == Ok(952),
+             !leaves(60, 3).is_empty(),
+             leaves(60, 4).find(|n| n % 3 == 0) == Ok(4611686018427387906),
+             leaves(60, 5).any(|n| n % 5 == 0),
+           ]
+           small = [
+             leaves(4, 1).filter(|n| n % 2 == 1).first() == Ok(17),
+             leaves(4, 2).map(|n| n % 1000).first() == Ok(32),
+             leaves(4, 4).find(|n| n % 3 == 0) == Ok(66),
+             leaves(4, 6).filter(|n| n > 200).first() == Err(Empty),
+             leaves(4, 7).find(|n| n > 200) == Err(NotFound),
+             !leaves(4, 8).any(|n| n > 200),
+           ]
+           host.exit!(U8.of_nat(deep.count(|held| held) * 10 + small.count(|held| held)))
+         )",
+    );
+    assert_eq!(package.run(), 56);
 }
 
 /// Joining a short list before a long one nothing else holds writes it in

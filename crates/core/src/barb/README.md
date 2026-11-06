@@ -285,9 +285,22 @@ x    ::= a parameter, a binding, or a field an arm bound
   works out the second, and everything only the second needs, and whose
   step answers the first; a call of the definition goes to the copy, and an
   element pushed onto a rest is pushed onto nothing. A search asked for its
-  first solution stops at it. Only definitions reaching no bodyless call
-  are copied, since the copy leaves out pure work nothing needs, and
-  nothing is recognized by name: the join is the recognized prepend.
+  first solution stops at it. Several matches reading only whether the
+  list is empty and its first element, as a test and its negation inline
+  to, read no more. The answer may be read once by a walk instead: a fold
+  appending to an accumulator handed nothing, as `filter` and `map` become,
+  read for its first element, or a search answering a value of one
+  constructor on the empty list and on a step going on or answering one of
+  another, as `find`, `any` and `all` are. A fold walked over a join is
+  the second walked from what the first left, which keeps the first's
+  first element, and a search answers on the first list unless that found
+  nothing. The call then goes to a copy named for both, joined by `+`,
+  handed the walk's other parameters after its own, which walks each list
+  it does not join and tries the first list's walk before the second's.
+  Only definitions reaching no bodyless call are copied or walked, since
+  the copy leaves out pure work nothing needs, and nothing is recognized by
+  name: the join is the recognized prepend, and the fold's append the
+  recognized append.
 - `inplace.rs`: a walk built front to back that appends, for each element
   it takes off what it walks, one element of the same type -- `map`, or
   `map_accum` beside its state -- is written again replacing each element
@@ -442,7 +455,7 @@ where no arm of the second is taken by two of the first, so nothing is copied
 twice. Fusion, descent, specialization, building a list's first element and
 writing in place add definitions; a copy's name is its original's and a number
 after a dot; a copy answering a list's first element is named with `.head`
-after it; a walk written in place is named with `.place` after it, and what
+after it, and one answering a walk over it joins the two names with `+`; a walk written in place is named with `.place` after it, and what
 starts it with `.enter`; a fused walk's name joins its two halves' with `+`,
 and what they replace stays until nothing calls it.
 
