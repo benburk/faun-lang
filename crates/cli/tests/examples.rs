@@ -607,6 +607,27 @@ fn newton_finds_the_square_root_of_two() {
     );
 }
 
+/// A DPLL SAT solver: its expectations hold, refuting what has no model, and
+/// running it colours the map of Australia in three colours.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn the_sat_solver_colours_australia_and_refutes_the_impossible() {
+    let (failed, count) = support::test_file(&example("sat.fn"));
+    assert_eq!(failed, Vec::<String>::new());
+    assert_eq!(count, 5);
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("run")
+        .arg(example("sat.fn"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "WA  red\nNT  green\nSA  blue\nQ   red\nNSW green\nV   red\nT   red\n"
+    );
+}
+
 /// Connected components after the Python cookbook's, without the graph
 /// library: its expectations hold.
 #[test]
