@@ -210,6 +210,7 @@ fn an_earlier_branch_break_survives_a_terminal_tail_and_legalization() {
                     heap_bytes: 512,
                     grows: false,
                     inline_small: true,
+                    inline_counts: false,
                     join_routines: false,
                 },
             )

@@ -639,16 +639,15 @@ impl Pass<'_> {
     }
 
     fn retained(&self, b: &mut Builder, class: Class, value: ValueId) -> ValueId {
-        let function = match class {
-            Class::Natural => return self.library.retain_value(b, value),
-            Class::Cell | Class::Buffer => self.cells.expect("cell helpers were requested").retain,
-            _ => return value,
-        };
-        b.call_one(function, &[value])
+        match class {
+            Class::Natural => self.library.retain_value(b, value),
+            Class::Cell | Class::Buffer => self.library.retain_object(b, value),
+            _ => value,
+        }
     }
 
     fn release(&self, b: &mut Builder, class: Class, value: ValueId) {
-        let function = match class {
+        let last = match class {
             Class::Natural => return self.library.release_value(b, value),
             Class::Cell => self.cells.expect("cell helpers were requested").release,
             Class::Buffer => {
@@ -659,7 +658,7 @@ impl Pass<'_> {
             }
             _ => return,
         };
-        b.call(function, &[value]);
+        self.library.release_object(b, value, last);
     }
 
     /// Build one object from fields whose claims it takes.
@@ -1334,6 +1333,7 @@ mod tests {
                 heap_bytes: 256,
                 grows: false,
                 inline_small: true,
+                inline_counts: false,
                 join_routines: false,
             }
             .layout(),

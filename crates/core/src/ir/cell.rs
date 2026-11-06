@@ -9,7 +9,7 @@
 //! Scalars need no action; naturals, cells and sequence buffers release
 //! through their respective helpers.
 
-use super::natural::{Helper, Library as NaturalLibrary};
+use super::natural::{Counting, Helper, Library as NaturalLibrary};
 use super::{Binary, Builder, Class, FunctionId, Offset, Program, Relation, ValueId, Width};
 
 pub(super) const SCALAR: u64 = 0;
@@ -36,7 +36,6 @@ pub(super) const fn kind(class: Class) -> u64 {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Library {
-    pub retain: FunctionId,
     pub release: FunctionId,
     pub allocate: FunctionId,
 }
@@ -54,6 +53,8 @@ pub(super) struct Claims {
     pub cells: FunctionId,
     /// Only a program holding sequences has buffers to release.
     pub buffers: Option<FunctionId>,
+    /// How a claim is counted where it is taken or given up, where it is.
+    pub counting: Option<Counting>,
 }
 
 impl Claims {
@@ -72,7 +73,7 @@ impl Claims {
                         let one = number(b, 1);
                         let at = b.binary(Binary::Sub, held, one);
                         let at = b.convert(A, at);
-                        b.call(self.naturals, &[at]);
+                        self.give(b, at, self.naturals);
                         b.yield_(&[]);
                     },
                 );
@@ -85,7 +86,18 @@ impl Claims {
             _ => return,
         };
         let value = b.convert(A, value);
-        b.call(function, &[value]);
+        self.give(b, value, function);
+    }
+
+    /// Give up a claim to the object at `at`, which `last` gives up where
+    /// it may be the last.
+    fn give(self, b: &mut Builder<'_>, at: ValueId, last: FunctionId) {
+        match self.counting {
+            Some(counting) => counting.give(b, at, last),
+            None => {
+                b.call(last, &[at]);
+            }
+        }
     }
 
     /// Give up a claim of a kind read while the program runs, which a
@@ -140,7 +152,12 @@ impl Claims {
                 let held = b.convert(W, value);
                 let at = b.binary(Binary::Sub, held, is_natural);
                 let at = b.convert(A, at);
-                b.call(self.retain, &[at]);
+                match self.counting {
+                    Some(counting) => counting.take(b, at, self.retain),
+                    None => {
+                        b.call(self.retain, &[at]);
+                    }
+                }
                 b.yield_(&[]);
             },
         );
@@ -196,7 +213,6 @@ pub(super) fn append(
 ) -> Library {
     let release = program.declare("cell.release", &[A], &[]);
     let library = Library {
-        retain: naturals.retain,
         release,
         allocate: naturals.require(Helper::Allocate),
     };
@@ -206,6 +222,7 @@ pub(super) fn append(
         naturals: naturals.release,
         cells: release,
         buffers,
+        counting: naturals.counting,
     };
     define_release(program, library, naturals.release, claims);
     library

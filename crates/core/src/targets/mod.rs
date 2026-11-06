@@ -25,10 +25,10 @@ use crate::ir::{Budget, Class, Layout, Op, Program, Returns, ValueId};
 /// What a build favours where speed and size pull apart: speed by default.
 ///
 /// Favouring size writes calls where speed would write the case they make,
-/// and joins sequences without a join routine, in place only after the
-/// first. A tiny program joining once is smaller so; one joining often is
-/// smaller with the routine, so a build favouring size keeps whichever
-/// image is smaller.
+/// counts each claim taken or given up by a call, and joins sequences
+/// without a join routine, in place only after the first. A tiny program
+/// joining once is smaller so; one joining often is smaller with the
+/// routine, so a build favouring size keeps whichever image is smaller.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Favour {
     #[default]
@@ -171,9 +171,10 @@ pub trait Target: fmt::Debug {
         // What favours size here is calls in place of inline cases and
         // joins, and which is smaller depends on how often a program makes
         // them, so it is built both ways and the smaller kept: either way,
-        // its code is emitted favouring size.
+        // claims are counted by calls, and its code is emitted favouring
+        // size.
         let faster = self.emit_with(
-            &self.prepare_favouring(program, Favour::Speed)?,
+            &prepare_counting(self, program, Favour::Speed, false)?,
             Favour::Size,
             symbols,
         );
@@ -203,37 +204,7 @@ pub trait Target: fmt::Debug {
     /// # Errors
     /// Reports invalid IR or a representation this target cannot safely emit.
     fn prepare_favouring(&self, program: &Program, favour: Favour) -> Result<Program, String> {
-        let speed = favour == Favour::Speed;
-        crate::ir::validate(program)?;
-        let program = &crate::ir::expand_shifts(program, self.word(), self.shifts_by_register());
-        // A number wider than the word becomes words first, which may make
-        // more cross a boundary than fits; fitting then packs the rest.
-        let program = &crate::ir::split(program, self.word());
-        crate::ir::validate(program).map_err(|error| format!("after splitting: {error}"))?;
-        let program = &crate::ir::fit(program, self.budget());
-        let prepared = crate::ir::legalize(
-            program,
-            crate::ir::natural::Config {
-                word_bits: self.word(),
-                // The first arena the heap asks the target for; it grows
-                // from there, doubling, as far as the target has room.
-                heap_bytes: if self.word() == 16 { 1024 } else { 64 * 1024 },
-                grows: true,
-                // A 16-bit target runs short of room before it runs short of
-                // time, and a call is smaller than the case it saves.
-                inline_small: speed && self.word() != 16,
-                // A join routine takes six values and answers two.
-                join_routines: speed && self.budget().carries(6, 2),
-            },
-        )?;
-        // What legalization wrote -- offsets from known sizes, steps by
-        // known strides -- is worked out again with the word's width known.
-        let prepared = crate::ir::optimize(&prepared);
-        // Each loop then asks whether it is done where it goes round.
-        let prepared = crate::ir::rotate(&prepared);
-        crate::ir::validate(&prepared).map_err(|error| format!("after rotating loops: {error}"))?;
-        self.accepts(&prepared)?;
-        Ok(prepared)
+        prepare_counting(self, program, favour, favour == Favour::Speed)
     }
 
     /// Whether it can hold what the program holds.
@@ -288,6 +259,50 @@ pub trait Target: fmt::Debug {
         }
         self.limits(program)
     }
+}
+
+/// [`Target::prepare_favouring`], counting claims where they are taken and
+/// given up where `counts` says to, and the target has room for it.
+fn prepare_counting<T: Target + ?Sized>(
+    target: &T,
+    program: &Program,
+    favour: Favour,
+    counts: bool,
+) -> Result<Program, String> {
+    let speed = favour == Favour::Speed;
+    crate::ir::validate(program)?;
+    let program = &crate::ir::expand_shifts(program, target.word(), target.shifts_by_register());
+    // A number wider than the word becomes words first, which may make
+    // more cross a boundary than fits; fitting then packs the rest.
+    let program = &crate::ir::split(program, target.word());
+    crate::ir::validate(program).map_err(|error| format!("after splitting: {error}"))?;
+    let program = &crate::ir::fit(program, target.budget());
+    let prepared = crate::ir::legalize(
+        program,
+        crate::ir::natural::Config {
+            word_bits: target.word(),
+            // The first arena the heap asks the target for; it grows
+            // from there, doubling, as far as the target has room.
+            heap_bytes: if target.word() == 16 { 1024 } else { 64 * 1024 },
+            grows: true,
+            // A 16-bit target runs short of room before it runs short of
+            // time, and a call is smaller than the case it saves.
+            inline_small: speed && target.word() != 16,
+            // Likewise, a count's call is smaller than its common case;
+            // a build favouring size counts by calls either way.
+            inline_counts: counts && target.word() != 16,
+            // A join routine takes six values and answers two.
+            join_routines: speed && target.budget().carries(6, 2),
+        },
+    )?;
+    // What legalization wrote -- offsets from known sizes, steps by
+    // known strides -- is worked out again with the word's width known.
+    let prepared = crate::ir::optimize(&prepared);
+    // Each loop then asks whether it is done where it goes round.
+    let prepared = crate::ir::rotate(&prepared);
+    crate::ir::validate(&prepared).map_err(|error| format!("after rotating loops: {error}"))?;
+    target.accepts(&prepared)?;
+    Ok(prepared)
 }
 
 fn accepts_externals<T: Target + ?Sized>(target: &T, program: &Program) -> Result<(), String> {

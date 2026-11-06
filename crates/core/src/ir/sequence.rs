@@ -603,6 +603,7 @@ pub(super) fn append(
             naturals: naturals.release,
             cells: cells.release,
             buffers: Some(release),
+            counting: naturals.counting,
         },
         release,
         block: naturals.release,

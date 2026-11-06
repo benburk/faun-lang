@@ -84,6 +84,7 @@ fn config(bits: u16) -> Config {
         heap_bytes: 4096,
         grows: false,
         inline_small: true,
+        inline_counts: true,
         join_routines: false,
     }
 }
@@ -222,6 +223,7 @@ fn invalid_configurations_are_rejected() {
             heap_bytes: 64,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         },
         Config {
@@ -229,6 +231,7 @@ fn invalid_configurations_are_rejected() {
             heap_bytes: 7,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         },
         Config {
@@ -236,6 +239,7 @@ fn invalid_configurations_are_rejected() {
             heap_bytes: 65536,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         },
         Config {
@@ -243,6 +247,7 @@ fn invalid_configurations_are_rejected() {
             heap_bytes: 17,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         },
     ] {
@@ -464,6 +469,7 @@ fn a_heap_grown_a_run_at_a_time_answers_the_same() {
             heap_bytes: 8 * usize::from(bits / 8),
             grows: true,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from(ARITHMETIC));
@@ -595,6 +601,7 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
             heap_bytes: 12 * word,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, _) = program(
@@ -645,6 +652,7 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
             heap_bytes: 12 * word,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Add]));
@@ -681,6 +689,7 @@ fn exhaustion_halts_without_corrupting_the_heap() {
             heap_bytes: 4 * word,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Mul]));
@@ -719,6 +728,7 @@ fn oversized_results_halt_before_allocation() {
             heap_bytes: 4 * word,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul]));
@@ -815,6 +825,7 @@ fn multiplication_clears_dirty_recycled_accumulators() {
             heap_bytes: 64,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Mul]));
@@ -851,6 +862,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
             heap_bytes: 8 * word,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord, Helper::Mod]));
@@ -911,6 +923,7 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
             heap_bytes: 16 * word,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let magnitude = BigUint::from(1u8) << usize::from(bits);
@@ -979,6 +992,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
             heap_bytes: 128,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, entry) = test_program();
@@ -1015,6 +1029,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
             heap_bytes: 128,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Add, Helper::Sub]));
@@ -1072,6 +1087,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
             heap_bytes: 256,
             grows: false,
             inline_small: true,
+            inline_counts: false,
             join_routines: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul, Helper::Div, Helper::Mod]));
@@ -1116,6 +1132,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
         heap_bytes: 128,
         grows: false,
         inline_small: true,
+        inline_counts: false,
         join_routines: false,
     };
     let (mut p, lib, entry) = program(conf, isolated_needs(op));

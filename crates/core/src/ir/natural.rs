@@ -62,6 +62,10 @@ use super::{
 };
 
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches, one per choice between speed and size"
+)]
 pub struct Config {
     pub word_bits: u16,
     /// The first arena a heap that grows asks the target for, or all of a
@@ -74,6 +78,11 @@ pub struct Config {
     /// or an order is asked, rather than left to the call it saves: faster
     /// wherever a count goes round a loop, and larger at every site.
     pub inline_small: bool,
+    /// Whether a claim taken or given up is counted where it is asked,
+    /// leaving to the call only a count that fails, an immortal's, and the
+    /// last claim, which frees: faster wherever a value is shared or let
+    /// go, and larger at every site.
+    pub inline_counts: bool,
     /// Whether each layout two sequences are joined in has a routine the
     /// joins call, which also grows the second at its front where the first
     /// has no room after it: a sequence built by joining pieces before it,
@@ -179,6 +188,67 @@ pub(super) enum Inline {
     Compare,
 }
 
+/// Claims counted where they are taken and given up, as
+/// [`Config::inline_counts`] says: the count is moved here where it stays
+/// between one and the most, which is where it neither fails, nor is an
+/// immortal's, nor frees what it counts, and any other is left to a call.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Counting {
+    /// The count an immortal object holds, which no claim changes.
+    immortal: u64,
+}
+
+/// Whether a claim is taken or given up.
+#[derive(Clone, Copy)]
+enum Claim {
+    Take,
+    Give,
+}
+
+impl Counting {
+    /// Take another claim to the object at `at`, from one to two short of
+    /// an immortal's count here, and otherwise by `retain`.
+    pub(super) fn take(self, b: &mut Builder<'_>, at: ValueId, retain: FunctionId) {
+        self.count(b, at, Claim::Take, retain);
+    }
+
+    /// Give up a claim to the object at `at`, from two to one short of an
+    /// immortal's count here, and otherwise by `last`, which gives up what
+    /// the last claim held.
+    pub(super) fn give(self, b: &mut Builder<'_>, at: ValueId, last: FunctionId) {
+        self.count(b, at, Claim::Give, last);
+    }
+
+    fn count(self, b: &mut Builder<'_>, at: ValueId, claim: Claim, otherwise: FunctionId) {
+        let refs = b.load(Width::Word, at, Offset::Words(1));
+        let (least, then) = match claim {
+            Claim::Take => (1, 2),
+            Claim::Give => (2, 1),
+        };
+        // One unsigned comparison asks for both ends at once: a count
+        // below the least wraps round past the most. The next count is
+        // worked out from what it compares, which is all that is held.
+        let least = number(b, least);
+        let above = sub(b, refs, least);
+        let span = number(b, self.immortal - 2);
+        let here = lt(b, above, span);
+        b.if_(
+            here,
+            &[],
+            |b| {
+                let then = number(b, then);
+                let next = add(b, above, then);
+                b.store(Width::Word, at, Offset::Words(1), next);
+                b.yield_(&[]);
+            },
+            |b| {
+                b.call(otherwise, &[at]);
+                b.yield_(&[]);
+            },
+        );
+    }
+}
+
 /// Exported handles for requested operations; dependencies stay internal.
 ///
 /// `retain` and `release` count claims on an object: a cell's, a buffer's or
@@ -196,6 +266,9 @@ pub(super) struct Library {
     drop: FunctionId,
     /// Whether [`Self::inline`] writes the case of two immediates out.
     inline_small: bool,
+    /// How claims are counted where they are taken and given up, where
+    /// they are.
+    pub counting: Option<Counting>,
     /// Where immediates begin, as [`half`] says.
     pub half: u64,
     helpers: [Option<FunctionId>; Helper::ALL.len()],
@@ -221,13 +294,44 @@ impl Library {
 
     /// Take another claim to a natural, where it is an object.
     pub(super) fn retain_value(&self, b: &mut Builder<'_>, value: ValueId) -> ValueId {
-        b.call(self.keep, &[value]);
+        match self.counting {
+            Some(counting) => where_object(b, value, |b, at| counting.take(b, at, self.retain)),
+            None => {
+                b.call(self.keep, &[value]);
+            }
+        }
         value
     }
 
     /// Give up a claim to a natural, where it is an object.
     pub(super) fn release_value(&self, b: &mut Builder<'_>, value: ValueId) {
-        b.call(self.drop, &[value]);
+        match self.counting {
+            Some(counting) => where_object(b, value, |b, at| counting.give(b, at, self.release)),
+            None => {
+                b.call(self.drop, &[value]);
+            }
+        }
+    }
+
+    /// Take another claim to the object at `at`.
+    pub(super) fn retain_object(&self, b: &mut Builder<'_>, at: ValueId) -> ValueId {
+        let Some(counting) = self.counting else {
+            return b.call_one(self.retain, &[at]);
+        };
+        counting.take(b, at, self.retain);
+        at
+    }
+
+    /// Give up a claim to the object at `at`, which `last` gives up where
+    /// it may be the last: `release` for a natural's, or what gives up
+    /// those its fields or elements hold too.
+    pub(super) fn release_object(&self, b: &mut Builder<'_>, at: ValueId, last: FunctionId) {
+        match self.counting {
+            Some(counting) => counting.give(b, at, last),
+            None => {
+                b.call(last, &[at]);
+            }
+        }
     }
 
     /// `a op c` for two naturals, with the case of two immediates whose
@@ -491,6 +595,7 @@ pub(super) fn append(
         keep: unless_small(program, "nat.keep", retain),
         drop: unless_small(program, "nat.drop", release),
         inline_small: config.inline_small,
+        counting: config.inline_counts.then_some(Counting { immortal: max }),
         half,
         helpers: [None; Helper::ALL.len()],
     };
@@ -596,6 +701,21 @@ fn object(b: &mut Builder<'_>, handle: ValueId) -> ValueId {
     let one = number(b, 1);
     let at = sub(b, held, one);
     b.convert(A, at)
+}
+
+/// Do `then` with the object a natural names, where it names one.
+fn where_object(b: &mut Builder<'_>, value: ValueId, then: impl FnOnce(&mut Builder<'_>, ValueId)) {
+    let named = is_object(b, value);
+    b.if_(
+        named,
+        &[],
+        |b| {
+            let at = object(b, value);
+            then(b, at);
+            b.yield_(&[]);
+        },
+        |b| b.yield_(&[]),
+    );
 }
 
 /// The handle naming the object at `address`: one more.

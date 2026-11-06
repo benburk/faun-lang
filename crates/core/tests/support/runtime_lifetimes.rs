@@ -141,6 +141,7 @@ pub(super) fn check(target: &dyn Target, runner: Option<&str>, early_return: boo
             heap_bytes: HEAP_BYTES,
             grows: false,
             inline_small: true,
+            inline_counts: true,
             join_routines: false,
         },
     )

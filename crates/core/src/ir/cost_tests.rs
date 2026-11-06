@@ -54,6 +54,7 @@ fn cost(source: &barb::Program) -> Cost {
         heap_bytes: HEAP_BYTES,
         grows: false,
         inline_small: true,
+        inline_counts: false,
         join_routines: false,
     };
     let scalar = legalize(&machine, config).unwrap();
@@ -313,6 +314,7 @@ fn a_claim_read_last_by_a_branch_is_released_in_each_arm() {
         heap_bytes: 256,
         grows: false,
         inline_small: true,
+        inline_counts: false,
         join_routines: false,
     };
     let scalar = legalize(&p, config).unwrap();
@@ -426,6 +428,12 @@ fn pushes(n: u64) -> Program {
 
 /// Legalize and run a machine program's entry at 64 bits.
 fn run_machine(machine: &Program) -> (Vec<BigUint>, Cost) {
+    run_machine_counting(machine, false)
+}
+
+/// [`run_machine`], counting claims where they are taken and given up, or
+/// by calls.
+fn run_machine_counting(machine: &Program, inline_counts: bool) -> (Vec<BigUint>, Cost) {
     validate(machine).unwrap();
     let expected = evaluate::evaluate(
         machine,
@@ -446,6 +454,7 @@ fn run_machine(machine: &Program) -> (Vec<BigUint>, Cost) {
         heap_bytes: HEAP_BYTES,
         grows: false,
         inline_small: true,
+        inline_counts,
         join_routines: false,
     };
     let scalar = legalize(machine, config).unwrap();
@@ -463,6 +472,21 @@ fn run_machine(machine: &Program) -> (Vec<BigUint>, Cost) {
     assert_eq!(result.returned().unwrap(), expected);
     no_live_objects(&scalar, &result, config);
     (expected, Cost::of(&scalar, &result.counts))
+}
+
+/// Claims counted where they are taken and given up call nothing to take
+/// one, and call out to give one up only where it may be the last; what
+/// is allocated and answered is the same, and all of it is freed.
+#[test]
+fn claims_counted_in_place_call_out_only_to_free() {
+    let program = pushes(100);
+    let (answer, called) = run_machine(&program);
+    let (counted_answer, counted) = run_machine_counting(&program, true);
+    assert_eq!(counted_answer, answer);
+    assert!(called.retains > 0, "{called:?}");
+    assert_eq!(counted.retains, 0, "{counted:?} {called:?}");
+    assert!(counted.releases < called.releases, "{counted:?} {called:?}");
+    assert_eq!(counted.allocations, called.allocations);
 }
 
 #[test]
