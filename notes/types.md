@@ -109,6 +109,12 @@ Walkable(g, e) = where
   g.edges_from : (g, Nat) -> List(Edge(e))
 ```
 
+The standard library names the bounds the derived members meet, and its
+own signatures use them: `Equatable(a)`, `Ordered(a)`, `Printable(a)`, and
+`Hashable(a)`, the equality and hashing a `Map`'s key needs. A signature
+asks `where Hashable(k)` rather than spelling both members out, and where a
+bound is missing the checker offers the alias that names it.
+
 A type with an identity of its own is declared with `:`, as
 `Stack(a) : [Empty, Push(a, Stack(a))]`.
 

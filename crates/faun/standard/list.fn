@@ -12,6 +12,7 @@
 # front to back in a loop; one building something else calls itself last.
 
 import hasher {Hasher}
+import bounds {Equatable, Ordered, Printable}
 
 export {List.*}
 
@@ -106,13 +107,13 @@ List(a) : [Nil, Cons(a, List(a))].(
   hash_into(xs, hasher) ->
     fold(xs, hasher.write_u64(U64.of_nat(len(xs))), |fed, item| item.hash_into(fed))
 
-  equals : (List(a), List(a)) -> Bool where a.equals : (a, a) -> Bool
+  equals : (List(a), List(a)) -> Bool where Equatable(a)
   equals([], []) -> True
   equals([x, *left], [y, *right]) if x.equals(y) -> equals(left, right)
   equals(_, _) -> False
 
   # Whether an element equals `wanted`.
-  contains : (List(a), a) -> Bool where a.equals : (a, a) -> Bool
+  contains : (List(a), a) -> Bool where Equatable(a)
   contains(values, wanted) -> values.any(|value| value == wanted)
 
   # The elements added up from their type's nought.
@@ -256,26 +257,26 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # The elements as a list is written, each by its own `to_str`:
   # `[1, 2, 3].to_str()` is `"[1, 2, 3]"`.
-  to_str : List(a) -> Str where a.to_str : a -> Str
+  to_str : List(a) -> Str where Printable(a)
   to_str(values) -> "[".concat(values.map(|value| value.to_str()).join(", ")).concat("]")
 
   # The least element, the first of those that tie.
-  min : List(a) -> Result(a, [Empty]) where a.cmp : (a, a) -> Order
+  min : List(a) -> Result(a, [Empty]) where Ordered(a)
   min([]) -> Err(Empty)
   min([head, *tail]) -> Ok(tail.fold(head, |least, value| (value < least).select(value, least)))
 
   # The greatest element, the first of those that tie.
-  max : List(a) -> Result(a, [Empty]) where a.cmp : (a, a) -> Order
+  max : List(a) -> Result(a, [Empty]) where Ordered(a)
   max([]) -> Err(Empty)
   max([head, *tail]) -> Ok(tail.fold(head, |most, value| (value > most).select(value, most)))
 
   # The elements in order by their type's `cmp`. Stable: those that compare
   # `Eq` stay in the order they were in.
-  sort : List(a) -> List(a) where a.cmp : (a, a) -> Order
+  sort : List(a) -> List(a) where Ordered(a)
   sort(values) -> sort_on(values, |value| value)
 
   # The elements in order of `key`, stable as `sort` is.
-  sort_on : (List(a), a -> k) -> List(a) where k.cmp : (k, k) -> Order
+  sort_on : (List(a), a -> k) -> List(a) where Ordered(k)
   sort_on(values, key) -> merge_sort(values, key)
 )
 
@@ -373,7 +374,7 @@ windows_into([], _, built) -> reverse_into(built, [])
 
 # Sort each half and merge them. Past the first two clauses a list holds two
 # or more, so each half is shorter than it.
-merge_sort : (List(a), a -> k) -> List(a) where k.cmp : (k, k) -> Order
+merge_sort : (List(a), a -> k) -> List(a) where Ordered(k)
 merge_sort([], _) -> []
 merge_sort(one is [_], _) -> one
 merge_sort(values, key) -> (
@@ -383,7 +384,7 @@ merge_sort(values, key) -> (
 
 # Two sorted lists as one, the smaller key first and the left one on a tie,
 # which is what keeps the sort stable.
-merge_into : (List(a), List(a), a -> k, List(a)) -> List(a) where k.cmp : (k, k) -> Order
+merge_into : (List(a), List(a), a -> k, List(a)) -> List(a) where Ordered(k)
 merge_into([], right, _, built) -> reverse_into(built, right)
 merge_into(left, [], _, built) -> reverse_into(built, left)
 merge_into([x, *left], right is [y, *_], key, built) if key(x) <= key(y) ->

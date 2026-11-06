@@ -18,10 +18,11 @@ import str {Str}
 import float.f32 {F32}
 import float.f64 {F64}
 import hasher {Hasher}
+import bounds {Equatable, Ordered, Printable, Hashable}
 import map {Map}
 import mixer {Mixer}
 import set {Set}
 import sorted_map {SortedMap}
 import sorted_set {SortedSet}
 
-export {Bool.*, Order.*, Nat.*, Int.*, U8, U16, U32, U64, List.*, Result.*, Str, F32, F64, Hasher, Map, Mixer, Set, SortedMap, SortedSet}
+export {Bool.*, Order.*, Nat.*, Int.*, U8, U16, U32, U64, List.*, Result.*, Str, F32, F64, Hasher, Equatable, Ordered, Printable, Hashable, Map, Mixer, Set, SortedMap, SortedSet}

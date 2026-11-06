@@ -15,9 +15,7 @@ Memo(k, v) : Map(k, v).(
   empty : Memo(k, v)
   empty = Memo(Map.empty)
 
-  memoize : (Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  memoize : (Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where Hashable(k)
   memoize(memo, key, context, compute) -> (
     Memo(entries) = memo
     if entries.get(key) is Ok(known) then (known, memo) else (

@@ -13,7 +13,7 @@ export {dijkstra, Paths, Weight}
 Weight(e) = where
   e.zero : e,
   e.add : (e, e) -> e,
-  e.cmp : (e, e) -> Order
+  Ordered(e)
 
 # How a settled node was reached: at what cost, and from which node. The
 # source is reached from itself.

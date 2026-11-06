@@ -3,7 +3,12 @@
 `standard.fn` is the bootstrap package root. It exports `Bool`, `Order`, `Nat`,
 `Int`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `List`, `Result`, `Str`,
 `Hasher`, `Map`, `Mixer`, `Set`, `SortedMap` and `SortedSet` from sibling
-modules.
+modules, and four bounds from `bounds.fn`, named for the members a type
+derives: `Equatable(a)` asks `a.equals : (a, a) -> Bool`, `Ordered(a)`
+asks `a.cmp : (a, a) -> Order`, `Printable(a)` asks `a.to_str : a -> Str`,
+and `Hashable(a)` asks `equals` and `hash_into` into the standard `Mixer`,
+what a `Map`'s key or a `Set`'s member needs. A signature writes
+`where Ordered(k)`, and the library's own signatures do.
 
 A numeral takes its type from its position, as in Ori, and may be only a
 `Nat`, `Int`, `U8`, `U16`, `U32` or `U64`; nothing else is made numeric by the

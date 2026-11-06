@@ -17,6 +17,7 @@
 # on every way it goes on, and nothing is asked of it afterwards.
 
 import hosts.common {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
+import bounds {Printable}
 
 export {Host, Stdin, Stdout, Stderr, Files, File, Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError}
 
@@ -58,7 +59,7 @@ Host : {args: List(Str)}.(
   # This is the quick way to a whole program: an app answering a `Result`
   # prints `Ok(...)` or `Err(...)`, which says which it was, and one that
   # must finish with another status writes its own `main!`.
-  run! : (Host, {args: List(Str)} -> a) -> [] where a.to_str : a -> Str
+  run! : (Host, {args: List(Str)} -> a) -> [] where Printable(a)
   run!(host, app) -> (
     status = finish!(host.stdout, app({args: host.args}))
     host.exit!(status)
@@ -68,7 +69,7 @@ Host : {args: List(Str)}.(
   # as bytes beside the arguments: an app wanting text asks
   # `Str.from_utf8` itself. Input that cannot be read is reported on
   # standard error, and the app is not run.
-  run_stdin! : (Host, {args: List(Str), stdin: List(U8)} -> a) -> [] where a.to_str : a -> Str
+  run_stdin! : (Host, {args: List(Str), stdin: List(U8)} -> a) -> [] where Printable(a)
   run_stdin!(host, app) -> (
     input = host.stdin.read_to_end!()
     status = serve_stdin!(host.stdout, host.stderr, input, host.args, app)

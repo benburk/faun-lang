@@ -12,6 +12,8 @@
 # may have different shapes (insertion order decides), so the trees
 # themselves are never compared.
 
+import bounds {Equatable, Ordered, Printable}
+
 export {SortedMap}
 
 SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
@@ -31,22 +33,22 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
 
   # The value bound to `key` in `map`: `Ok(value)` when `key` is present;
   # otherwise `Err(Missing)`.
-  get : (SortedMap(k, v), k) -> Result(v, [Missing]) where k.cmp : (k, k) -> Order
+  get : (SortedMap(k, v), k) -> Result(v, [Missing]) where Ordered(k)
   get(Tip, _) -> Err(Missing)
   get(Bin(left, found, value, right, _), key) -> got(key.cmp(found), left, value, right, key)
 
   # The value bound to `key` in `map`, and `fallback` where it is absent.
-  get_or : (SortedMap(k, v), k, v) -> v where k.cmp : (k, k) -> Order
+  get_or : (SortedMap(k, v), k, v) -> v where Ordered(k)
   get_or(map, key, fallback) -> get(map, key).ok_or(fallback)
 
   # Whether `key` is bound in `map`.
-  contains : (SortedMap(k, v), k) -> Bool where k.cmp : (k, k) -> Order
+  contains : (SortedMap(k, v), k) -> Bool where Ordered(k)
   contains(map, key) -> get(map, key).is_ok()
 
   # `map` with `value` bound to `key`, replacing any existing binding for that
   # key. An existing key keeps its position and takes the new value, so
   # insertion is how callers overwrite.
-  insert : (SortedMap(k, v), k, v) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  insert : (SortedMap(k, v), k, v) -> SortedMap(k, v) where Ordered(k)
   insert(Tip, key, value) -> Bin(Tip, key, value, Tip, 1)
   insert(Bin(left, found, existing, right, depth), key, value) ->
     inserted_at(key.cmp(found), left, found, existing, right, depth, key, value)
@@ -54,19 +56,19 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   # `map` without any binding for `key`; unchanged when `key` is absent, so
   # removal is idempotent, and it undoes an `insert` of a key that was not
   # bound before: the entries come back, if not the shape.
-  remove : (SortedMap(k, v), k) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  remove : (SortedMap(k, v), k) -> SortedMap(k, v) where Ordered(k)
   remove(Tip, _) -> Tip
   remove(Bin(left, found, value, right, _), key) ->
     removed_at(key.cmp(found), left, found, value, right, key)
 
   # `map` with `key`'s value replaced by `change` applied to it; unchanged
   # when `key` is absent, as `remove` is, and as `Map.update` does.
-  update : (SortedMap(k, v), k, v -> v) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  update : (SortedMap(k, v), k, v -> v) -> SortedMap(k, v) where Ordered(k)
   update(map, key, change) -> get(map, key).map_ok(|value| insert(map, key, change(value))).ok_or(map)
 
   # `map` with `key`'s value replaced by `change` applied to it, or to
   # `missing` where `key` is absent, as `Map.update_or` does.
-  update_or : (SortedMap(k, v), k, v, v -> v) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  update_or : (SortedMap(k, v), k, v, v -> v) -> SortedMap(k, v) where Ordered(k)
   update_or(map, key, missing, change) -> insert(map, key, change(get_or(map, key, missing)))
 
   # The keys of `map` in ascending order.
@@ -102,25 +104,25 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   # The map as the call building it is written, its entries in ascending
   # key order: `SortedMap.of_list([(1, "a"), (2, "b")])`.
   to_str : SortedMap(k, v) -> Str where
-    k.to_str : k -> Str,
-    v.to_str : v -> Str
+    Printable(k),
+    Printable(v)
   to_str(map) -> "SortedMap.of_list(${to_list(map)})"
 
   # Whether `map` and `other` bind the same keys to equal values: their
   # ascending entries agree, however either was built.
   equals : (SortedMap(k, v), SortedMap(k, v)) -> Bool where
-    k.equals : (k, k) -> Bool,
-    v.equals : (v, v) -> Bool
+    Equatable(k),
+    Equatable(v)
   equals(map, other) -> to_list(map) == to_list(other)
 
   # The map binding each entry of `entries`, later entries winning exactly as
   # repeated `insert` calls would.
-  of_list : List((k, v)) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  of_list : List((k, v)) -> SortedMap(k, v) where Ordered(k)
   of_list(entries) -> entries.fold(Tip, |built, (key, value)| insert(built, key, value))
 
   # The elements of `values` gathered by `key`, as `Map.grouped` gathers
   # them, the groups in ascending key order and each in the order read.
-  grouped : (List(v), v -> k) -> SortedMap(k, List(v)) where k.cmp : (k, k) -> Order
+  grouped : (List(v), v -> k) -> SortedMap(k, List(v)) where Ordered(k)
   grouped(values, key) -> (
     gathered = values.fold(Tip, |table, value| update_or(table, key(value), [], |group| [value, *group]))
     map_values(gathered, |group| group.reverse())
@@ -128,7 +130,7 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
 
   # How many times each of `values` occurs, as `Map.counted` counts, in
   # ascending order of the values.
-  counted : List(k) -> SortedMap(k, Nat) where k.cmp : (k, k) -> Order
+  counted : List(k) -> SortedMap(k, Nat) where Ordered(k)
   counted(values) -> values.fold(Tip, |tally, value| update_or(tally, value, 0, |count| count + 1))
 )
 
@@ -182,8 +184,7 @@ rotate_left(left, key, value, Bin(Bin(middle_left, middle_key, middle_value, mid
 
 # The comparison's verdict walks left, stops, or walks right. The
 # children arrive straight from `get`'s pattern, so each walk descends.
-got : (Order, SortedMap(k, v), v, SortedMap(k, v), k) -> Result(v, [Missing]) where
-  k.cmp : (k, k) -> Order
+got : (Order, SortedMap(k, v), v, SortedMap(k, v), k) -> Result(v, [Missing]) where Ordered(k)
 got(Lt, left, _, _, key) -> SortedMap.get(left, key)
 got(Eq, _, value, _, _) -> Ok(value)
 got(Gt, _, _, right, key) -> SortedMap.get(right, key)
@@ -191,8 +192,7 @@ got(Gt, _, _, right, key) -> SortedMap.get(right, key)
 # The comparison's verdict replaces in place or descends, rebalancing the
 # grown side. The node arrives as its pieces, and the recursion goes into
 # a child.
-inserted_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), Nat, k, v) -> SortedMap(k, v) where
-  k.cmp : (k, k) -> Order
+inserted_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), Nat, k, v) -> SortedMap(k, v) where Ordered(k)
 inserted_at(Eq, left, _, _, right, depth, key, value) -> Bin(left, key, value, right, depth)
 inserted_at(Lt, left, found, existing, right, _, key, value) ->
   balanced(SortedMap.insert(left, key, value), found, existing, right)
@@ -202,8 +202,7 @@ inserted_at(Gt, left, found, existing, right, _, key, value) ->
 # The comparison's verdict removes here or descends, rebalancing the side
 # that did not shrink. The node arrives as its pieces, as for `inserted_at`,
 # and the recursion goes into a child.
-removed_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), k) -> SortedMap(k, v) where
-  k.cmp : (k, k) -> Order
+removed_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), k) -> SortedMap(k, v) where Ordered(k)
 removed_at(Lt, left, found, value, right, key) ->
   balanced(SortedMap.remove(left, key), found, value, right)
 removed_at(Gt, left, found, value, right, key) ->

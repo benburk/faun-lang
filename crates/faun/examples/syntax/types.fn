@@ -79,6 +79,13 @@ largest(values, fallback) -> values.max().ok_or(fallback)
 
 expect largest([3, 9, 4], 0) == 9
 
+# The standard library names the bounds a type's own members meet:
+# `Equatable`, `Ordered`, `Printable`, and `Hashable` for a map's key.
+smallest : (List(a), a) -> a where Ordered(a)
+smallest(values, fallback) -> values.min().ok_or(fallback)
+
+expect smallest([3, 9, 4], 0) == 3
+
 sum_of : List(a) -> a where
   a.zero : a,
   a.add : (a, a) -> a

@@ -30,7 +30,7 @@ Lru(k, v) : {recent: List((k, v)), room: Nat}.(
 
   # The value under `key`, and the cache with that use remembered: a hit
   # moves its entry to the front, and a miss leaves the order as it was.
-  get : (Lru(k, v), k) -> (Result(v, [Missing]), Lru(k, v)) where k.equals : (k, k) -> Bool
+  get : (Lru(k, v), k) -> (Result(v, [Missing]), Lru(k, v)) where Equatable(k)
   get(Lru({recent, room}), key) -> (
     (found, remaining) = pluck(recent, key)
     if found is Ok(value)
@@ -40,7 +40,7 @@ Lru(k, v) : {recent: List((k, v)), room: Nat}.(
 
   # Insert or refresh: the entry goes to the front, any older entry under the
   # same key leaves on the way past, and the room's worth survives.
-  put : (Lru(k, v), k, v) -> Lru(k, v) where k.equals : (k, k) -> Bool
+  put : (Lru(k, v), k, v) -> Lru(k, v) where Equatable(k)
   put(Lru({recent, room}), key, value) -> (
     (_, remaining) = pluck(recent, key)
     Lru({recent: [(key, value), *remaining].take(room), room})
@@ -49,7 +49,7 @@ Lru(k, v) : {recent: List((k, v)), room: Nat}.(
 
 # The entry under `wanted` pulled out in one walk: what was found, and the
 # list without it.
-pluck : (List((k, v)), k) -> (Result(v, [Missing]), List((k, v))) where k.equals : (k, k) -> Bool
+pluck : (List((k, v)), k) -> (Result(v, [Missing]), List((k, v))) where Equatable(k)
 pluck([], _) -> (Err(Missing), [])
 pluck([(key, value), *rest], wanted) if key == wanted -> (Ok(value), rest)
 pluck([entry, *rest], wanted) -> (

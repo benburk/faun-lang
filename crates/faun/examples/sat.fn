@@ -16,7 +16,7 @@ Literal(v) : [Yes(v), Not(v)].(
   neg(Yes(x)) -> Not(x)
   neg(Not(x)) -> Yes(x)
 
-  equals : (Literal(v), Literal(v)) -> Bool where v.equals : (v, v) -> Bool
+  equals : (Literal(v), Literal(v)) -> Bool where Equatable(v)
 )
 
 # A clause holds where one of its literals does, and a formula where every
@@ -27,7 +27,7 @@ Model(v) = List(Literal(v))
 
 # What is left to hold once `literal` does: a clause it satisfies goes, and
 # its opposite is struck from the rest.
-assume : (Formula(v), Literal(v)) -> Formula(v) where v.equals : (v, v) -> Bool
+assume : (Formula(v), Literal(v)) -> Formula(v) where Equatable(v)
 assume(formula, literal) -> formula
   .filter(|clause| !clause.contains(literal))
   .map(|clause| clause.filter(|other| other != -literal))
@@ -38,7 +38,7 @@ pick([[unit], *_], _) -> unit
 pick([_, *rest], first) -> pick(rest, first)
 pick([], first) -> first
 
-solve : (Formula(v), Model(v)) -> Result(Model(v), [Unsat]) where v.equals : (v, v) -> Bool
+solve : (Formula(v), Model(v)) -> Result(Model(v), [Unsat]) where Equatable(v)
 solve([], model) -> Ok(model)
 solve(formula, model) -> (
   formula is [[first, *_], *_] else return Err(Unsat)
@@ -50,7 +50,7 @@ solve(formula, model) -> (
   )
 )
 
-satisfies : (Model(v), Formula(v)) -> Bool where v.equals : (v, v) -> Bool
+satisfies : (Model(v), Formula(v)) -> Bool where Equatable(v)
 satisfies(model, formula) -> formula.all(|clause| clause.any(|literal| model.contains(literal)))
 
 # Colouring a map: a variable for each region in each colour, the pair of
@@ -102,9 +102,11 @@ colouring(regions, borders, colours) -> regions
 # Each region and the colour the model gives it.
 legend : Model((Region, Colour)) -> Str
 legend(model) -> regions
-  .map(|region| (region, colours.find(|colour| model.contains(Yes((region, colour))))))
-  .map(|(region, colour)| "${region:<4}${colour.map_ok(|c| c.to_str()).ok_or("any")}")
+  .map(|region| "${region:<4}${colour_of(model, region).map_ok(Colour.to_str).ok_or("any")}")
   .join("\n")
+
+colour_of : (Model((Region, Colour)), Region) -> Result(Colour, [NotFound])
+colour_of(model, region) -> colours.find(|colour| model.contains(Yes((region, colour))))
 
 australia : Formula((Region, Colour))
 australia = colouring(regions, borders, colours)

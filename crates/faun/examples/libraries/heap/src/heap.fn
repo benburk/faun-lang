@@ -26,7 +26,7 @@ Heap(k, v) : List((k, v)).(
   len(Heap(entries)) -> entries.len()
 
   # `heap` holding `value` too, at `key`.
-  push : (Heap(k, v), k, v) -> Heap(k, v) where k.cmp : (k, k) -> Order
+  push : (Heap(k, v), k, v) -> Heap(k, v) where Ordered(k)
   push(Heap(entries), key, value) -> (
     hole = entries.len()
     grown = entries.append((key, value))
@@ -34,7 +34,7 @@ Heap(k, v) : List((k, v)).(
   )
 
   # `heap` holding each of `entries` too, each `(key, value)`.
-  push_all : (Heap(k, v), List((k, v))) -> Heap(k, v) where k.cmp : (k, k) -> Order
+  push_all : (Heap(k, v), List((k, v))) -> Heap(k, v) where Ordered(k)
   push_all(heap, entries) -> entries.fold(heap, |grown, (key, value)| push(grown, key, value))
 
   # The cheapest entry, without taking it off.
@@ -43,7 +43,7 @@ Heap(k, v) : List((k, v)).(
 
   # The cheapest entry and the heap without it. Of entries at one key,
   # which comes first is not said.
-  pop : Heap(k, v) -> Result({key: k, value: v, rest: Heap(k, v)}, [Empty]) where k.cmp : (k, k) -> Order
+  pop : Heap(k, v) -> Result({key: k, value: v, rest: Heap(k, v)}, [Empty]) where Ordered(k)
   pop(Heap(entries)) -> (
     top = entries.first()?
     count = entries.len() - 1
@@ -54,11 +54,11 @@ Heap(k, v) : List((k, v)).(
   )
 
   # The heap of `entries`, each `(key, value)`.
-  of_list : List((k, v)) -> Heap(k, v) where k.cmp : (k, k) -> Order
+  of_list : List((k, v)) -> Heap(k, v) where Ordered(k)
   of_list(entries) -> push_all(empty, entries)
 
   # The entries cheapest first: every pop, in turn.
-  to_list : Heap(k, v) -> List((k, v)) where k.cmp : (k, k) -> Order
+  to_list : Heap(k, v) -> List((k, v)) where Ordered(k)
   to_list(heap) -> (
     emptied = empty_onto(heap, [])
     emptied.reverse()
@@ -66,7 +66,7 @@ Heap(k, v) : List((k, v)).(
 
   # `state` once `visit` has seen every entry, cheapest first. Each visit
   # answers the state and the entries it adds, which it sees in their turn.
-  drain : (Heap(k, v), s, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
+  drain : (Heap(k, v), s, (s, k, v) -> (s, List((k, v)))) -> s where Ordered(k)
   drain(heap, state, visit) -> (
     heap.pop() is Ok({key, value, rest}) else return state
     (next, added) = visit(state, key, value)
@@ -80,7 +80,7 @@ taken((key, value), rest) -> {key, value, rest}
 
 # `entries` with `entry` written where it stops climbing from `hole`: each
 # parent costing more comes down into the hole, and the hole goes up to it.
-climb : (List((k, v)), Nat, (k, v)) -> List((k, v)) where k.cmp : (k, k) -> Order
+climb : (List((k, v)), Nat, (k, v)) -> List((k, v)) where Ordered(k)
 climb(entries, 0, entry) -> entries.put(0, entry)
 climb(entries, hole, entry is (key, _)) -> (
   above = (hole - 1) / 2
@@ -93,7 +93,7 @@ climb(entries, hole, entry is (key, _)) -> (
 # `entries`, the first `count` of them a heap but for `hole`, with `entry`
 # written where it stops sinking from there: the cheaper child, where it
 # costs less, comes up into the hole, and the hole goes down to it.
-sink : (List((k, v)), Nat, (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
+sink : (List((k, v)), Nat, (k, v), Nat) -> List((k, v)) where Ordered(k)
 sink(entries, hole, entry, count) if hole * 2 + 1 >= count -> entries.put(hole, entry)
 sink(entries, hole, entry is (key, _), count) -> (
   left = hole * 2 + 1
@@ -106,7 +106,7 @@ sink(entries, hole, entry is (key, _), count) -> (
 
 # The index of the cheaper child: the right one only where there is one and
 # it costs less.
-cheaper : (List((k, v)), Nat, Nat, (k, v)) -> Nat where k.cmp : (k, k) -> Order
+cheaper : (List((k, v)), Nat, Nat, (k, v)) -> Nat where Ordered(k)
 cheaper(entries, left, count, fallback) -> (
   right = left + 1
   (left_key, _) = entries.get_or(left, fallback)
@@ -114,7 +114,7 @@ cheaper(entries, left, count, fallback) -> (
   if right < count & right_key < left_key then right else left
 )
 
-empty_onto : (Heap(k, v), List((k, v))) -> List((k, v)) where k.cmp : (k, k) -> Order
+empty_onto : (Heap(k, v), List((k, v))) -> List((k, v)) where Ordered(k)
 empty_onto(heap, found) -> (
   heap.pop() is Ok({key, value, rest}) else return found
   empty_onto(rest, [(key, value), *found])

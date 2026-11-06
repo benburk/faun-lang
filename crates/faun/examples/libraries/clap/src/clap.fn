@@ -136,7 +136,7 @@ ParsedArg(a) : [
   # The fallback is generic, and its help entry shows it — so defaulting an
   # option obliges its type to say what the default looks like. A splice
   # shows a string default as its text, unquoted.
-  default : (ParsedArg(a), a) -> Match(a) where a.to_str : a -> Str
+  default : (ParsedArg(a), a) -> Match(a) where Printable(a)
   default(Absent(doc), fallback) ->
     won(doc, Defaulted("${fallback}"), fallback)
   default(Value(found, doc), fallback) ->

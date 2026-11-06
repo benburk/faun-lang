@@ -4,6 +4,8 @@
 # names. Nothing here reaches a target's routines: each loop is generic over
 # the stream it is handed, so it is written once and is the same everywhere.
 
+import bounds {Printable}
+
 export {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
 
 # What a stream or a file moves.
@@ -104,7 +106,7 @@ write_on!(output, bytes, left, went) -> write_rest!(output, bytes, left - went)
 # `value` said on `output`, and a line's end after it.
 finish! : (o, a) -> U8 where
   o.write_all! : (o, List(U8)) -> Result(Nat, WriteError),
-  a.to_str : a -> Str
+  Printable(a)
 finish!(output, value) -> (
   wrote = output.write_all!("${value}\n".to_utf8())
   written_status(wrote)
@@ -133,6 +135,6 @@ reported_status(Err(_)) -> 2
 serve_stdin! : (o, w, Result(List(U8), ReadError), List(Str), {args: List(Str), stdin: List(U8)} -> a) -> U8 where
   o.write_all! : (o, List(U8)) -> Result(Nat, WriteError),
   w.write_all! : (w, List(U8)) -> Result(Nat, WriteError),
-  a.to_str : a -> Str
+  Printable(a)
 serve_stdin!(_, errors, Err(error), _, _) -> report!(errors, error.to_str())
 serve_stdin!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))

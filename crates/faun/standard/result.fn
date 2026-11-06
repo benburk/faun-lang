@@ -1,5 +1,7 @@
 # Result utilities.
 
+import bounds {Equatable, Printable}
+
 export {Result.*}
 
 Result(a, e) : [Ok(a), Err(e)].(
@@ -42,14 +44,14 @@ Result(a, e) : [Ok(a), Err(e)].(
   # `Ok(value)` or `Err(error)`, each by its own type's `to_str`, as a tag
   # is written: which it was is the first thing it says.
   to_str : Result(a, e) -> Str where
-    a.to_str : a -> Str,
-    e.to_str : e -> Str
+    Printable(a),
+    Printable(e)
 
   # Both `Ok` with equal values, or both `Err` with equal errors, each by
   # its own type's `equals`. A tag row's is structural.
   equals : (Result(a, e), Result(a, e)) -> Bool where
-    a.equals : (a, a) -> Bool,
-    e.equals : (e, e) -> Bool
+    Equatable(a),
+    Equatable(e)
 )
 
 expect Ok(1).err_as(Missing) == Ok(1) & Ok(1).err_as(Missing) != Ok(2)

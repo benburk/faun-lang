@@ -10,6 +10,7 @@
 # `SortedMap` is the alternative for keys that must come back in order.
 
 import mixer {Mixer, mixer_seeded, mixer_finish}
+import bounds {Equatable, Printable, Hashable}
 
 export {Map}
 
@@ -18,8 +19,8 @@ export {Map}
 Slot(k, v) : [Filled(k, v), Removed].(
   # One constructor, with equal fields.
   equals : (Slot(k, v), Slot(k, v)) -> Bool where
-    k.equals : (k, k) -> Bool,
-    v.equals : (v, v) -> Bool
+    Equatable(k),
+    Equatable(v)
 )
 
 # A persistent map keyed by hash. Entries live in a list in insertion order
@@ -50,9 +51,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
 
   # The value bound to `key` in `map`: `Ok(value)` when `key` is present;
   # otherwise `Err(Missing)`.
-  get : (Map(k, v), k) -> Result(v, [Missing]) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  get : (Map(k, v), k) -> Result(v, [Missing]) where Hashable(k)
   get(Map({seed, slots, index, *}), key) -> (
     position = slot_of(seed, index, slots, key)?
     value_at(slots, position)
@@ -61,22 +60,16 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # The value bound to `key` in `map`, and `fallback` where it is absent —
   # `get` for a caller that has an answer for a missing key, as `List.get_or`
   # is for a position past the end.
-  get_or : (Map(k, v), k, v) -> v where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  get_or : (Map(k, v), k, v) -> v where Hashable(k)
   get_or(map, key, fallback) -> get(map, key).ok_or(fallback)
 
   # Whether `key` is bound in `map`.
-  contains : (Map(k, v), k) -> Bool where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  contains : (Map(k, v), k) -> Bool where Hashable(k)
   contains(map, key) -> get(map, key).is_ok()
 
   # `map` with `value` bound to `key`, replacing any existing binding. An
   # existing key keeps its place in insertion order and takes the new value.
-  insert : (Map(k, v), k, v) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  insert : (Map(k, v), k, v) -> Map(k, v) where Hashable(k)
   insert(Map({seed, slots, index, size}), key, value) ->
     replaced(slot_of(seed, index, slots, key), seed, slots, index, size, key, value)
 
@@ -84,23 +77,17 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # when `key` is absent, as `remove` is. Reading, changing, and writing back
   # is the common shape of a keyed edit, and doing it in one step means no
   # caller has to name a value for a key that is not there.
-  update : (Map(k, v), k, v -> v) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  update : (Map(k, v), k, v -> v) -> Map(k, v) where Hashable(k)
   update(map, key, change) -> changed(map, key, change, get(map, key))
 
   # `map` with `key`'s value replaced by `change` applied to it, or to
   # `missing` where `key` is absent, as Python's `defaultdict` updates:
   # `counts.update_or(word, 0, |count| count + 1)`.
-  update_or : (Map(k, v), k, v, v -> v) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  update_or : (Map(k, v), k, v, v -> v) -> Map(k, v) where Hashable(k)
   update_or(map, key, missing, change) -> insert(map, key, change(get_or(map, key, missing)))
 
   # `map` without any binding for `key`; unchanged when `key` is absent.
-  remove : (Map(k, v), k) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  remove : (Map(k, v), k) -> Map(k, v) where Hashable(k)
   remove(map, key) -> (
     Map({seed, slots, index, size}) = map
     slot_of(seed, index, slots, key) is Ok(position) else return map
@@ -122,8 +109,8 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # The map as the call building it is written, its entries in insertion
   # order: `Map.of_list([("a", 1), ("b", 2)])`.
   to_str : Map(k, v) -> Str where
-    k.to_str : k -> Str,
-    v.to_str : v -> Str
+    Printable(k),
+    Printable(v)
   to_str(map) -> "Map.of_list(${to_list(map)})"
 
   # The keys of `map` in insertion order.
@@ -151,9 +138,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
 
   # The map binding each entry of `entries`, later entries winning as
   # repeated `insert` calls would.
-  of_list : List((k, v)) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  of_list : List((k, v)) -> Map(k, v) where Hashable(k)
   of_list(entries) -> entries.fold(empty, |built, (key, value)| insert(built, key, value))
 
   # The elements of `values` gathered by `key`: each element in the group
@@ -167,9 +152,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # keys there are. Each group is built by prepending and turned round at
   # the end, so gathering does no work proportional to what a group already
   # holds.
-  grouped : (List(v), v -> k) -> Map(k, List(v)) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  grouped : (List(v), v -> k) -> Map(k, List(v)) where Hashable(k)
   grouped(values, key) -> (
     gathered = values.fold(empty, |table, value| update_or(table, key(value), [], |group| [value, *group]))
     map_values(gathered, |group| group.reverse())
@@ -178,27 +161,22 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # How many times each of `values` occurs, as Python's `Counter` counts:
   # each value a key, in the order it first appears, bound to its count. A
   # value that never occurs is missing, so `get_or(value, 0)` reads it.
-  counted : List(k) -> Map(k, Nat) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
+  counted : List(k) -> Map(k, Nat) where Hashable(k)
   counted(values) -> values.fold(empty, |tally, value| update_or(tally, value, 0, |count| count + 1))
 
   # Whether `map` and `other` bind the same keys to equal values, in
   # whatever order either was built: every entry of one is found in the
   # other, and the sizes agree. Linear in the size.
   equals : (Map(k, v), Map(k, v)) -> Bool where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool,
-    v.equals : (v, v) -> Bool
+    Hashable(k),
+    Equatable(v)
   equals(map, other) ->
     len(map) == len(other) & to_list(map).all(|(key, value)| get(other, key) == Ok(value))
 )
 
 # The read `update` already made, spent: a hit writes the changed value back
 # and a miss answers the map it was given.
-changed : (Map(k, v), k, v -> v, Result(v, [Missing])) -> Map(k, v) where
-  k.hash_into : (k, Mixer) -> Mixer,
-  k.equals : (k, k) -> Bool
+changed : (Map(k, v), k, v -> v, Result(v, [Missing])) -> Map(k, v) where Hashable(k)
 changed(map, key, change, Ok(value)) -> Map.insert(map, key, change(value))
 changed(map, _, _, _) -> map
 
@@ -211,22 +189,19 @@ bucket_of(digest, room) -> digest.to_nat() % room
 
 # The position of `key`'s slot: `Ok` when a bucket entry carries its digest
 # and the slot there holds an equal key; otherwise `Err(Missing)`.
-slot_of : (U64, List(List((U64, Nat))), List(Slot(k, v)), k) -> Result(Nat, [Missing]) where
-  k.hash_into : (k, Mixer) -> Mixer,
-  k.equals : (k, k) -> Bool
+slot_of : (U64, List(List((U64, Nat))), List(Slot(k, v)), k) -> Result(Nat, [Missing]) where Hashable(k)
 slot_of(seed, index, slots, key) -> (
   digest = digest_of(seed, key)
   position_in(index.get_or(bucket_of(digest, index.len()), []), digest, slots, key)
 )
 
-position_in : (List((U64, Nat)), U64, List(Slot(k, v)), k) -> Result(Nat, [Missing]) where
-  k.equals : (k, k) -> Bool
+position_in : (List((U64, Nat)), U64, List(Slot(k, v)), k) -> Result(Nat, [Missing]) where Equatable(k)
 position_in([], _, _, _) -> Err(Missing)
 position_in([(found, position), *_], digest, slots, key)
   if found == digest & holds(slots.get_or(position, Removed), key) -> Ok(position)
 position_in([_, *rest], digest, slots, key) -> position_in(rest, digest, slots, key)
 
-holds : (Slot(k, v), k) -> Bool where k.equals : (k, k) -> Bool
+holds : (Slot(k, v), k) -> Bool where Equatable(k)
 holds(Filled(found, _), key) -> found == key
 holds(Removed, _) -> False
 

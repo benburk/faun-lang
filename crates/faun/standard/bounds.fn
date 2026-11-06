@@ -1,0 +1,21 @@
+# The bounds a type's own `equals`, `cmp`, `to_str` and `hash_into` meet,
+# each named once, so a signature asks for one by name: `where Ordered(k)`
+# rather than `where k.cmp : (k, k) -> Order`. Each is an alias, so a type
+# meets one by having the member, and nothing declares that it does.
+
+import order {Order}
+import mixer {Mixer}
+
+export {Equatable, Ordered, Printable, Hashable}
+
+Equatable(a) = where a.equals : (a, a) -> Bool
+
+Ordered(a) = where a.cmp : (a, a) -> Order
+
+Printable(a) = where a.to_str : a -> Str
+
+# What a `Map`'s key or a `Set`'s member asks: equality, and feeding the
+# map's own hasher.
+Hashable(a) = where
+  a.equals : (a, a) -> Bool,
+  a.hash_into : (a, Mixer) -> Mixer
