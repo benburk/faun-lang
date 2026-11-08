@@ -1,0 +1,13 @@
+import std.host {Host}
+
+# An `if` on a line of its own goes on with nothing only where each branch
+# answers `{}`; here one answers a number, which nothing keeps.
+next : Nat -> Nat
+next(n) -> (
+  x = n
+  if n > 3 then (x = 1) else x + 1
+  x
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

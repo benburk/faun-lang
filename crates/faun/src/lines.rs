@@ -460,12 +460,31 @@ fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, Syntax
     Ok(Body { bindings, result })
 }
 
+/// Whether a line's value is one that goes on with nothing: arms, or an
+/// `if` whose branches each answer `{}`, as a block of bindings does.
+fn goes_on(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Match(..) => true,
+        ExprKind::If(_, yes, no) => answers_nothing(yes) && answers_nothing(no),
+        _ => false,
+    }
+}
+
+/// Whether a branch answers `{}`: written so, or a block whose answer is.
+fn answers_nothing(branch: &Expr) -> bool {
+    match &branch.kind {
+        ExprKind::Record(fields) => fields.is_empty(),
+        ExprKind::Block(body) => answers_nothing(&body.result),
+        _ => goes_on(branch),
+    }
+}
+
 /// A block's line before its last as a binding: a value on a line of its
 /// own is thrown away, but arms there go on with nothing, so each that does
-/// not leave answers `{}`.
+/// not leave answers `{}`, and so does an `if` whose branches only bind.
 fn binding(line: Statement, source: &str) -> Result<Binding, SyntaxError> {
     match line {
-        Statement::Value(value) if matches!(value.kind, ExprKind::Match(..)) => Ok(Binding {
+        Statement::Value(value) if goes_on(&value) => Ok(Binding {
             pattern: Pattern::Record {
                 span: value.span,
                 fields: Vec::new(),

@@ -1,0 +1,7 @@
+error: this value is worked out and then thrown away
+ --> an_if_line_whose_branch_answers_a_value_throws_it_away.fn:8:3
+  |
+8 |   if n > 3 then (x = 1) else x + 1
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unused
+  |
+  = help: remove the line, or bind the value to a name if you need it

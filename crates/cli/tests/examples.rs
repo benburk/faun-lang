@@ -548,7 +548,7 @@ fn is_inner_module(path: &Path) -> bool {
 fn the_syntax_examples_hold() {
     let (failed, count) = support::test_file(&example("syntax/main.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 166);
+    assert_eq!(count, 167);
 }
 
 /// The n-body benchmark's energies, after nought, one and ten steps, are

@@ -185,6 +185,22 @@ tally(xs, strict) -> (
 
 expect tally([1, 2], True) == (3, 6) & tally([1, 2], False) == (2, 3)
 
+# An `if` on a line of its own whose branches only bind goes on with
+# nothing, as arms there do; one whose branch answers a value is a value
+# thrown away, and refused.
+clamped : (Nat, Nat) -> Nat
+clamped(n, limit) -> (
+  kept = n
+  if n > limit then (kept = limit) else {}
+  if kept == 0 then (
+    note = 1
+    kept = note
+  ) else (kept = kept + 0)
+  kept
+)
+
+expect clamped(9, 5) == 5 & clamped(3, 5) == 3 & clamped(0, 5) == 1
+
 # `if condition return …`, a block's line, leaves where its condition holds,
 # what the condition bound seen by the leave alone; the lines after it go on
 # where it fails.
