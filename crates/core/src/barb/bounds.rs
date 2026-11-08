@@ -54,8 +54,11 @@ fn reaches(program: &Program, held: Bounds, spine: Shape, ctor: CtorId) -> bool 
 /// past this a growing bound is answered with no bound at all.
 const WIDEN: usize = 8;
 
-/// And how many times it goes round at all. Past widening a bound only ever
-/// settles, so this is the room that takes rather than a guess.
+/// And how many times it goes round at all, beyond one for each definition.
+/// Past widening a bound only ever settles, but what a definition learns
+/// reaches a caller walked before it only on the next round, so a chain of
+/// calls takes a round for each link: the room that takes grows with the
+/// program, and this is what is left over for settling.
 const ROUNDS: usize = 32;
 
 /// How many times the walk goes round afterwards to take back what widening
@@ -82,7 +85,7 @@ pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assu
     let mut held = Propagation::start(program, assumed, &counters);
 
     let mut settled = false;
-    for round in 0..ROUNDS {
+    for round in 0..ROUNDS + count {
         let mut again = false;
         for at in 0..count {
             again |= once(

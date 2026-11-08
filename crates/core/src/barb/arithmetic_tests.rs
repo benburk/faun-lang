@@ -769,6 +769,32 @@ fn a_long_countdown_settles_with_nought_as_its_least() {
     assert_eq!(facts.answers(main), Bounds::at(0));
 }
 
+/// A call chain walked against the order its definitions are declared in
+/// carries what the deepest answers up one call each time round, so a chain
+/// longer than any fixed number of rounds still settles, rather than
+/// forgetting everything the walk knew.
+#[test]
+fn a_call_chain_longer_than_the_rounds_still_settles() {
+    let mut program = Program::default();
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let (zero, succ) = (program.ctor_at(nat, 0), program.ctor_at(nat, 1));
+    let main = program.declare("main", &[], nat);
+    let chain: Vec<FnId> = (0..48)
+        .map(|at| program.declare(&format!("link{at}"), &[], nat))
+        .collect();
+    program.define(main, |b, _| b.call(chain[0], &[]));
+    for pair in chain.windows(2) {
+        program.define(pair[0], |b, _| b.call(pair[1], &[]));
+    }
+    program.define(chain[chain.len() - 1], |b, _| {
+        let nought = b.con(zero, &[]);
+        b.con(succ, &[nought])
+    });
+    program.set_entry(main);
+    assert_eq!(program.analyze().answers(main), Bounds::at(1));
+}
+
 /// A count with no last step is given no greatest bound, but its remainder
 /// by 256 is still below 256, and so is what that remainder is handed to:
 /// widening the count must not widen them with it.
