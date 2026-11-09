@@ -238,6 +238,13 @@ impl Facts {
             .copied()
             .unwrap_or(Bounds::ANY)
     }
+    /// A definition the range walk found still changing when it stopped
+    /// going round: where there is one, the walk forgot every bound, and
+    /// every number is held as though it could be any size.
+    #[must_use]
+    pub const fn unsettled(&self) -> Option<FnId> {
+        self.ranges.unsettled
+    }
     #[must_use]
     pub fn answers(&self, id: FnId) -> Bounds {
         self.ranges

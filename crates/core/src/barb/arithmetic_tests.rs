@@ -792,7 +792,9 @@ fn a_call_chain_longer_than_the_rounds_still_settles() {
         b.con(succ, &[nought])
     });
     program.set_entry(main);
-    assert_eq!(program.analyze().answers(main), Bounds::at(1));
+    let facts = program.analyze();
+    assert_eq!(facts.unsettled(), None);
+    assert_eq!(facts.answers(main), Bounds::at(1));
 }
 
 /// A count with no last step is given no greatest bound, but its remainder

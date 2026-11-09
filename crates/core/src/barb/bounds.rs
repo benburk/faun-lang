@@ -77,6 +77,9 @@ pub(super) struct Ranges {
     pub answers: Vec<Bounds>,
     /// What each constructor field holds, by its place in the field pool.
     pub fields: Vec<Bounds>,
+    /// A definition still changing when the walk stopped going round, where
+    /// it stopped before settling and so forgot every bound.
+    pub unsettled: Option<FnId>,
 }
 
 pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assumed) -> Ranges {
@@ -84,20 +87,21 @@ pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assu
     let counters = super::counters::counters(program, &recognised.operations);
     let mut held = Propagation::start(program, assumed, &counters);
 
-    let mut settled = false;
+    let mut unsettled = None;
     for round in 0..ROUNDS + count {
-        let mut again = false;
+        unsettled = None;
         for at in 0..count {
-            again |= once(
+            if once(
                 program,
                 recognised,
                 assumed,
                 &mut held,
                 (FnId::at(at), round),
-            );
+            ) {
+                unsettled = Some(FnId::at(at));
+            }
         }
-        if !again {
-            settled = true;
+        if unsettled.is_none() {
             break;
         }
     }
@@ -107,7 +111,7 @@ pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assu
     // fewer bits than the value has. Widening settles what recursion leaves
     // growing, so reaching here means something grew in a way widening does
     // not reach -- and then nothing here is known.
-    if !settled {
+    if unsettled.is_some() {
         held.forget();
     }
 
@@ -123,7 +127,10 @@ pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assu
         held = next;
     }
 
-    finish(program, assumed, held)
+    Ranges {
+        unsettled,
+        ..finish(program, assumed, held)
+    }
 }
 
 /// What the tier lowering a program assumes of values that come from
@@ -264,6 +271,7 @@ fn finish(program: &Program, assumed: &Assumed, held: Propagation) -> Ranges {
         takes,
         answers: held.results.into_iter().map(anything).collect(),
         fields,
+        unsettled: None,
     }
 }
 
