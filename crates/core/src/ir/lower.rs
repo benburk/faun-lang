@@ -728,7 +728,12 @@ fn provided(wanted: &Routine, handed: &[Handed], returns: &[Class]) -> Result<()
 /// The most leaves a product or scalar-tagged sum holds flat. Wider
 /// aggregates remain cells to bound copying and register pressure; targets
 /// with smaller calling conventions pack the leaves at their boundaries.
-const FLAT_LEAVES: usize = 16;
+///
+/// A step of a machine emulator answering its state, its ports and what
+/// happened is some twenty leaves: held flat, rather than as a cell made and
+/// freed every step, it runs two and a half times as fast, and no benchmark
+/// of `just bench` changes by an instruction or a byte.
+const FLAT_LEAVES: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Storage {

@@ -144,7 +144,7 @@ built into it anywhere in the program, so a number only ever built small is a
 small fixed width, and one grown round a recursion is a `Natural`. A tag with
 no better bound is a `Word`, and a sum or sequence is a `Cell`. Cell fields
 take their classes the same way. Two kinds of product
-remain cells: one with more than sixteen leaves, which is cheaper shared than
+remain cells: one with more than thirty-two leaves, which is cheaper shared than
 copied, and one reaching itself through products alone, which has no values.
 Host routines read scalars and byte strings, so a product handed to one is
 refused.

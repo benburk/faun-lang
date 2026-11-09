@@ -549,7 +549,7 @@ one recursive field; its element may be any type. Names and constructor order do
 not participate. Machine representation selection uses this exhaustive view
 instead of rediscovering products, naturals, and byte spines independently.
 Units are erased, wrappers remain transparent, naturals and enumerations are
-scalar, products of at most sixteen leaves are held flat as their fields'
+scalar, products of at most thirty-two leaves are held flat as their fields'
 values, sequences are a buffer and a length, and everything else carrying
 fields -- wider products and general sums -- becomes a managed cell. `Shape` is the constant codec's own
 view of an encoding and answers a different question; representation selection
