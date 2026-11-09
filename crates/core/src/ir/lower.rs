@@ -371,7 +371,18 @@ fn declare<'a>(
                     return Err(format!("nothing answers for `{name}`"));
                 };
                 let handed = demand.handed(id, wanted)?;
-                provided(wanted, &handed, &returns)?;
+                provided(wanted, &handed, &returns).map_err(|error| {
+                    let culprits = unbounded_callers(program, facts, id);
+                    if culprits.is_empty() {
+                        error
+                    } else {
+                        let verb = if culprits.len() == 1 { "hands" } else { "hand" };
+                        format!(
+                            "{error}\nnote: no bound was found for what {} {verb} it",
+                            culprits.join(", ")
+                        )
+                    }
+                })?;
                 if wanted.comes_back() == uninhabited(program, function.result) {
                     return Err(format!(
                         "`{outside}` disagrees with `{name}` about returning"
@@ -568,6 +579,67 @@ fn calls_of(program: &barb::Program, body: barb::Body, id: barb::FnId) -> Vec<ba
         }
     }
     found
+}
+
+/// The definitions calling `callee` with an argument no bound was found
+/// for, by name and in the order they are declared: where a routine is
+/// refused a number it may not hold, the calls to look at. Each local is
+/// bounded as the facts bound it: a parameter by what its definition is
+/// handed, a binding by what it answers, and an arm's field by the field.
+fn unbounded_callers(
+    program: &barb::Program,
+    facts: &barb::Facts,
+    callee: barb::FnId,
+) -> Vec<String> {
+    let mut callers = Vec::new();
+    for (at, function) in program.functions().iter().enumerate() {
+        let Some(body) = function.body() else {
+            continue;
+        };
+        let locals = facts.takes(barb::FnId::at(at)).to_vec();
+        if hands_unbounded(program, facts, callee, body, locals) {
+            callers.push(format!("`{}`", program.name(function.name)));
+        }
+    }
+    callers
+}
+
+/// Whether `body`, its locals bounded by `locals`, calls `callee` with an
+/// argument that has no greatest bound.
+fn hands_unbounded(
+    program: &barb::Program,
+    facts: &barb::Facts,
+    callee: barb::FnId,
+    body: barb::Body,
+    mut locals: Vec<barb::Bounds>,
+) -> bool {
+    let unbounded = |locals: &[barb::Bounds], args| {
+        program.atoms(args).iter().any(|atom| {
+            locals
+                .get(atom.0.index())
+                .is_none_or(|bounds| bounds.high.is_none())
+        })
+    };
+    for &expr in program.bindings(body.bindings).iter().chain([&body.tail]) {
+        match program.expr(expr) {
+            barb::Expr::Call(id, args) if id == callee && unbounded(&locals, args) => return true,
+            barb::Expr::Match(_, arms) => {
+                for arm in program.arms(arms) {
+                    let mut inner = locals.clone();
+                    inner.extend(
+                        (0..program.ctor(arm.ctor).fields.len())
+                            .map(|field| facts.field(program, arm.ctor, field)),
+                    );
+                    if hands_unbounded(program, facts, callee, arm.body, inner) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        locals.push(facts.held(expr));
+    }
+    false
 }
 
 /// Whether some path through `body` answers without calling `id` again.

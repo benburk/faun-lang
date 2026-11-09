@@ -727,6 +727,10 @@ fn source_host_arguments_are_not_implicitly_truncated() {
         error.contains("host arguments must be proven to fit"),
         "{error}"
     );
+    assert!(
+        error.contains("no bound was found for what `main!` hands it"),
+        "{error}"
+    );
 
     // A status known to be small fits even a narrow word.
     let routines = crate::platform::Routines::builtin().with_word(16);
