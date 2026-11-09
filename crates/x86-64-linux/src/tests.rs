@@ -157,7 +157,8 @@ fn an_early_way_out_saves_nothing() {
     use faun_core::targets::Favour;
     let program = TARGET.prepare(&faun_core::programs::recurses()).unwrap();
     let first = |favour| {
-        let allocated = crate::selected::select_and_allocate_favouring(&program, favour).unwrap();
+        let allocated =
+            crate::selected::select_and_allocate_favouring(&program, favour, false).unwrap();
         let (_, start) = allocated
             .functions()
             .find(|&(function, _)| function != program.entry())
@@ -166,4 +167,80 @@ fn an_early_way_out_saves_nothing() {
     };
     assert!(!matches!(first(Favour::Speed), Inst::OpenFrame { .. }));
     assert!(matches!(first(Favour::Size), Inst::OpenFrame { .. }));
+}
+
+/// Written with its symbols, a program is one to profile: every function
+/// but the entry pushes `rbp` and points it at its frame where it starts,
+/// and gives it back before each way out. The entry pushes nothing, Linux
+/// starting it with `rbp` nought, which ends the chain.
+#[test]
+fn a_program_written_with_symbols_chains_its_frames() {
+    use crate::machine::{Inst, Reg, RegisterWidth};
+    use faun_core::targets::Favour;
+    let program = TARGET.prepare(&faun_core::programs::recurses()).unwrap();
+    for favour in [Favour::Speed, Favour::Size] {
+        let allocated =
+            crate::selected::select_and_allocate_favouring(&program, favour, true).unwrap();
+        let code = allocated.instructions();
+        for (function, start) in allocated.functions() {
+            if function == program.entry() {
+                assert_ne!(code[start], Inst::PushRegister { src: Reg::Rbp });
+            } else {
+                assert_eq!(
+                    code[start..start + 2],
+                    [
+                        Inst::PushRegister { src: Reg::Rbp },
+                        Inst::Move {
+                            dst: Reg::Rbp,
+                            src: Reg::Rsp,
+                            width: RegisterWidth::Word,
+                        },
+                    ]
+                );
+            }
+        }
+        for (at, inst) in code.iter().enumerate() {
+            if *inst == Inst::Return {
+                assert_eq!(code[at - 1], Inst::Pop { dst: Reg::Rbp }, "{favour:?}");
+            }
+        }
+    }
+}
+
+/// And it answers what it answers without them, its frames chained or not:
+/// a function reading arguments its caller left on the stack finds them a
+/// word further up.
+#[test]
+fn chaining_frames_changes_no_answer() {
+    use faun_core::targets::{Favour, SymbolTable};
+    let mut programs = vec![
+        faun_core::programs::recurses(),
+        faun_core::programs::values_survive_a_call(),
+        faun_core::programs::calls_a_function(),
+    ];
+    programs.extend(
+        faun_core::programs::printing()
+            .into_iter()
+            .map(|(_, program, _)| program),
+    );
+    for program in programs {
+        let program = TARGET.prepare(&program).unwrap();
+        let run = |symbols| {
+            let dir = std::env::temp_dir().join(format!(
+                "faun-frames-{}-{symbols:?}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let image = TARGET.emit_with(&program, Favour::Speed, symbols);
+            let path = TARGET.write(&image, &dir.join("program")).unwrap();
+            let output = std::process::Command::new(&path).output().unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            (output.status.code(), output.stdout)
+        };
+        assert_eq!(run(SymbolTable::Omitted), run(SymbolTable::Written));
+    }
 }

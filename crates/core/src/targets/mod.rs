@@ -87,7 +87,9 @@ pub trait Target: fmt::Debug {
 
     /// The image [`Self::emit`] makes, its code favouring speed or size
     /// where they pull apart, and with [`SymbolTable::Written`] a symbol
-    /// naming each function, for a profiler or a disassembler. A target
+    /// naming each function, for a profiler or a disassembler: a target
+    /// that can also keeps a frame pointer in each function then, so a
+    /// profiler can walk the stack. A target
     /// with no such choices, writing no symbols, makes the same image
     /// whichever is asked; [`Self::emit`] favours speed.
     fn emit_with(&self, program: &Program, favour: Favour, symbols: SymbolTable) -> Vec<u8> {
@@ -393,9 +395,11 @@ fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether an image names its functions. Nothing a program does reads the
-/// names, so they are left out unless asked for, and an image without them
-/// is as small as it can be.
+/// Whether an image names its functions, and so is one to profile.
+///
+/// A target that can also chains each function's frame then. Nothing a
+/// program does reads the names, so they are left out unless asked for, and
+/// an image without them is as small as it can be.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SymbolTable {
     #[default]

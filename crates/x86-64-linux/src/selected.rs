@@ -1381,16 +1381,17 @@ struct Selector<'a> {
 
 #[cfg(test)]
 pub(crate) fn select_and_allocate(source: &Program) -> Result<crate::machine::Allocated, String> {
-    select_and_allocate_favouring(source, faun_core::targets::Favour::Speed)
+    select_and_allocate_favouring(source, faun_core::targets::Favour::Speed, false)
 }
 
 /// [`select_and_allocate`], favouring speed or size where they pull apart.
 pub(crate) fn select_and_allocate_favouring(
     source: &Program,
     favour: faun_core::targets::Favour,
+    frame_pointers: bool,
 ) -> Result<crate::machine::Allocated, String> {
     let selected = select(source)?;
-    register_allocate::allocate(&selected, source.entry(), favour)
+    register_allocate::allocate(&selected, source.entry(), favour, frame_pointers)
 }
 
 #[expect(

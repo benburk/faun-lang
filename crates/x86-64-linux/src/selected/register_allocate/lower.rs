@@ -76,9 +76,11 @@ pub(super) fn lower(
     selected: &Selected,
     liveness: &Liveness,
     allocation: &Allocation,
-    (entry, favour): (FunctionId, Favour),
+    (entry, favour, frame_pointers): (FunctionId, Favour, bool),
 ) -> Result<Allocated, String> {
-    Lowering::new(selected, liveness, allocation).run(entry, favour)
+    let mut lowering = Lowering::new(selected, liveness, allocation);
+    lowering.frame_pointers = frame_pointers;
+    lowering.run(entry, favour)
 }
 
 struct Lowering<'a> {
@@ -90,6 +92,12 @@ struct Lowering<'a> {
     function_labels: Vec<Option<Label>>,
     known: [Option<Known>; 32],
     argument_count_in_rbx: bool,
+    /// Whether each function but the entry pushes `rbp` where it starts and
+    /// points it at what it pushed, so a profiler can walk the stack from
+    /// frame to frame. The entry, which never returns, pushes nothing: Linux
+    /// starts a program with `rbp` nought, which ends the chain, and the
+    /// entry never holds anything else there.
+    frame_pointers: bool,
     /// How many bytes the program's start leaves on the stack above the
     /// entry's frame, below the count of arguments.
     started: u32,
@@ -181,6 +189,7 @@ impl<'a> Lowering<'a> {
             function_labels,
             known: [None; 32],
             argument_count_in_rbx: false,
+            frame_pointers: false,
             started: 0,
             pending_condition: None,
             exit_epilogue: None,
@@ -431,6 +440,16 @@ impl<'a> Lowering<'a> {
         if function == entry && self.argument_count_in_rbx {
             self.asm.load_stack(Reg::Rbx, self.started);
         }
+        if self.frame_pointers && function != entry {
+            self.asm.push_reg(Reg::Rbp);
+            self.asm.mov_reg(Reg::Rbp, Reg::Rsp, RegisterWidth::Word);
+        }
+    }
+
+    /// Words between a function's frame and the arguments its caller left:
+    /// the return address, and the caller's `rbp` where frames are chained.
+    const fn above_frame(&self) -> u32 {
+        if self.frame_pointers { 2 } else { 1 }
     }
 
     fn configure_program(&mut self, entry: FunctionId) {
@@ -618,9 +637,12 @@ impl<'a> Lowering<'a> {
             let words = u64::from(frame.outgoing)
                 + u64::from(self.allocation.spill_slots[owner])
                 + u64::try_from(self.saved[owner].len()).expect("a few registers");
-            // The return address is one word above the local frame. Check
-            // the incoming area too, not just the sub rsp immediate.
-            if (words + 1 + u64::from(incoming[owner])) * 8 > i32::MAX.cast_unsigned().into() {
+            // The return address, and a chained frame pointer, are above the
+            // local frame. Check the incoming area too, not just the sub rsp
+            // immediate.
+            if (words + u64::from(self.above_frame()) + u64::from(incoming[owner])) * 8
+                > i32::MAX.cast_unsigned().into()
+            {
                 return Err("x86 stack frame is too large".to_owned());
             }
             frame.words = u32::try_from(words).expect("a checked frame");
@@ -1035,7 +1057,13 @@ impl<'a> Lowering<'a> {
             ) => {
                 let owner = self.owner_at(points.late);
                 let incoming = matches!(inst.opcode, Opcode::LoadIncoming | Opcode::StoreIncoming);
-                let slot = FrameSlot::at(slot + if incoming { self.frame(owner) + 1 } else { 0 });
+                let slot = FrameSlot::at(
+                    slot + if incoming {
+                        self.frame(owner) + self.above_frame()
+                    } else {
+                        0
+                    },
+                );
                 if matches!(inst.opcode, Opcode::LoadIncoming | Opcode::LoadOutgoing) {
                     self.asm.load_slot(result()?, slot);
                 } else {
@@ -1368,6 +1396,9 @@ impl<'a> Lowering<'a> {
                     }
                     if self.opened[layout.block.index()] {
                         self.close_frame(owner);
+                    }
+                    if self.frame_pointers {
+                        self.asm.pop(Reg::Rbp);
                     }
                     match tail {
                         Some(callee) => self.asm.jump(callee),

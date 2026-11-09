@@ -93,7 +93,10 @@ impl Target for X86_64Linux {
     }
 
     fn emit_with(&self, program: &Program, favour: Favour, symbols: SymbolTable) -> Vec<u8> {
-        let allocated = selected::select_and_allocate_favouring(program, favour)
+        // A program written with its symbols is one to profile, so each
+        // function keeps a frame pointer a profiler can walk the stack by.
+        let frame_pointers = symbols == SymbolTable::Written;
+        let allocated = selected::select_and_allocate_favouring(program, favour, frame_pointers)
             .expect("accepted machine IR has a valid x86 selected allocation");
         let code = encode::encode(&allocated);
         elf::image(&code, program, symbols)

@@ -86,7 +86,7 @@ fn build() -> impl Parser<Command> {
         .switch()
         .map(|small| if small { Favour::Size } else { Favour::Speed });
     let symbols = long("symbols")
-        .help("Name each function in the image, for a profiler or a disassembler")
+        .help("Name each function in the image and chain their frames, for a profiler or a disassembler")
         .switch()
         .map(|named| {
             if named {

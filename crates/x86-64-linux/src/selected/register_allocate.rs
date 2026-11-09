@@ -57,10 +57,16 @@ pub(super) fn allocate(
     selected: &Selected,
     entry: FunctionId,
     favour: faun_core::targets::Favour,
+    frame_pointers: bool,
 ) -> Result<Allocated, String> {
-    let code = selected.code(entry);
+    let code = selected.code(entry, frame_pointers);
     let (liveness, allocation) = registers::allocate(&code)?;
-    lower::lower(selected, &liveness, &allocation, (entry, favour))
+    lower::lower(
+        selected,
+        &liveness,
+        &allocation,
+        (entry, favour, frame_pointers),
+    )
 }
 
 fn set(held: RegSet) -> codegen::RegSet {
@@ -71,7 +77,8 @@ impl Selected {
     /// What the allocator is handed: the same pools, with each instruction's
     /// constraints read off its opcode, and the logical entry exiting with
     /// its status in `rdi` where every other function answers in `rax`.
-    fn code(&self, entry: FunctionId) -> Code<Reg> {
+    /// Keeping frame pointers, `rbp` holds the frame's and nothing else.
+    fn code(&self, entry: FunctionId, frame_pointers: bool) -> Code<Reg> {
         let mut specs = Vec::new();
         let instructions = self
             .instructions
@@ -106,7 +113,10 @@ impl Selected {
             block_param_specs: self.block_param_specs.clone(),
             blocks,
             functions,
-            registers: REGISTERS.to_vec(),
+            registers: REGISTERS
+                .into_iter()
+                .filter(|&reg| !(frame_pointers && reg == Reg::Rbp))
+                .collect(),
             copies: Some(COPY_SCRATCH),
         }
     }
@@ -168,7 +178,7 @@ mod tests {
     fn loops_produce_segmented_live_ranges_and_edge_costs() {
         let program = faun_core::programs::carries_a_total_into_an_arm(3);
         let selected = select(&program).unwrap();
-        let (_, allocation) = registers::allocate(&selected.code(program.entry())).unwrap();
+        let (_, allocation) = registers::allocate(&selected.code(program.entry(), false)).unwrap();
         assert!(!allocation.segments.is_empty());
         assert!(allocation.edges > 0);
     }
@@ -189,7 +199,7 @@ mod tests {
             .iter()
             .position(|inst| inst.opcode == super::super::Opcode::Divide)
             .unwrap();
-        let (_, allocation) = registers::allocate(&selected.code(program.entry())).unwrap();
+        let (_, allocation) = registers::allocate(&selected.code(program.entry(), false)).unwrap();
         assert_eq!(
             allocation.operand_locations[divide],
             [Location::Register(Reg::Rax), Location::Register(Reg::Rcx)]
@@ -213,7 +223,7 @@ mod tests {
             builder.ret(&values);
         });
         let selected = select(&program).unwrap();
-        let (_, allocation) = registers::allocate(&selected.code(program.entry())).unwrap();
+        let (_, allocation) = registers::allocate(&selected.code(program.entry(), false)).unwrap();
         assert!(
             allocation
                 .segments
@@ -247,7 +257,7 @@ mod tests {
             builder.ret(&[sum]);
         });
         let selected = select(&program).unwrap();
-        let (_, allocation) = registers::allocate(&selected.code(program.entry())).unwrap();
+        let (_, allocation) = registers::allocate(&selected.code(program.entry(), false)).unwrap();
         assert!(allocation.transitions.iter().any(|transition| {
             matches!(transition.from, Location::Register(_))
                 && matches!(transition.to, Location::Spill(_))

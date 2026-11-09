@@ -395,7 +395,8 @@ mod tests {
 
     /// Symbols, asked for, follow everything that is loaded: the segment
     /// and what it holds are as they were, and the header points at five
-    /// sections naming the program's functions.
+    /// sections naming the program's functions. (A program that calls
+    /// functions also chains their frames, which this one does not.)
     #[test]
     fn symbols_follow_what_is_loaded() {
         let plain = hello();
