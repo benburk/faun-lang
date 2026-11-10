@@ -1,0 +1,7 @@
+error: `last_two` does not cover every case
+ --> a_list_taken_apart_from_its_end_names_the_end_it_misses.fn:6:1
+  |
+6 | last_two([]) -> 0
+  | ^^^^^^^^^^^^^^^^^ no clause matches `last_two([False])`
+  |
+  = help: add a clause matching `last_two([False])`

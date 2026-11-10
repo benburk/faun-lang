@@ -100,9 +100,12 @@ first_over(xs, k) -> (
 A definition's clauses, and the arms of an `is`, must cover every value
 they take apart. A clause or arm with a guard covers nothing, since the
 guard may fail; so does any pattern that is a test of equality or order:
-a range, a string, a numeral of anything but `Nat` or `Int`, a list's end
-that tests its elements, and a name written twice. A missing case is
-refused with a witness:
+a range, a string, a numeral of anything but `Nat` or `Int`, and a name
+written twice. A list's end that tests its elements, `[*rest, Leave(n)]`,
+covers where every list pattern beside it reads the same from the end, as
+`[]`, `[a, b]` and `[*_, x]` do: those are judged as the list turned round.
+Beside a front that tests, `[Enter(n), *rest]`, it covers nothing. A
+missing case is refused with a witness:
 
 ```text
 error: this `is` does not cover every case

@@ -1,0 +1,11 @@
+import std.host {Host}
+
+# Read from its end, a list of one `False` matches no clause, and the
+# witness is written from the end too.
+last_two : List(Bool) -> Nat
+last_two([]) -> 0
+last_two([*_, True]) -> 1
+last_two([*_, _, False]) -> 2
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

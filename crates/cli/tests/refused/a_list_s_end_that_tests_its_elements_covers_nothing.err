@@ -1,7 +1,0 @@
-error: `last_zero` does not cover every case
- --> a_list_s_end_that_tests_its_elements_covers_nothing.fn:4:1
-  |
-4 | last_zero([*, 0]) -> 1
-  | ^^^^^^^^^^^^^^^^^^^^^^ no clause matches `last_zero([_, *_])`
-  |
-  = help: add a clause matching `last_zero([_, *_])`

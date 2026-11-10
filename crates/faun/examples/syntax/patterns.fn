@@ -216,3 +216,14 @@ doubled_head : List(Nat) -> Bool
 doubled_head(xs) -> xs is [a, a, *_]
 
 expect pair_of(3, [3, 3, 1]) & !pair_of(3, [3, 1]) & doubled_head([2, 2]) & !doubled_head([2, 1])
+
+# A list taken apart from its end is covered as one taken from its front:
+# a stack grows and shrinks at its end, so a walk pops it there.
+Step : [Enter(Nat), Leave(Nat)]
+
+left : List(Step) -> List(Nat)
+left([]) -> []
+left([*steps, Leave(node)]) -> [node, *left(steps)]
+left([*steps, Enter(_)]) -> left(steps)
+
+expect left([Enter(1), Leave(1), Enter(2), Leave(2)]) == [2, 1]

@@ -8,7 +8,10 @@
 //! exactly when a row of wildcards after them would match nothing, and when
 //! it would, what it matches is an example the diagnostic names.
 //!
-//! A clause with a guard covers nothing here, since the guard may fail.
+//! A clause with a guard covers nothing here, since the guard may fail. A
+//! place whose patterns take a list apart from its end, as a stack popped
+//! from its end is, is judged as that list turned round, where every list
+//! pattern there reads the same from either end.
 //! Numerals match as the `Nat` and `Int` constructors they stand for, so
 //! `0` and `Succ(n)` cover a `Nat`; numerals alone never do. A column whose
 //! constructors belong to no declared type is not judged.
@@ -59,14 +62,15 @@ fn covered(program: &t::Program, symbols: &Symbols, prelude: &PreludeIds) -> Res
             .cloned()
             .map(Some)
             .collect();
-        let rows = clauses
+        let rows: Vec<Vec<t::Pattern>> = clauses
             .iter()
             .filter(|clause| clause.guard.is_none())
             .flat_map(|clause| t::Pattern::rows(&clause.patterns))
-            .map(|row| row.iter().map(|p| checker.pattern(p)).collect())
             .collect();
+        let ends = from_the_end(&rows, columns.len());
+        let rows = rows.iter().map(|row| checker.row(row, &ends)).collect();
         if let Some(missing) = checker.missing(rows, &columns) {
-            let example = checker.render_all(&missing, symbols);
+            let example = checker.render_row(&missing, &ends, symbols);
             let spelled = symbols.spelling(function.name);
             let missing = format!("`{spelled}({example})`");
             let message = format!("`{spelled}` does not cover every case");
@@ -83,14 +87,15 @@ fn covered(program: &t::Program, symbols: &Symbols, prelude: &PreludeIds) -> Res
             });
         }
         for (value, arms) in found {
-            let rows = arms
+            let rows: Vec<Vec<t::Pattern>> = arms
                 .iter()
                 .filter(|arm| arm.guard.is_none())
                 .flat_map(|arm| t::Pattern::rows(std::slice::from_ref(&arm.pattern)))
-                .map(|row| row.iter().map(|p| checker.pattern(p)).collect())
                 .collect();
+            let ends = from_the_end(&rows, 1);
+            let rows = rows.iter().map(|row| checker.row(row, &ends)).collect();
             if let Some(missing) = checker.missing(rows, &[Some(value.ty.clone())]) {
-                let missing = format!("`{}`", checker.render_all(&missing, symbols));
+                let missing = format!("`{}`", checker.render_row(&missing, &ends, symbols));
                 return Err(failure(
                     function.module,
                     value.span,
@@ -109,6 +114,62 @@ fn covered(program: &t::Program, symbols: &Symbols, prelude: &PreludeIds) -> Res
 /// A declared type's parameters, and each constructor's field types
 /// written over them.
 type Declaration<'a> = (&'a [Symbol], HashMap<Symbol, &'a [h::Type]>);
+
+/// Which columns of `rows` are lists read from their end: those where some
+/// pattern takes the end of a list apart with one that can fail, as
+/// `[*rest, Leave(node)]` does, and every list pattern can be read from the
+/// end. Such a column is judged as the list turned round, its last element
+/// first, which is Maranget's usefulness asked of the reversed list: a
+/// pattern matches a list exactly when its reversal matches the reversal.
+fn from_the_end(rows: &[Vec<t::Pattern>], columns: usize) -> Vec<bool> {
+    (0..columns)
+        .map(|at| {
+            let column = || rows.iter().filter_map(|row| row.get(at));
+            column().any(|pattern| {
+                ending(unwrapped(pattern))
+                    .is_some_and(|(_, _, last)| !last.iter().all(takes_anything))
+            }) && column().all(|pattern| reversible(unwrapped(pattern)))
+        })
+        .collect()
+}
+
+/// A pattern beneath any names it binds as a whole.
+fn unwrapped(pattern: &t::Pattern) -> &t::Pattern {
+    match pattern {
+        t::Pattern::As(_, pattern) => unwrapped(pattern),
+        pattern => pattern,
+    }
+}
+
+/// A pattern taking a list's end apart: the elements before its rest, what
+/// the rest's front must match, and the elements ending it. `[*front, a]`
+/// is one, and so is `[x, *front, a]`, a list whose rest is an ending.
+fn ending(pattern: &t::Pattern) -> Option<(&[t::Pattern], &t::Pattern, &[t::Pattern])> {
+    match pattern {
+        t::Pattern::Ending(front, last) => Some((&[], front, last)),
+        t::Pattern::List(first, Some(rest)) => match unwrapped(rest) {
+            t::Pattern::Ending(front, last) => Some((first, front, last)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether a list pattern says the same read from either end: anything,
+/// a list of a fixed length, a front that cannot fail before any rest, or
+/// an end after a middle that cannot fail.
+fn reversible(pattern: &t::Pattern) -> bool {
+    if let Some((first, front, _)) = ending(pattern) {
+        return first.iter().all(takes_anything) && takes_anything(front);
+    }
+    match pattern {
+        t::Pattern::Wild | t::Pattern::Bind(_) | t::Pattern::List(_, None) => true,
+        t::Pattern::List(elements, Some(rest)) => {
+            elements.iter().all(takes_anything) && takes_anything(rest)
+        }
+        _ => false,
+    }
+}
 
 /// Whether `pattern` matches every value of its type.
 fn takes_anything(pattern: &t::Pattern) -> bool {
@@ -490,6 +551,88 @@ impl<'a> Coverage<'a> {
             return Some(Pattern::Constructor(*first, vec![natural]));
         }
         None
+    }
+
+    /// A row of patterns as coverage reads them, each column marked in
+    /// `ends` read from the end of its list.
+    fn row(&self, row: &[t::Pattern], ends: &[bool]) -> Vec<Pattern> {
+        row.iter()
+            .zip(ends)
+            .map(|(pattern, &end)| {
+                if end {
+                    self.turned(unwrapped(pattern))
+                } else {
+                    self.pattern(pattern)
+                }
+            })
+            .collect()
+    }
+
+    /// A list pattern as one of the list turned round would be written: its
+    /// last element first. Only a [`reversible`] pattern is asked.
+    fn turned(&self, pattern: &t::Pattern) -> Pattern {
+        let cons = |head, tail| Pattern::Constructor(self.prelude.list_cons, vec![head, tail]);
+        if let Some((first, _, last)) = ending(pattern) {
+            // At least as many elements as stand before the rest, after the
+            // last ones turned round.
+            let longer = first
+                .iter()
+                .fold(Pattern::Wild, |tail, _| cons(Pattern::Wild, tail));
+            return last
+                .iter()
+                .fold(longer, |tail, element| cons(self.pattern(element), tail));
+        }
+        match pattern {
+            t::Pattern::List(elements, None) => elements.iter().fold(
+                Pattern::Constructor(self.prelude.list_nil, Vec::new()),
+                |tail, element| cons(self.pattern(element), tail),
+            ),
+            t::Pattern::List(elements, Some(_)) => elements
+                .iter()
+                .fold(Pattern::Wild, |tail, _| cons(Pattern::Wild, tail)),
+            _ => Pattern::Wild,
+        }
+    }
+
+    /// Example patterns side by side, each column marked in `ends` turned
+    /// back round.
+    fn render_row(&self, patterns: &[Pattern], ends: &[bool], symbols: &Symbols) -> String {
+        patterns
+            .iter()
+            .zip(ends)
+            .map(|(pattern, &end)| {
+                if end {
+                    self.render_turned(pattern, symbols)
+                } else {
+                    self.render(pattern, symbols)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// A turned list's example as the program would write it: `[a, b]` where
+    /// it is that long, and `[*_, a, b]` where anything may come before.
+    fn render_turned(&self, mut pattern: &Pattern, symbols: &Symbols) -> String {
+        let mut elements = Vec::new();
+        let open = loop {
+            match pattern {
+                Pattern::Constructor(name, fields) if *name == self.prelude.list_cons => {
+                    let [head, tail] = fields.as_slice() else {
+                        unreachable!("a list's cons takes a head and a tail")
+                    };
+                    elements.push(self.render(head, symbols));
+                    pattern = tail;
+                }
+                Pattern::Constructor(name, _) if *name == self.prelude.list_nil => break false,
+                _ => break true,
+            }
+        };
+        elements.reverse();
+        if open {
+            elements.insert(0, "*_".to_owned());
+        }
+        format!("[{}]", elements.join(", "))
     }
 
     /// Example patterns side by side, as arguments are written.
