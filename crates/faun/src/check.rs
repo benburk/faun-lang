@@ -1351,8 +1351,10 @@ impl Checker<'_> {
                 Ok(self.infer.instantiate(&scheme))
             }
             h::ExprKind::Try(value) => self.try_(module, expression.span, value, locals),
-            // What a `return` answers is its clause's or lambda's answer;
-            // the `return` itself is worth whatever its place asks.
+            // What a `return` answers is its clause's or lambda's answer,
+            // met as the body's last value meets it, so a closed row it
+            // answers is rebuilt in the signature's row; the `return`
+            // itself is worth whatever its place asks.
             h::ExprKind::Return(value) => {
                 let answered = self.expr(module, value, locals)?;
                 let Some(Some(join)) = self.answers.last().copied() else {
@@ -1362,7 +1364,13 @@ impl Checker<'_> {
                         "`return` answers its clause or lambda, and a guard answers nothing",
                     ));
                 };
-                self.way(join, module, value, &answered, Meeting::Unified)?;
+                self.way(
+                    join,
+                    module,
+                    value,
+                    &answered,
+                    Meeting::Subsumed(value.site),
+                )?;
                 Ok(self.infer.fresh())
             }
             // A test answers a `Bool`; its pattern types what it binds,

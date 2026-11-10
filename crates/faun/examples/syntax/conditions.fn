@@ -212,3 +212,17 @@ explained(r) -> (
 )
 
 expect explained(Err(Bad("x"))) == "bad: x" & explained(Ok(0)) == "nothing" & explained(Ok(2)) == "some"
+
+# What a `return` answers meets the signature as the body's last line does:
+# a closed row is rebuilt in the signature's wider one.
+looked_up : Nat -> Result(Nat, [Missing])
+looked_up(0) -> Err(Missing)
+looked_up(n) -> Ok(n)
+
+allowed : (Nat, Bool) -> Result(Nat, [Missing, Refused])
+allowed(n, open) -> (
+  if open return looked_up(n)
+  Err(Refused)
+)
+
+expect allowed(0, True) == Err(Missing) & allowed(3, True) == Ok(3) & allowed(3, False) == Err(Refused)
