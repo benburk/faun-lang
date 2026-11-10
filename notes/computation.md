@@ -97,7 +97,7 @@ costs are in the [termination proposal](proposals/approved/termination.md).
 ## Iteration is tail calls
 
 Faun has no loops: a walk is a function calling itself, a fold, or a
-library function ([recursion proposal](proposals/approved/recursion.md)).
+library function ([iteration](iteration.md)).
 A call whose answer is its caller's answer is a jump on every target, so a
 step costs a jump and millions of steps run in constant stack:
 
@@ -239,8 +239,8 @@ language where the question could not be observed.
 - [Termination proposal](proposals/approved/termination.md): the decision
 - [Totality](totality.md): what requiring every call to come back buys and
   costs
-- [Recursion proposal](proposals/approved/recursion.md): iteration as tail
-  calls, and names bound again as shadows
+- [Iteration](iteration.md): walks as tail calls, and why there are no
+  loops
 - [Effects](forms/effects.md): `!`, `Host` and the order of effects
 - [Operators](forms/operators.md): operators as methods, `&` and `|`
 - [Memory](machine/memory.md): reference counting and in-place reuse

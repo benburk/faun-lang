@@ -16,6 +16,8 @@ not needed.
 
 - [Computation](computation.md): strict, pure evaluation; unneeded work may
   be left out; termination is not checked
+- [Iteration](iteration.md): walks as recursion and folds, why there are no
+  loops, and how both ways measured
 - [Totality](totality.md): what requiring every call to come back makes
   simple and hard, the designs in between, and why Faun dropped it
 - [Types](types.md): inference, rows, `where` bounds, aliases and
@@ -65,8 +67,6 @@ not needed.
   The concept note above owns what holds now.
 - [Pattern matching, the domain](forms/pattern-matching-domain.md): the exploration
   behind `is`, arms, leaving lines and loops
-- [Loops, measured](loops-experiment.md): a program written with loops and
-  again without, and what Gleam's users say of living without them
 - [Host effects](host-effects.md), the
   [effects brainstorm](effects/README.md) and its
   [roadmap](effects/roadmap.md): host APIs to come

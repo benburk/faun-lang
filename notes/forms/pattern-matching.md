@@ -6,8 +6,8 @@ the compiler checks a group of clauses or arms to cover, and how a name in a
 pattern binds. The long exploration that led here is
 [pattern matching](pattern-matching-domain.md); the decided designs are the
 [conditions](../proposals/approved/conditions.md),
-[blocks](../proposals/approved/blocks.md) and
-[recursion](../proposals/approved/recursion.md) proposals.
+[blocks](../proposals/approved/blocks.md) proposals; why there are no
+loops is [iteration's](../iteration.md).
 
 ## Where a pattern stands
 
@@ -287,7 +287,7 @@ a name twice, which cost a fresh name for every step, `degrees2`. Binding
 from here on, Python's way, carried a branch's assignment past the branch
 and a loop's into its next round, which cost resolution a merge of every
 name each way bound again; with loops gone
-([recursion](../proposals/approved/recursion.md)), only `if c then (x = a)
+([iteration](../iteration.md)), only `if c then (x = a)
 else {}` needed it, which `x = if c then a else x` says in one line.
 Shadowing alone would let a branch's `count = count + 1` vanish after the
 branch without a word, which is why a binding again that nothing reads is
@@ -305,10 +305,7 @@ Values have no identity, so `snapshot = order` stays what it was when
   `is`, arms, leaving lines and binding again, with its errata
 - [Pattern matching, the domain](pattern-matching-domain.md): the exploration,
   other languages' spellings, and the designs weighed
-- [Recursion](../proposals/approved/recursion.md): no loops, and names bound
-  again as shadows
-- [Loops, measured](../loops-experiment.md): a program written with loops and
-  again as recursion
+- [Iteration](../iteration.md): walks, and why there are no loops
 - [Effects](effects.md): how a test takes apart a value holding a file
 - [Tags](../values/tags.md): rows, and how coverage closes them
 - [Lints](../lints.md): the choices between forms left to a linter

@@ -169,7 +169,7 @@ partway through a body is.
 - **Syntax.** Two block lines, `condition "else" out` and `"if" condition
   out`, with `out = "return" expr | "continue" | "break"`; `return`'s value
   is any expression, a block among them, and `continue` and `break` come
-  with [loops](../superseded/loops.md). These, and an arm in place of its `then`
+  with loops, since removed ([iteration](../../iteration.md)). These, and an arm in place of its `then`
   (errata, 2026-10-16), are the only places `return`, `continue` and
   `break` stand. Neither line is an expression; as a block's last line,
   the block answers `{}` after it ([blocks](blocks.md) errata,
@@ -520,8 +520,9 @@ line after.
 **2026-10-18.** A leaving line may end a block, which then answers `{}`
 where the line goes on; see the [blocks](blocks.md) errata.
 
-**2026-11-10.** [Recursion](recursion.md) replaces binding from here on with
+**2026-11-10.** Binding from here on is replaced with
 shadowing: a name bound again is seen to the end of the block it is bound
 in, and a branch's, an arm's or an `else` line's binding is not seen after
 it, so no names meet where ways do. A binding binding again that nothing
-reads is refused. Loops are gone with it.
+reads is refused. Loops are gone with it; see
+[iteration](../../iteration.md).

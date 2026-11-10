@@ -266,7 +266,7 @@ each thing, and the classic algorithms as short and plain as their Python.
   ordering are no obstacle: a type holding a function answers none of
   them, as in Rust, Haskell and Roc. Nothing written so far wants it.
 
-- **Loops that rebind** are now their own proposal, [loops](loops.md):
+- **Loops that rebind** are now their own question, [iteration](../../iteration.md):
   variables written `$name`, `for`, `while` and `loop`.
 
 ## Open questions
