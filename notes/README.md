@@ -65,6 +65,8 @@ not needed.
   The concept note above owns what holds now.
 - [Pattern matching, the domain](forms/pattern-matching-domain.md): the exploration
   behind `is`, arms, leaving lines and loops
+- [Loops, measured](loops-experiment.md): a program written with loops and
+  again without, and what Gleam's users say of living without them
 - [Host effects](host-effects.md), the
   [effects brainstorm](effects/README.md) and its
   [roadmap](effects/roadmap.md): host APIs to come

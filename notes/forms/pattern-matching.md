@@ -294,6 +294,8 @@ binding is a [lint](../lints.md), not yet built. Values have no identity, so
   other languages' spellings, and the designs weighed
 - [Loops](../proposals/approved/loops.md): `for`, `while`, and names carried
   across rounds
+- [Loops, measured](../loops-experiment.md): a program written with loops and
+  again as recursion
 - [Effects](effects.md): how a test takes apart a value holding a file
 - [Tags](../values/tags.md): rows, and how coverage closes them
 - [Lints](../lints.md): the choices between forms left to a linter
