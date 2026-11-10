@@ -4,7 +4,7 @@
 # when its last edge in is taken. It asks a graph how many edges come into
 # each node, which only a directed graph answers.
 
-import edge {Walkable}
+import edge {Edge, Walkable}
 
 export {toposort}
 
@@ -19,17 +19,28 @@ toposort(graph) -> (
   nodes = List.range(graph.node_count())
   degrees = nodes.map(|node| graph.in_degree(node))
   sources = nodes.filter(|node| degrees.get_or(node, 0) == 0)
-  ready = sources.reverse()
-  order = []
-  while ready is [*ready, node] do (
-    order = order.append(node)
-    for edge in graph.edges_from(node) do (
-      degree = degrees.get_or(edge.target, 0) - 1
-      degrees = degrees.put(edge.target, degree)
-      if degree > 0 continue
-      ready = ready.append(edge.target)
-    )
-  )
+  order = taking(graph, {ready: sources, degrees}, [])
   # A node never ready was on a cycle.
   if order.len() == nodes.len() then Ok(order) else Err(Cycle)
+)
+
+# The nodes ready to take, and how many edges still come into each node.
+Kahn = {ready: List(Nat), degrees: List(Nat)}
+
+# Every node taken after `order`: the next ready node, and then those its
+# edges leave ready, before the others.
+taking : (g, Kahn, List(Nat)) -> List(Nat) where Walkable(g, e)
+taking(_, {ready: [], *}, order) -> order
+taking(graph, {ready: [node, *ready], degrees}, order) -> (
+  kahn = graph.edges_from(node).fold({ready, degrees}, released)
+  taking(graph, kahn, order.append(node))
+)
+
+# One edge into its target taken: the target is ready where that was its
+# last.
+released : (Kahn, Edge(e)) -> Kahn
+released({ready, degrees}, {target, *}) -> (
+  degree = degrees.get_or(target, 0) - 1
+  degrees = degrees.put(target, degree)
+  if degree > 0 then {ready, degrees} else {ready: [target, *ready], degrees}
 )

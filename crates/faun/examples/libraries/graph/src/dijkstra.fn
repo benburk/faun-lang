@@ -28,20 +28,23 @@ dijkstra : (g, Nat) -> Paths(e) where Walkable(g, e), Weight(e)
 dijkstra(graph, source) -> (
   unsettled = List.repeat(Err(Unreachable), graph.node_count())
   queue = Heap.empty.push(e.zero, {node: source, from: source})
-  settled = queue.drain(unsettled, |settled, cost, {node, from}| settle(graph, settled, node, {cost, from}))
-  Paths(settled)
+  Paths(settling(graph, queue, unsettled))
 )
 
-# `node` settled by `step`, and an entry for each edge leaving it, unless
-# it was settled already, more cheaply. A node the graph does not have
+# What is on the heap, still to be settled: a node, the cost of a path to
+# it, and the node that path came from.
+Queue(e) = Heap(e, {node: Nat, from: Nat})
+
+# `settled` with every entry on `queue` taken, cheapest first. A node's
+# first entry settles it and pushes an entry for each edge leaving it; any
+# later one finds it settled, more cheaply. A node the graph does not have
 # counts as settled, so an edge to one leads nowhere.
-settle : (g, Settled(e), Nat, Step(e)) -> (Settled(e), List((e, {node: Nat, from: Nat}))) where Walkable(g, e), Weight(e)
-settle(_, settled, node, step) if settled.get_or(node, Ok(step)) is Ok(_) -> (settled, [])
-settle(graph, settled, node, step) -> (
-  marked = settled.put(node, Ok(step))
-  edges = graph.edges_from(node)
-  onward = edges.map(|edge| (step.cost + edge.weight, {node: edge.target, from: node}))
-  (marked, onward)
+settling : (g, Queue(e), Settled(e)) -> Settled(e) where Walkable(g, e), Weight(e)
+settling(graph, queue, settled) -> (
+  queue.pop() is Ok({key: cost, value: {node, from}, rest}) else return settled
+  if settled.get_or(node, Ok({cost, from})) is Ok(_) return settling(graph, rest, settled)
+  onward = graph.edges_from(node).map(|edge| (cost + edge.weight, {node: edge.target, from: node}))
+  settling(graph, rest.push_all(onward), settled.put(node, Ok({cost, from})))
 )
 
 # What Dijkstra's algorithm found from one source: how each node it

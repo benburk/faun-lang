@@ -1,11 +1,11 @@
-# Every walk is one loop over a worklist: take a node, enter it, and keep
-# the targets of its edges for later, until nothing is left. A stack takes
-# the last added first, which is depth first; a queue takes the first,
-# which is breadth first. Each is added to at its end, and a stack taken
-# from there too, since a list grows and shrinks at its end without being
-# copied. A node is marked entered as it is taken, so one
-# taken again is passed over, and a node the graph does not have counts as
-# entered.
+# Every walk is one recursion over a worklist: take the next node, enter it,
+# and put the targets of its edges with the rest, until nothing is left.
+# Put before the rest, they are taken next, which is depth first; after
+# it, last, which is breadth first. A list nothing else holds grows at
+# either end in place, so neither copies the rest. A node is marked entered
+# as it is taken, not as it is put, so depth first follows each edge to its
+# end before the next; one taken again is passed over, and a node the graph
+# does not have counts as entered.
 
 import edge {Walkable, targets}
 
@@ -14,16 +14,7 @@ export {bfs, dfs, groups_from, unseen}
 # The nodes reachable from `start`, nearest first, each once.
 bfs : (g, Nat) -> List(Nat) where Walkable(g, e)
 bfs(graph, start) -> (
-  seen = unseen(graph)
-  order = []
-  queue = [start]
-  while queue is [node, *queue] do (
-    if seen.get_or(node, True) continue
-    seen = seen.put(node, True)
-    order = order.append(node)
-    edges = graph.edges_from(node)
-    queue = queue.concat(targets(edges))
-  )
+  (_, order) = walk(graph, [start], unseen(graph), [], |found, rest| rest.concat(found))
   order
 )
 
@@ -32,34 +23,44 @@ bfs(graph, start) -> (
 # the next.
 dfs : (g, Nat) -> List(Nat) where Walkable(g, e)
 dfs(graph, start) -> (
-  groups = groups_from(graph, [start])
-  groups.flatten()
+  (_, order) = walk(graph, [start], unseen(graph), [], deeper)
+  order
 )
 
 # The nodes grouped by walks from each of `starts` in turn, each walk
 # entering what no earlier one did, depth first, and none started from a
-# node an earlier walk entered. Each node's targets go on the stack last
-# first, so its first edge is followed first.
+# node an earlier walk entered.
 groups_from : (g, List(Nat)) -> List(List(Nat)) where Walkable(g, e)
 groups_from(graph, starts) -> (
-  seen = unseen(graph)
-  groups = []
-  for start in starts do (
-    if seen.get_or(start, True) continue
-    group = []
-    stack = [start]
-    while stack is [*stack, node] do (
-      if seen.get_or(node, True) continue
-      seen = seen.put(node, True)
-      group = group.append(node)
-      edges = graph.edges_from(node)
-      next = targets(edges).reverse()
-      stack = stack.concat(next)
-    )
-    groups = groups.append(group)
-  )
+  (groups, _) = walks(graph, starts, unseen(graph))
   groups
 )
+
+# A group for each of `starts` no earlier walk entered, and every node the
+# walks entered, which each walk hands the next.
+walks : (g, List(Nat), List(Bool)) -> (List(List(Nat)), List(Bool)) where Walkable(g, e)
+walks(_, [], seen) -> ([], seen)
+walks(graph, [start, *starts], seen) if seen.get_or(start, True) -> walks(graph, starts, seen)
+walks(graph, [start, *starts], seen) -> (
+  (seen, group) = walk(graph, [start], seen, [], deeper)
+  (groups, seen) = walks(graph, starts, seen)
+  ([group, *groups], seen)
+)
+
+# Every node `pending` reaches after `order`, and what was entered: the
+# next node taken, and the targets of its edges put with the rest where
+# `next` says.
+walk : (g, List(Nat), List(Bool), List(Nat), (List(Nat), List(Nat)) -> List(Nat)) -> (List(Bool), List(Nat)) where Walkable(g, e)
+walk(_, [], seen, order, _) -> (seen, order)
+walk(graph, [node, *rest], seen, order, next) if seen.get_or(node, True) -> walk(graph, rest, seen, order, next)
+walk(graph, [node, *rest], seen, order, next) -> (
+  found = targets(graph.edges_from(node))
+  walk(graph, next(found, rest), seen.put(node, True), order.append(node), next)
+)
+
+# Targets put before the rest, to be taken next: depth first.
+deeper : (List(Nat), List(Nat)) -> List(Nat)
+deeper(found, rest) -> found.concat(rest)
 
 # Every node of `graph` not yet entered.
 unseen : g -> List(Bool) where Walkable(g, e)

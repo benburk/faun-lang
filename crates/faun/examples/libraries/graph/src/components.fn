@@ -63,25 +63,22 @@ strong_components(graph) -> (
 Step = [Enter(Nat), Leave(Nat)]
 
 # Every node in the order a depth-first walk from each node in turn leaves
-# it: after every node it was first to reach. Entering a node not entered
-# before follows each of its edges and then leaves it; leaving it records
-# it.
+# it: after every node it was first to reach.
 leaving_order : g -> List(Nat) where Walkable(g, e)
 leaving_order(graph) -> (
-  seen = unseen(graph)
-  left = []
-  for node in List.range(graph.node_count()) do (
-    steps = [Enter(node)]
-    while steps is [*steps, step] do (
-      left = if step is Leave(done) then left.append(done) else left
-      step is Enter(next) else continue
-      if seen.get_or(next, True) continue
-      seen = seen.put(next, True)
-      edges = graph.edges_from(next)
-      entering = targets(edges).map(|target| Enter(target))
-      leaving = steps.append(Leave(next))
-      steps = leaving.concat(entering.reverse())
-    )
-  )
+  nodes = List.range(graph.node_count())
+  (_, left) = stepping(graph, nodes.map(|node| Enter(node)), unseen(graph), [])
   left
+)
+
+# Every node `steps` leaves after `left`, and what was entered. Entering a
+# node not entered before follows each of its edges and then leaves it;
+# leaving it records it.
+stepping : (g, List(Step), List(Bool), List(Nat)) -> (List(Bool), List(Nat)) where Walkable(g, e)
+stepping(_, [], seen, left) -> (seen, left)
+stepping(graph, [Leave(node), *steps], seen, left) -> stepping(graph, steps, seen, left.append(node))
+stepping(graph, [Enter(node), *steps], seen, left) if seen.get_or(node, True) -> stepping(graph, steps, seen, left)
+stepping(graph, [Enter(node), *steps], seen, left) -> (
+  entering = targets(graph.edges_from(node)).map(|target| Enter(target))
+  stepping(graph, entering.concat([Leave(node), *steps]), seen.put(node, True), left)
 )
