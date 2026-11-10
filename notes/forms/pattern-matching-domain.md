@@ -5,7 +5,7 @@ do, what Faun does today, how other languages spell each part, and a few
 whole designs compared on the same programs. The proposals that come out of
 it are [conditions](../proposals/approved/conditions.md),
 [branching](../proposals/superseded/branching.md) and
-[loops](../proposals/approved/loops.md).
+[loops](../proposals/superseded/loops.md).
 
 ## Decided
 

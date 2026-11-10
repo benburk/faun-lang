@@ -95,7 +95,6 @@ pub(super) fn may_never_answer(expression: &h::Expr) -> bool {
         | h::ExprKind::If(..)
         | h::ExprKind::Match(..) => true,
         h::ExprKind::Block(body) => may_never_answer(&body.result),
-        h::ExprKind::Loop(looped) => may_never_answer(&looped.rest.result),
         _ => false,
     }
 }

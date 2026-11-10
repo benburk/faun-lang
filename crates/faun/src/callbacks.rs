@@ -31,8 +31,8 @@ use crate::diagnostic::{Advised, Diagnostic, Refusal};
 use crate::first_order as d;
 use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
-    Body, Clause, Definition, Expr, ExprKind, Function, FunctionKey, Instance, LoopHead, Pattern,
-    Program, Signature, Type,
+    Body, Clause, Definition, Expr, ExprKind, Function, FunctionKey, Instance, Pattern, Program,
+    Signature, Type,
 };
 
 /// Replace every function value in `program` with the callbacks it stands
@@ -421,25 +421,6 @@ impl<'a> Callbacks<'a> {
     fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, Refusal> {
         let kind = match &expression.kind {
             ExprKind::Block(body) => d::ExprKind::Block(Box::new(self.body(frame, body)?)),
-            ExprKind::Loop(looped) => d::ExprKind::Loop(Box::new(d::Loop {
-                carried: looped
-                    .carried
-                    .iter()
-                    .map(|(initial, within, after)| {
-                        Ok((self.expr(frame, initial)?, *within, *after))
-                    })
-                    .collect::<Result<_, Refusal>>()?,
-                head: match &looped.head {
-                    LoopHead::While(condition) => d::LoopHead::While(self.expr(frame, condition)?),
-                    LoopHead::For(pattern, list) => {
-                        d::LoopHead::For(pattern.clone(), self.expr(frame, list)?)
-                    }
-                },
-                body: self.body(frame, &looped.body)?,
-                rest: self.body(frame, &looped.rest)?,
-            })),
-            ExprKind::Continue(values) => d::ExprKind::Continue(self.exprs(frame, values)?),
-            ExprKind::Break(values) => d::ExprKind::Break(self.exprs(frame, values)?),
             ExprKind::Local(local) if frame.functions.contains_key(local) => {
                 return Err(located(
                     expression,

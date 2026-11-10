@@ -35,11 +35,11 @@ fn files_travel_in_lists_and_are_each_closed_once() {
     assert_eq!(left.keys().collect::<Vec<_>>(), ["a.tmp", "b.tmp"]);
 }
 
-/// Files opened in a loop are carried out of it in a list, and another
-/// loop walking the list writes and closes each; a test and arms take
-/// apart what opening answered. A name that does not open is passed over.
+/// Files opened by one recursion come back up in a list, and another
+/// walking the list writes and closes each; arms take apart what opening
+/// answered. A name that does not open is passed over.
 #[test]
-fn files_opened_in_one_loop_are_closed_in_another() {
+fn files_opened_by_one_recursion_are_closed_by_another() {
     let (status, written, left) = support::run_among(&example("batch.fn"), Directory::new());
     assert_eq!((status, written.as_str()), (2, "a.txt\nb.txt\n"));
     assert_eq!(left.keys().collect::<Vec<_>>(), ["a.txt", "b.txt"]);
@@ -134,14 +134,12 @@ fn a_test_showing_a_value_holds_no_file_leaves_nothing_to_close() {
          )
 
          close_all! : List(Result(File, IoError)) -> Nat
-         close_all!(files) -> if files is [] then 0 else (
-           count = 0
-           for opened in files do (
-             opened is Ok(file) else continue
-             closed = file.close!()
-             count = count + 1
-           )
-           count
+         close_all!([]) -> 0
+         close_all!([opened, *files]) -> (
+           opened is Ok(file) else return close_all!(files)
+           closed = file.close!()
+           rest = close_all!(files)
+           rest + 1
          )
 
          shut! : (Result(File, IoError), Bool) -> Nat

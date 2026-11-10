@@ -267,12 +267,7 @@ impl<'a> Lowerer<'a> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
             ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
-            ExprKind::If(..)
-            | ExprKind::Is(..)
-            | ExprKind::Match(..)
-            | ExprKind::Loop(..)
-            | ExprKind::Continue(..)
-            | ExprKind::Break(..) => {
+            ExprKind::If(..) | ExprKind::Is(..) | ExprKind::Match(..) => {
                 unreachable!("pattern compiling binds each `if` on its own")
             }
             ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
@@ -1069,12 +1064,7 @@ fn emit_expr(
 ) -> Atom {
     match &expression.kind {
         ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
-        ExprKind::If(..)
-        | ExprKind::Is(..)
-        | ExprKind::Match(..)
-        | ExprKind::Loop(..)
-        | ExprKind::Continue(..)
-        | ExprKind::Break(..) => {
+        ExprKind::If(..) | ExprKind::Is(..) | ExprKind::Match(..) => {
             unreachable!("pattern compiling binds each `if` on its own")
         }
         ExprKind::Local(local) => locals[local],

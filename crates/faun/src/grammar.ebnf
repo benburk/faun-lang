@@ -127,28 +127,22 @@ parenthesized     = block-line [ "," [ exprs ] | arm-tail { NEWLINE arm } | NEWL
    answer. *)
 arm               = expr arm-tail ;
 arm-tail          = [ "if" expr ] ( "then" expr | leave ) ;
-(* A block's lines, and a loop's body's: bindings, leaving lines, loops
-   and values. A line beginning `if` is the ternary, or, where a leave
-   follows its condition, a line leaving where the condition holds; a
-   ternary beginning a line takes no `=` and no `else`, which
-   `(if a then b else c) else return x` puts in parentheses. A block
-   answers its last line where that is a value, and `{}` where it is a
-   binding, a leaving line or a loop; that, and that `continue` and `break`
-   stand in a loop's body, is told after parsing. *)
+(* A block's lines: bindings, leaving lines and values. A line beginning
+   `if` is the ternary, or, where a leave follows its condition, a line
+   leaving where the condition holds; a ternary beginning a line takes no
+   `=` and no `else`, which `(if a then b else c) else return x` puts in
+   parentheses. A block answers its last line where that is a value, and
+   `{}` where it is a binding or a leaving line; that is told after
+   parsing. *)
 lines             = block-line { NEWLINE block-line } ;
 block-line        = if-head ( "then" expr "else" expr | leave )
-                  | loop-line
                   | plain [ line-tail ] ;
 (* A binding, or a line going on where its condition holds and leaving by
    its `else` where it fails. *)
 line-tail         = "=" expr | "else" leave ;
 (* The only ways a body leaves: `return`'s value is any expression, a
    block among them. *)
-leave             = "return" expr | "continue" | "break" ;
-(* A loop runs its body each round, after `do`, as an `if`'s branch runs
-   after `then`. *)
-loop-line         = "while" expr "do" "(" lines ")"
-                  | "for" operand "in" expr "do" "(" lines ")" ;
+leave             = "return" expr ;
 (* A list's rest may have elements after it, which its end matches:
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]

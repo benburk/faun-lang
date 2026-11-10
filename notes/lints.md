@@ -14,8 +14,7 @@ left to one, so none is lost.
   it answers.
 - **`x = x`,** a binding to itself.
 - **A test that always holds,** `n is _`, or `n is m` binding `m`.
-- **Lines no path reaches,** after an unconditional leave, and a loop
-  over an empty literal, `for _ in [] do (…)`.
+- **Lines no path reaches,** after an unconditional leave.
 - **An effect's answer dropped** where it is a `Result`: a `write!(…)` on
   a line of its own, neither bound nor passed on with `?`. See
   [discarded answers](proposals/rejected/discarded-answers.md).
@@ -33,8 +32,8 @@ left to one, so none is lost.
 - **An `else` line before a block's last line,** where the rest is one
   value, written as a ternary.
 - **A many-way `is` on a bare parameter,** written as clauses.
-- **A one-line loop body that is a method already,** `sum`, `map`,
-  `find`, `count` or a fold.
+- **A walk that is a method already,** a recursion over a list that is
+  `sum`, `map`, `find`, `count`, `fold` or `fold_until`.
 - **A conversion where a numeral would do,** `Int.of_nat(3)` where the
   type is known, written `3`.
 - **Redundant parentheses,** and a doubled prefix, `!!c` or `--x`.
@@ -43,5 +42,5 @@ left to one, so none is lost.
 
 ## Style
 
-- **Loop nesting** past a depth a style chooses. The compiler refuses no
-  depth. See [loops](proposals/approved/loops.md).
+- **Recursion nesting,** walks inside walks past a depth a style chooses.
+  The compiler refuses no depth.

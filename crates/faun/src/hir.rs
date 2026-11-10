@@ -123,10 +123,6 @@ pub struct Clause {
     pub guard: Option<Expr>,
     pub body: Body,
     pub locals: u32,
-    /// Each local a name bound again in a branch is after it, which every
-    /// branch going on binds, and the name: checking holds the branches to
-    /// one type there.
-    pub merged: Vec<(LocalId, Symbol)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -454,9 +450,7 @@ impl Expr {
                 visit(base)?;
                 fields.iter().try_for_each(|(_, value)| visit(value))
             }
-            ExprKind::Tuple(members) | ExprKind::Continue(members) | ExprKind::Break(members) => {
-                members.iter().try_for_each(visit)
-            }
+            ExprKind::Tuple(members) => members.iter().try_for_each(visit),
             ExprKind::Lambda(_, inner)
             | ExprKind::Member(inner, _)
             | ExprKind::Unary(_, inner)
@@ -483,14 +477,6 @@ impl Expr {
                 })
             }
             ExprKind::Block(body) => body.exprs().try_for_each(visit),
-            ExprKind::Loop(looped) => {
-                for (initial, _, _) in &looped.carried {
-                    visit(initial)?;
-                }
-                visit(looped.head.value())?;
-                looped.body.exprs().try_for_each(&mut visit)?;
-                looped.rest.exprs().try_for_each(visit)
-            }
         }
     }
 
@@ -534,9 +520,7 @@ impl Expr {
                     visit(value);
                 }
             }
-            ExprKind::Tuple(members) | ExprKind::Continue(members) | ExprKind::Break(members) => {
-                members.iter_mut().for_each(visit);
-            }
+            ExprKind::Tuple(members) => members.iter_mut().for_each(visit),
             ExprKind::Lambda(_, inner)
             | ExprKind::Member(inner, _)
             | ExprKind::Unary(_, inner)
@@ -566,14 +550,6 @@ impl Expr {
                 }
             }
             ExprKind::Block(body) => body.exprs_mut().for_each(visit),
-            ExprKind::Loop(looped) => {
-                for (initial, _, _) in &mut looped.carried {
-                    visit(initial);
-                }
-                visit(looped.head.value_mut());
-                looped.body.exprs_mut().for_each(&mut visit);
-                looped.rest.exprs_mut().for_each(visit);
-            }
         }
     }
 }
@@ -627,50 +603,6 @@ pub enum ExprKind {
     /// Bindings, then the answer: a block written inside an expression.
     /// Its locals are the clause's, numbered apart from every other.
     Block(Box<Body>),
-    /// A loop, holding the lines after it; see [`Loop`].
-    Loop(Box<Loop>),
-    /// `continue`: the next round, each name the loop carries as it is
-    /// here, in the loop's order.
-    Continue(Vec<Expr>),
-    /// `break`: out of the loop, each name the loop carries as it is here.
-    Break(Vec<Expr>),
-}
-
-/// `while condition ( body )` or `for pattern in list ( body )`, and the
-/// lines after it, `rest`, which go on once it ends.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Loop {
-    /// Each name bound before the loop and again in its body: its value
-    /// going in, the local it is within a round, and the one it is after
-    /// the loop.
-    pub carried: Vec<(Expr, LocalId, LocalId)>,
-    pub head: LoopHead,
-    /// The round, its answer a `continue`, or a leave, on every way through.
-    pub body: Body,
-    pub rest: Body,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LoopHead {
-    /// While the condition holds, what it binds seen by the round.
-    While(Expr),
-    /// Once for each element of the list, the pattern binding it.
-    For(Pattern, Expr),
-}
-
-impl LoopHead {
-    /// What the head works out: the condition, or the list.
-    pub(crate) const fn value(&self) -> &Expr {
-        match self {
-            Self::While(value) | Self::For(_, value) => value,
-        }
-    }
-
-    pub(crate) const fn value_mut(&mut self) -> &mut Expr {
-        match self {
-            Self::While(value) | Self::For(_, value) => value,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

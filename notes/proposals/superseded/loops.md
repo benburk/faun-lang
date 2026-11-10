@@ -1,8 +1,14 @@
 # Proposal: Loops
 
-- **Status:** Approved
+> Superseded by [recursion](../approved/recursion.md): a walk recursed reads
+> as well, runs the same instructions, and costs resolution none of the
+> carrying loops took.
+
+- **Status:** Superseded
 - **Created:** 2026-10-04
 - **Approved:** 2026-10-14
+- **Superseded:** 2026-11-10
+- **Superseded by:** recursion.md
 - **Affects:** the lexer's keywords, `grammar.ebnf`, the parser, the
   tree-sitter grammar, name resolution, the checker, lowering, the
   standard library's lists, the graph library, the HTML library's `for`
@@ -12,7 +18,7 @@
 ## Summary
 
 A body may loop with `for`, `while` and `loop`. A name bound before a loop
-and again in its body, as the [conditions](conditions.md) proposal's `=`
+and again in its body, as the [conditions](../approved/conditions.md) proposal's `=`
 binds, carries into its next round and out of it. Leaving lines leave a
 round or a loop: `if c continue` and `if c break` where `c` holds, `c else
 continue` and `c else break` where it fails. Each loop compiles to a
@@ -153,7 +159,7 @@ loop-line = "while" expr "do" "(" lines ")"
   calls, and one apart from it is refused.
 - **A loop is a line of a block,** not an expression. What a loop
   computes is left in the names it bound again. As a block's last line,
-  the block answers `{}` after it ([blocks](blocks.md) errata,
+  the block answers `{}` after it ([blocks](../approved/blocks.md) errata,
   2026-10-18).
 - **A loop's body, a round, is block lines with no answer:** bindings,
   effects, leaving lines and loops, any of which may be its last; where
@@ -300,7 +306,7 @@ Settled as out of this proposal, for one of their own if wanted
 ## Origin
 
 Comparing the graph library's walks and toposort with their Python
-(2026-10-04), after the [conditions](conditions.md) draft removed the
+(2026-10-04), after the [conditions](../approved/conditions.md) draft removed the
 guard helpers, left the threading of state through folds as the largest
 difference. Roc's newer compiler (`docs/mini-tutorial-new-compiler.md` in
 roc-lang/roc) writes `var $x`, `for` and `while`, and confines a `var` to
@@ -321,6 +327,6 @@ is refused. The ways out of a loop, its head failing and each `break`,
 must agree on what they used up.
 
 **2026-10-18.** A loop may end a block, which then answers `{}` once the
-loop ends; see the [blocks](blocks.md) errata. A loop still gives no value
+loop ends; see the [blocks](../approved/blocks.md) errata. A loop still gives no value
 of its own, and `break` none: what a loop computes comes out in the names
 it assigns, which covers what Rust's `break value` is for.

@@ -1,0 +1,12 @@
+import std.host {Host}
+
+# A name bound again is seen to the end of its block: the branch's `n` is
+# the branch's, and nothing reads it.
+clamped : (Nat, Nat) -> Nat
+clamped(n, limit) -> (
+  if n > limit then (n = limit) else {}
+  n
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(clamped(9, 5)))

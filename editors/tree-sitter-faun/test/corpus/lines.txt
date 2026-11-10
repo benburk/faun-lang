@@ -277,7 +277,6 @@ f(r) -> (
   y = r is (
     Ok(v) if v > 0 then v
     Err(e) return e
-    _ break
   )
   y
 )
@@ -311,10 +310,7 @@ f(r) -> (
                 (arguments
                   (identifier)))
               (return_expression
-                (identifier)))
-            (arm
-              (wildcard)
-              (leave)))))
+                (identifier))))))
       (identifier))))
 
 ========================================
@@ -323,9 +319,7 @@ A block ending in no value answers `{}`
 
 f(x) -> (y = x)
 g(xs) -> (
-  for x in xs do (
-    if x break
-  )
+  if xs return 0
 )
 
 ---
@@ -346,10 +340,7 @@ g(xs) -> (
       (arguments
         (identifier)))
     (block
-      (loop_line
+      (if_line
         (identifier)
-        (identifier)
-        (round
-          (if_line
-            (identifier)
-            (leave)))))))
+        (return_expression
+          (number))))))

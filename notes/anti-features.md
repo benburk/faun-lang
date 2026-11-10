@@ -17,8 +17,10 @@ repeated here.
   ([pattern matching](forms/pattern-matching.md)).
 - No promise that a pure call comes back. Termination is not checked, and
   unneeded pure work may be left out ([computation](computation.md)).
-- No `goto` and no labelled loops. A body leaves only by `return`,
-  `continue`, `break` or `?` ([pattern matching](forms/pattern-matching.md)).
+- No loops, and so no `goto`, `break` or `continue`. A walk is a function
+  calling itself, a fold or a library function, and a body leaves only by
+  `return` or `?` ([recursion](proposals/approved/recursion.md),
+  [pattern matching](forms/pattern-matching.md)).
 
 ## State, memory and lifetime
 

@@ -2,7 +2,7 @@
 
 This note owns what running a Faun program means: strict evaluation in the
 order written, purity, the rule that pure work nothing needs may be left
-out, termination not being checked, and loops as tail calls.
+out, termination not being checked, and iteration as tail calls.
 
 ## Strict evaluation
 
@@ -43,10 +43,10 @@ is refused with "pure definitions cannot call effect `println!`". Effects
 come only from the `Host` a program is handed
 ([effects](forms/effects.md)).
 
-Nothing changes in place. `=` binds a name again; it never changes a value,
-so `snapshot = order` stays what it was when `order` is bound again. A
-lambda assigns only its own names, and a loop is a function of the names it
-carries, so a definition with steps and loops is as pure as one without.
+Nothing changes in place. `=` binds a name again, shadowing the binding
+before it to the end of its block; it never changes a value, so `snapshot =
+order` stays what it was when `order` is bound again, and a definition with
+steps is as pure as one without.
 
 ## Unneeded work may be left out
 
@@ -94,23 +94,22 @@ there calls run out of room at most 128 deep.
 Nothing about stopping is refused. The decision, its measurements and its
 costs are in the [termination proposal](proposals/approved/termination.md).
 
-## Loops are tail calls
+## Iteration is tail calls
 
-A `for` or `while` loop is a recursive function of the names it carries,
-calling itself for the next round in tail position, so a round costs a
-jump and nine million rounds run in constant stack
-([loops proposal](proposals/approved/loops.md)):
+Faun has no loops: a walk is a function calling itself, a fold, or a
+library function ([recursion proposal](proposals/approved/recursion.md)).
+A call whose answer is its caller's answer is a jump on every target, so a
+step costs a jump and millions of steps run in constant stack:
 
 ```ruby
-summed(xs) -> (
-  total = 0
-  for x in xs do (
-    if x > 100 continue
-    total = total + x
-  )
-  total
-)
+summed : (List(Nat), Nat) -> Nat
+summed([], total) -> total
+summed([x, *xs], total) if x > 100 -> summed(xs, total)
+summed([x, *xs], total) -> summed(xs, total + x)
 ```
+
+A walk that leaves early answers instead of calling itself again, or folds
+with `fold_until`, whose step answers `Continue(state)` or `Stop(state)`.
 
 ## `&` and `|`
 
@@ -212,9 +211,9 @@ answer, since the code after it is reached only if it ends.
 Mostly simplicity of meaning: with every pure call known to come back, the
 order pure code runs in could not be observed, so the optimizer could move
 work as freely as it skips it, and no function would need a promised
-evaluation order. What it gained: no step limits, `while` loops whose test
-is partway through, as in `while True do ( … if done break … )`, and
-checking without the analysis. [Totality](totality.md) owns the whole
+evaluation order. What it gained: no step limits, walks whose test is
+partway through, a recursion leaving where it is done, and checking
+without the analysis. [Totality](totality.md) owns the whole
 trade. Exhaustive matching stays, for its own reason: a pure function
 answers for every input it can be given
 ([pattern matching](forms/pattern-matching.md)).
@@ -240,7 +239,8 @@ language where the question could not be observed.
 - [Termination proposal](proposals/approved/termination.md): the decision
 - [Totality](totality.md): what requiring every call to come back buys and
   costs
-- [Loops proposal](proposals/approved/loops.md): loops as tail calls
+- [Recursion proposal](proposals/approved/recursion.md): iteration as tail
+  calls, and names bound again as shadows
 - [Effects](forms/effects.md): `!`, `Host` and the order of effects
 - [Operators](forms/operators.md): operators as methods, `&` and `|`
 - [Memory](machine/memory.md): reference counting and in-place reuse

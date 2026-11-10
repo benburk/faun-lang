@@ -45,22 +45,12 @@ sorted_out(xs, n) -> (xs, n) is (
 expect sorted_out([], 0) == "nothing at all" & sorted_out([1], 3) == "a digit and some"
 expect sorted_out([1], 30) == "much" & sorted_out([], 5) == "a number alone"
 
-# A loop that leaves at once, one that never runs, and one that leaves the
-# clause from inside a loop inside a block bound to a name.
+# A `return` from inside a block bound to a name leaves the clause, not
+# the block.
 at_once : Nat -> Nat
 at_once(n) -> (
-  count = n
-  while True do (
-    if True break
-    count = count + 1
-  )
-  for _ in [] do (
-    count = 0
-  )
   found = (
-    for x in List.range(10) do (
-      if x == count return x * 100
-    )
+    if List.range(10).contains(n) return n * 100
     7
   )
   found

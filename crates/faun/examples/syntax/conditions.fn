@@ -132,19 +132,16 @@ expect described(Kelvin(300)) == "300 degrees" & described(Missing) == "no readi
 
 # An arm may leave in place of `then`, as an `if` line does.
 warmest : List(Reading) -> Result(Nat, [Unreadable])
-warmest(readings) -> (
-  best = 0
-  for reading in readings do (
-    c = reading is (
-      Celsius(c) then c
-      Kelvin(k) if k < 273 continue
-      Kelvin(k) then k - 273
-      Missing return Err(Unreadable)
-    )
-    if c <= best continue
-    best = c
+warmest([]) -> Ok(0)
+warmest([reading, *readings]) -> (
+  c = reading is (
+    Celsius(c) then c
+    Kelvin(k) if k < 273 return warmest(readings)
+    Kelvin(k) then k - 273
+    Missing return Err(Unreadable)
   )
-  Ok(best)
+  best = warmest(readings)?
+  Ok(c.max(best))
 )
 
 expect warmest([Celsius(12), Kelvin(300), Kelvin(100)]) == Ok(27)
@@ -155,51 +152,31 @@ expect warmest([Celsius(12), Missing]) == Err(Unreadable)
 Outcome : [Done, Skipped, Failed]
 
 completed : List(Outcome) -> Result(Nat, [Failed])
-completed(outcomes) -> (
-  count = 0
-  for outcome in outcomes do (
-    outcome is (
-      Skipped continue
-      Failed return Err(Failed)
-      Done then {}
-    )
-    count = count + 1
+completed([]) -> Ok(0)
+completed([outcome, *outcomes]) -> (
+  outcome is (
+    Skipped return completed(outcomes)
+    Failed return Err(Failed)
+    Done then {}
   )
-  Ok(count)
+  count = completed(outcomes)?
+  Ok(count + 1)
 )
 
 expect completed([Done, Skipped, Done]) == Ok(2) & completed([Done, Failed]) == Err(Failed)
 
-# A binding naming a name in scope assigns it, from there on: past the
-# branch it was assigned in, and below a line's `else`.
+# A binding naming a name in scope shadows it on the lines below, to the
+# end of its block. What a branch decides is the branch's value, bound
+# where the branch is.
 tally : (List(Nat), Bool) -> (Nat, Nat)
 tally(xs, strict) -> (
   count = xs.len()
   total = xs.sum()
-  total = if strict then (
-    count = count + 1
-    total * 2
-  ) else total
+  (count, total) = if strict then (count + 1, total * 2) else (count, total)
   (count, total)
 )
 
 expect tally([1, 2], True) == (3, 6) & tally([1, 2], False) == (2, 3)
-
-# An `if` on a line of its own whose branches only bind goes on with
-# nothing, as arms there do; one whose branch answers a value is a value
-# thrown away, and refused.
-clamped : (Nat, Nat) -> Nat
-clamped(n, limit) -> (
-  kept = n
-  if n > limit then (kept = limit) else {}
-  if kept == 0 then (
-    note = 1
-    kept = note
-  ) else (kept = kept + 0)
-  kept
-)
-
-expect clamped(9, 5) == 5 & clamped(3, 5) == 3 & clamped(0, 5) == 1
 
 # `if condition return …`, a block's line, leaves where its condition holds,
 # what the condition bound seen by the leave alone; the lines after it go on

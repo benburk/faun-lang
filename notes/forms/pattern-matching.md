@@ -7,7 +7,7 @@ pattern binds. The long exploration that led here is
 [pattern matching](pattern-matching-domain.md); the decided designs are the
 [conditions](../proposals/approved/conditions.md),
 [blocks](../proposals/approved/blocks.md) and
-[loops](../proposals/approved/loops.md) proposals.
+[recursion](../proposals/approved/recursion.md) proposals.
 
 ## Where a pattern stands
 
@@ -82,10 +82,9 @@ write where is a [lint's](../lints.md) concern, not the compiler's.
 
 A block's line `condition else return value` goes on where the condition
 holds, its names seen below, and leaves the clause where it fails. A line
-`if condition return value` leaves where the condition holds. `continue`
-and `break` leave the same way inside loops. `return`, `continue` and
-`break` stand nowhere else, so every way out of a body is a line saying
-one.
+`if condition return value` leaves where the condition holds. `return`
+stands nowhere else, so every way out of a body is a line saying one, or
+`?`.
 
 ```ruby
 first_over(xs, k) -> (
@@ -142,12 +141,22 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
 
 ## Binding again
 
-`=` binds a name from that line on, whether or not it was bound before, as
-Python's does: past the branch it was bound in and into a loop's next round.
-On a straight line the name may change type; where paths meet it has one
-type, if anything reads it there. A test's or an arm's pattern binds a name
-in scope again the same way, where it matched. A lambda's parameters shadow
-names around it within the lambda.
+`=` binds a name on the lines below, to the end of the block it stands in,
+whether or not it was bound before: a name bound again shadows the one
+before it there, at any type, and the one before is seen again after the
+block. A branch's, an arm's and a lambda's bindings are their own, so none
+is seen after them, and no two ways meet holding a name. A test's or an
+arm's pattern binds a name in scope again the same way, where it matched. A
+binding that binds a name again, and that nothing reads, is refused: it is
+what an assignment lost at the end of a branch would be.
+
+```ruby
+tally(xs, strict) -> (
+  count = xs.len()
+  (count, total) = if strict then (count + 1, xs.sum() * 2) else (count, xs.sum())
+  (count, total)
+)
+```
 
 ```ruby
 capped(limit, r) -> (
@@ -270,21 +279,25 @@ name written twice, `name is pattern`, and a list's end, `[*init, last]`,
 which takes a list apart from the end but is refused where a list is
 built, offering `init.append(last)`.
 
-### Why does `=` bind again, Python's way?
+### Why does `=` bind again, as a shadow?
 
-Loops carry state in names: `count = count + 1` is a step, and a round is a
-call of the loop with the names its body bound again. Faun first refused
-binding a name twice, which cost a fresh name for every step and, in a
-worklist, a `ready = rest` that a `continue` above it skipped forever. The
-loops draft's `$` variables put a sigil on every mention of what a loop
-changes. Shadowing, as Ori had it, hides the new binding at the end of its
-block, so a branch's `count = count + 1` would vanish after the branch
-without a word.
+A step is a name bound again: `degrees = degrees.put(target, degree)`, or
+`(seen, group) = walk(graph, [start], seen, [])`. Faun first refused binding
+a name twice, which cost a fresh name for every step, `degrees2`. Binding
+from here on, Python's way, carried a branch's assignment past the branch
+and a loop's into its next round, which cost resolution a merge of every
+name each way bound again; with loops gone
+([recursion](../proposals/approved/recursion.md)), only `if c then (x = a)
+else {}` needed it, which `x = if c then a else x` says in one line.
+Shadowing alone would let a branch's `count = count + 1` vanish after the
+branch without a word, which is why a binding again that nothing reads is
+refused.
 
 The cost is that a reader meeting a name must look above for every line
-binding it, and a typo, `totl = total + 1`, binds a new name. An unused
-binding is a [lint](../lints.md), not yet built. Values have no identity, so
-`snapshot = order` stays what it was when `order` is bound again.
+binding it, and a typo, `totl = total + 1`, binds a new name. A name bound
+for the first time and never read is a [lint](../lints.md), not yet built.
+Values have no identity, so `snapshot = order` stays what it was when
+`order` is bound again.
 
 ## Related
 
@@ -292,8 +305,8 @@ binding is a [lint](../lints.md), not yet built. Values have no identity, so
   `is`, arms, leaving lines and binding again, with its errata
 - [Pattern matching, the domain](pattern-matching-domain.md): the exploration,
   other languages' spellings, and the designs weighed
-- [Loops](../proposals/approved/loops.md): `for`, `while`, and names carried
-  across rounds
+- [Recursion](../proposals/approved/recursion.md): no loops, and names bound
+  again as shadows
 - [Loops, measured](../loops-experiment.md): a program written with loops and
   again as recursion
 - [Effects](effects.md): how a test takes apart a value holding a file

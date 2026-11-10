@@ -1193,28 +1193,27 @@ fn patterns_name_wholes_compare_and_bind_from_guards() {
 }
 
 /// An arm leaves where `then` would stand: `return` answers the clause,
-/// `continue` and `break` the loop, from arms that are a binding's value
-/// and from arms on a line of their own, which go on with `{}`.
+/// from arms that are a binding's value and from arms on a line of their
+/// own, which go on with `{}`, and a walk goes on by calling itself.
 #[test]
 fn an_arm_may_leave() {
     let program = read(
         "import std.host {Host}
 
          picked : List(Nat) -> Nat
-         picked(xs) -> (
-           for x in xs do (
-             step = x is (
-               0 break
-               1 continue
-               n if n > 2 return n
-               n then n
-             )
-             x is (
-               2 return step * 10
-               _ then {}
-             )
+         picked([]) -> 9
+         picked([x, *xs]) -> (
+           step = x is (
+             0 return 9
+             1 return picked(xs)
+             n if n > 2 return n
+             n then n
            )
-           9
+           x is (
+             2 return step * 10
+             _ then {}
+           )
+           picked(xs)
          )
 
          main! : Host -> []
@@ -1363,10 +1362,10 @@ fn a_way_that_never_answers_meets_one_that_does() {
     assert_eq!(answers, [2, 8, 6, 5]);
 }
 
-/// A name assigned again holds its new value from there on, past the
-/// branch or arm it was assigned in.
+/// A name bound again shadows the one before it on the lines below, to the
+/// end of its block: a branch's binding is the branch's alone.
 #[test]
-fn an_assigned_name_holds_its_new_value_past_its_branch() {
+fn a_name_bound_again_shadows_to_the_end_of_its_block() {
     let program = read(
         "import std.host {Host}
 
@@ -1377,19 +1376,12 @@ fn an_assigned_name_holds_its_new_value_past_its_branch() {
            count = count * 10
            label = if n > 1 then (
              count = count + 5
-             1
+             count
            ) else 2
-           seen = host.args is (
-             [_, *_] then (
-               count = count + label
-               True
-             )
-             [] then False
-           )
-           host.exit!(U8.of_nat(count))
+           host.exit!(U8.of_nat(count + label))
          )",
     )
-    .expect("a program assigning names");
+    .expect("a program binding names again");
     let program = TARGET
         .prepare(&program)
         .expect("a program this machine holds");
@@ -1397,32 +1389,31 @@ fn an_assigned_name_holds_its_new_value_past_its_branch() {
         .into_iter()
         .map(|(status, _)| status)
         .collect();
-    assert_eq!(answers, [12, 26]);
+    assert_eq!(answers, [12, 45]);
 }
 
-/// A loop runs its round once for each element, or while its condition
-/// holds, carrying what it binds again from round to round; an effect in
-/// a round happens each round, in order; and `continue`, `break` and
-/// `return` leave the round, the loop and the clause.
+/// A walk calling itself runs once for each element, handing on what it
+/// carries; an effect in it happens each time, in order; a clause passes
+/// over an element, or ends the walk, and `return` leaves the clause.
 #[test]
-fn loops_carry_names_and_keep_their_effects_in_order() {
+fn a_walk_keeps_its_effects_in_order() {
     let program = read(
         "import std.host {Host, Stdout, IoError}
 
+         summed! : (Stdout, List(Nat), Nat) -> Result(Nat, IoError)
+         summed!(_, [], total) -> Ok(total)
+         summed!(_, [4, *_], total) -> Ok(total)
+         summed!(out, [x, *xs], total) if x % 2 == 0 -> summed!(out, xs, total)
+         summed!(out, [x, *xs], total) -> (
+           written = out.write_all!(\"${x};\".to_utf8())?
+           summed!(out, xs, total + x)
+         )
+
          counted! : (Stdout, Nat) -> Result(Nat, IoError)
          counted!(out, n) -> (
-           total = 0
-           for x in List.range(n + 3) do (
-             if x == 4 break
-             x % 2 == 1 else continue
-             written = out.write_all!(\"${x};\".to_utf8())?
-             total = total + x
-           )
-           ready = [5, 6]
-           while ready is [head, *rest] do (
-             ready = rest
-             if head > 5 return Ok(total * 10 + head)
-           )
+           total = summed!(out, List.range(n + 3), 0)?
+           found = [5, 6].find(|head| head > 5)
+           if found is Ok(head) return Ok(total * 10 + head)
            Ok(total)
          )
 
@@ -1433,7 +1424,7 @@ fn loops_carry_names_and_keep_their_effects_in_order() {
            host.exit!(U8.of_nat(answer))
          )",
     )
-    .expect("a program with loops");
+    .expect("a program walking by recursion");
     let program = TARGET
         .prepare(&program)
         .expect("a program this machine holds");
@@ -1562,78 +1553,85 @@ fn a_list_built_on_the_way_out_goes_round_rather_than_down() {
     );
 }
 
-/// A loop inside another, for more rounds of the outer than a stack of
-/// frames goes: where the inner one ends, the outer goes round, and a
-/// `return` inside the inner one leaves both. Each is a loop of the
-/// function holding it, not a call of the outer from inside the inner;
-/// three deep too, with a `continue` at every depth or at none.
+/// A walk inside another, for more steps of the outer than a stack of
+/// frames goes: where the inner one ends, the outer goes on by calling
+/// itself in tail position, and an inner one finding its answer ends both.
+/// Each goes round in constant stack; three deep too, passing over
+/// elements at every depth or at none.
 #[test]
 #[expect(
     clippy::too_many_lines,
-    reason = "one program's four nests of loops, each a shape that must go round"
+    reason = "one program's four nests of walks, each a shape that must go round"
 )]
-fn a_loop_inside_another_goes_round_rather_than_down() {
+fn a_walk_inside_another_goes_round_rather_than_down() {
     let rounds: u64 = if TARGET.word() == 16 { 300 } else { 200_000 };
     let text = format!(
         "import std.host {{Host}}
 
          marked : Nat -> Nat
          marked(count) -> (
-           seen = List.repeat(False, count)
-           groups = []
-           for start in List.range(count) do (
-             if start % 2 == 1 continue
-             stack = [start]
-             while stack is [*stack, node] do (
-               seen = seen.put(node, True)
-             )
-             groups = groups.append(1)
-           )
-           groups.len() + seen.count(|mark| mark)
+           (seen, groups) = marking(List.range(count), List.repeat(False, count), 0)
+           groups + seen.count(|mark| mark)
          )
+
+         marking : (List(Nat), List(Bool), Nat) -> (List(Bool), Nat)
+         marking([], seen, groups) -> (seen, groups)
+         marking([start, *starts], seen, groups) if start % 2 == 1 -> marking(starts, seen, groups)
+         marking([start, *starts], seen, groups) -> marking(starts, walked([start], seen), groups + 1)
+
+         walked : (List(Nat), List(Bool)) -> List(Bool)
+         walked([], seen) -> seen
+         walked([*stack, node], seen) -> walked(stack, seen.put(node, True))
 
          first_past : (Nat, Nat) -> Nat
-         first_past(count, limit) -> (
-           for start in List.range(count) do (
-             if start % 2 == 1 continue
-             stack = [start]
-             while stack is [*stack, node] do (
-               if node >= limit return node
-             )
-           )
-           0
+         first_past(count, limit) -> past(List.range(count), limit)
+
+         past : (List(Nat), Nat) -> Nat
+         past([], _) -> 0
+         past([start, *starts], limit) if start % 2 == 1 -> past(starts, limit)
+         past([start, *starts], limit) -> (
+           found = beyond([start], limit)
+           if found is Ok(node) return node
+           past(starts, limit)
          )
+
+         beyond : (List(Nat), Nat) -> Result(Nat, [Missing])
+         beyond([], _) -> Err(Missing)
+         beyond([*_, node], limit) if node >= limit -> Ok(node)
+         beyond([*stack, _], limit) -> beyond(stack, limit)
 
          nested : Nat -> Nat
-         nested(count) -> (
-           total = 0
-           for a in List.range(count) do (
-             for b in [a, a + 1] do (
-               stack = [b]
-               while stack is [*stack, node] do (
-                 total = total + 1
-               )
-             )
-           )
-           total
-         )
+         nested(count) -> outer(List.range(count), 0)
+
+         outer : (List(Nat), Nat) -> Nat
+         outer([], total) -> total
+         outer([a, *rest], total) -> outer(rest, inner([a, a + 1], total))
+
+         inner : (List(Nat), Nat) -> Nat
+         inner([], total) -> total
+         inner([b, *rest], total) -> inner(rest, innermost([b], total))
+
+         innermost : (List(Nat), Nat) -> Nat
+         innermost([], total) -> total
+         innermost([*stack, _], total) -> innermost(stack, total + 1)
 
          skipping : Nat -> Nat
-         skipping(count) -> (
-           total = 0
-           for a in List.range(count) do (
-             if a % 2 == 1 continue
-             for b in [a, a] do (
-               if b % 4 == 2 continue
-               stack = [b]
-               while stack is [*stack, node] do (
-                 if node % 8 == 4 continue
-                 total = total + 1
-               )
-             )
-           )
-           total
-         )
+         skipping(count) -> skip_outer(List.range(count), 0)
+
+         skip_outer : (List(Nat), Nat) -> Nat
+         skip_outer([], total) -> total
+         skip_outer([a, *rest], total) if a % 2 == 1 -> skip_outer(rest, total)
+         skip_outer([a, *rest], total) -> skip_outer(rest, skip_inner([a, a], total))
+
+         skip_inner : (List(Nat), Nat) -> Nat
+         skip_inner([], total) -> total
+         skip_inner([b, *rest], total) if b % 4 == 2 -> skip_inner(rest, total)
+         skip_inner([b, *rest], total) -> skip_inner(rest, skip_innermost([b], total))
+
+         skip_innermost : (List(Nat), Nat) -> Nat
+         skip_innermost([], total) -> total
+         skip_innermost([*stack, node], total) if node % 8 == 4 -> skip_innermost(stack, total)
+         skip_innermost([*stack, _], total) -> skip_innermost(stack, total + 1)
 
          main! : Host -> []
          main!(host) -> (
@@ -1643,7 +1641,7 @@ fn a_loop_inside_another_goes_round_rather_than_down() {
            host.exit!(U8.of_nat((two + three) % 100))
          )"
     );
-    let program = read(&text).expect("the loops compile");
+    let program = read(&text).expect("the walks compile");
     let program = TARGET
         .prepare(&program)
         .expect("a program this machine holds");

@@ -122,7 +122,6 @@ fn entry(cx: &mut Context, main: &Main, asked: &[Symbol]) -> h::Clause {
             result: exited,
         },
         locals: 1,
-        merged: Vec::new(),
     }
 }
 

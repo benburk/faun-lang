@@ -89,9 +89,7 @@ impl Expr {
             ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
             ExprKind::Construct(_, list)
             | ExprKind::Tuple(list)
-            | ExprKind::DirectCall(_, list)
-            | ExprKind::Continue(list)
-            | ExprKind::Break(list) => list.iter().for_each(visit),
+            | ExprKind::DirectCall(_, list) => list.iter().for_each(visit),
             ExprKind::Record(fields) => {
                 for (_, value) in fields {
                     visit(value);
@@ -130,16 +128,6 @@ impl Expr {
                 }
             }
             ExprKind::Block(body) => body.exprs().for_each(visit),
-            ExprKind::Loop(looped) => {
-                for (initial, _, _) in &looped.carried {
-                    visit(initial);
-                }
-                match &looped.head {
-                    LoopHead::While(value) | LoopHead::For(_, value) => visit(value),
-                }
-                looped.body.exprs().for_each(&mut visit);
-                looped.rest.exprs().for_each(visit);
-            }
         }
     }
 
@@ -165,20 +153,6 @@ impl Expr {
             }
             ExprKind::Block(body) => {
                 for binding in &body.bindings {
-                    binding.pattern.for_each_bound(visit);
-                }
-            }
-            // A loop binds what it carries, its pattern, and its lines.
-            ExprKind::Loop(looped) => {
-                for (_, within, after) in &looped.carried {
-                    visit(*within);
-                    visit(*after);
-                }
-                if let LoopHead::For(pattern, _) = &looped.head {
-                    pattern.for_each_bound(visit);
-                }
-                let lines = looped.body.bindings.iter().chain(&looped.rest.bindings);
-                for binding in lines {
                     binding.pattern.for_each_bound(visit);
                 }
             }
@@ -221,33 +195,10 @@ pub(crate) enum ExprKind {
     /// `value is ( arms )`; see [`crate::hir::ExprKind::Match`]. Pattern
     /// compiling binds it on a line of its own, one decision for every arm.
     Match(Box<Expr>, Vec<Arm>),
-    /// A loop; see [`crate::hir::Loop`]. Pattern compiling makes it a
-    /// function of what it carries, calling itself for each round.
-    Loop(Box<Loop>),
-    /// `continue`; see [`crate::hir::ExprKind::Continue`].
-    Continue(Vec<Expr>),
-    /// `break`; see [`crate::hir::ExprKind::Break`].
-    Break(Vec<Expr>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     /// Pattern compiling takes its bindings out ahead of the expression it
     /// stands in.
     Block(Box<Body>),
-}
-
-/// A loop; see [`crate::hir::Loop`].
-#[derive(Clone, Debug)]
-pub(crate) struct Loop {
-    pub(crate) carried: Vec<(Expr, LocalId, LocalId)>,
-    pub(crate) head: LoopHead,
-    pub(crate) body: Body,
-    pub(crate) rest: Body,
-}
-
-/// What a loop runs over; see [`crate::hir::LoopHead`].
-#[derive(Clone, Debug)]
-pub(crate) enum LoopHead {
-    While(Expr),
-    For(Pattern, Expr),
 }
 
 /// One arm; see [`crate::specialize::Arm`].

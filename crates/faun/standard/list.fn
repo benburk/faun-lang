@@ -85,6 +85,25 @@ List(a) : [Nil, Cons(a, List(a))].(
   fold([], state, _) -> state
   fold([head, *tail], state, f) -> fold(tail, f(state, head), f)
 
+  # A fold that may stop early: `f` answers `Continue(state)` to go on,
+  # and `Stop(state)` to answer that state with the elements after left
+  # unwalked.
+  fold_until : (List(a), b, (b, a) -> [Continue(b), Stop(b)]) -> b
+  fold_until([], state, _) -> state
+  fold_until([head, *tail], state, f) -> f(state, head) is (
+    Continue(next) then fold_until(tail, next, f)
+    Stop(done) then done
+  )
+
+  # A fold whose step may fail: the state once every step answered `Ok`,
+  # or the first `Err`, the elements after it left unwalked.
+  try_fold : (List(a), b, (b, a) -> Result(b, e)) -> Result(b, e)
+  try_fold([], state, _) -> Ok(state)
+  try_fold([head, *tail], state, f) -> (
+    next = f(state, head)?
+    try_fold(tail, next, f)
+  )
+
   # The fold from the right: `f` takes the element before the state.
   fold_right : (List(a), b, (a, b) -> b) -> b
   fold_right(values, state, f) -> fold_back(reverse_into(values, []), state, f)
@@ -411,3 +430,7 @@ expect [1, 2, 3, 4, 5].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: [5]}
 expect [1, 2, 3, 4].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: []}
 expect [1, 2].blocks(0) == {complete: [], remainder: [1, 2]}
 expect [1, 2, 3].map_accum(10, |sum, x| (sum + x, sum)) == (16, [10, 11, 13])
+expect [1, 2, 3, 4].fold_until(0, |total, x| if x > 2 then Stop(total) else Continue(total + x)) == 3
+expect [1, 2].fold_until(0, |total, x| Continue(total + x)) == 3
+expect ["1", "2"].try_fold(0, |total, text| Nat.from_str(text).map_ok(|n| total + n)) == Ok(3)
+expect ["1", "x", "2"].try_fold(0, |total, text| Nat.from_str(text).map_ok(|n| total + n)).is_err()

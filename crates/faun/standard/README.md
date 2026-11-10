@@ -90,13 +90,16 @@ of equality, asked before the clause's guard.
 
 `List` follows Ori's standard list: `len`, `is_empty`, `append`, `concat`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
-`any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
+`any`, `all`, `fold`, `fold_until`, `try_fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
 `get`, `get_or`, `put`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,
 `contains`, `sum`, `take`, `drop`, `take_while`, `drop_while`, `split_at`,
 `partition`, `zip`, `unzip`, `cross`, `enumerate`, `windows`, `min`, `max`,
 `sort`, `sort_on` and `to_str`, and the constructors `List.range(n)` and
 `List.repeat(x, n)`. `sort` is a stable merge sort by the element's `cmp`, and
-`sort_on` by a key's. `put` writes an element and leaves a list with none
+`sort_on` by a key's. `fold_until` is a fold whose step answers `Continue(state)` to go on or
+`Stop(state)` to answer at once, and `try_fold` one whose step answers a
+`Result`, stopping at the first `Err`: with recursion, they are how a walk
+leaves early, there being no loops. `put` writes an element and leaves a list with none
 at that index unchanged; `set` answers `Err(OutOfBounds)` there instead.
 `join` puts a separator between the pieces of
 anything with `empty` and `concat`: `["a", "b"].join(", ")` is `"a, b"`,

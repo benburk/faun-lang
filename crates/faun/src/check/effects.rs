@@ -71,24 +71,6 @@ fn expr(
             }
             within(&body.result, stands_alone)
         }
-        // A loop's round is a block's lines, and what follows it stands
-        // where the loop does.
-        h::ExprKind::Loop(looped) => {
-            for (initial, _, _) in &looped.carried {
-                within(initial, false)?;
-            }
-            // A loop's head is worked out first, once a round or once in
-            // all, before anything else the loop does.
-            within(looped.head.value(), true)?;
-            looped
-                .body
-                .exprs()
-                .try_for_each(|line| within(line, true))?;
-            for binding in &looped.rest.bindings {
-                within(&binding.value, true)?;
-            }
-            within(&looped.rest.result, stands_alone)
-        }
         h::ExprKind::Call(head, arguments) => match &head.kind {
             h::ExprKind::Global(name) if effect(*name) => {
                 called(*name)?;

@@ -2,7 +2,9 @@
 
 As of 2026-10-09, after `is`, arms, leaving lines, loops and the prefix
 rule went in. The question: does the grammar stay simple, unambiguous and
-LL(1), with no edge cases a reader trips on?
+LL(1), with no edge cases a reader trips on? Since 2026-11-10 there are no
+loops ([recursion](proposals/approved/recursion.md)): `do`, `continue` and
+`break` are gone, and with them the lines below that name them.
 
 ## What holds
 

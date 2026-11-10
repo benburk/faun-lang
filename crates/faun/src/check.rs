@@ -96,8 +96,7 @@ pub struct InferredBound {
 }
 
 /// Noted where a value of type `{}` stands where another is wanted.
-const ANSWERS_NOTHING: &str =
-    "a block whose last line is a binding, a loop or a leaving line answers `{}`";
+const ANSWERS_NOTHING: &str = "a block whose last line is a binding or a leaving line answers `{}`";
 
 /// Which reading a word some declaration claims took, by its site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,15 +487,9 @@ struct Checker<'a> {
     /// what an answer, or a `?`, settles before its row meets the
     /// signature's.
     clause_marks: Option<Marks>,
-    /// In the clause being checked, each local a name bound again in a
-    /// branch is after it, and the name.
-    merges: HashMap<h::LocalId, Symbol>,
     /// Prefix operators read otherwise than they may look, with what to say
     /// where their operand has no method for them.
     prefix_helps: HashMap<h::SiteId, &'static str>,
-    /// The types of the names each loop around the expression being checked
-    /// carries, innermost last.
-    loops: Vec<Vec<Ty>>,
     expression_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
     /// Each expression handed a name or a lambda, in the order checked,
     /// for [`Self::stored_function`] to look at once types are known.
@@ -846,7 +839,6 @@ impl Checker<'_> {
             ));
         }
         let mut locals = vec![None; usize::try_from(clause.locals).expect("u32 fits usize")];
-        self.merges = clause.merged.iter().copied().collect();
         for (pattern, parameter) in clause.patterns.iter().zip(parameters.iter()) {
             self.pattern(module, pattern, parameter, &mut locals, clause.span)?;
         }
@@ -952,50 +944,6 @@ impl Checker<'_> {
         )
     }
 
-    /// A loop: each carried name one type going in, within a round and
-    /// after; the condition a `Bool`, or the pattern an element of the
-    /// list; the body; and what follows it, whose answer the loop's is.
-    fn looped(
-        &mut self,
-        module: ModuleId,
-        looped: &h::Loop,
-        locals: &mut Vec<Option<Scheme>>,
-    ) -> Result<Ty, Refusal> {
-        let mut carried = Vec::with_capacity(looped.carried.len());
-        for (initial, within, after) in &looped.carried {
-            let ty = self.expr(module, initial, locals)?;
-            for local in [within, after] {
-                locals[local.index()] = Some(Scheme {
-                    variables: Vec::new(),
-                    ty: ty.clone(),
-                });
-            }
-            carried.push(ty);
-        }
-        match &looped.head {
-            h::LoopHead::While(condition) => {
-                let asked = self.expr(module, condition, locals)?;
-                let bool_ = self.bool_type();
-                self.unify_at(module, condition.span, &asked, &bool_)?;
-            }
-            h::LoopHead::For(pattern, list) => {
-                let walked = self.expr(module, list, locals)?;
-                let element = self.infer.fresh();
-                let list_ty = self.list_type(element.clone());
-                self.unify_at(module, list.span, &walked, &list_ty)?;
-                self.tested_pattern(module, pattern, &element, locals, list.span)?;
-            }
-        }
-        self.loops.push(carried);
-        let round = self
-            .bindings(module, &looped.body.bindings, locals)
-            .and_then(|()| self.expr(module, &looped.body.result, locals));
-        self.loops.pop();
-        round?;
-        self.bindings(module, &looped.rest.bindings, locals)?;
-        self.expr(module, &looped.rest.result, locals)
-    }
-
     /// A test's pattern at the type of what it tests, each name it binds
     /// at one type, as a binding's names are.
     fn tested_pattern(
@@ -1042,20 +990,9 @@ impl Checker<'_> {
             h::Pattern::Bind(local) => {
                 if let Some(bound) = &locals[local.index()] {
                     let bound = bound.ty.clone();
-                    let merged = self.merges.get(local).copied();
                     return self.infer.unify(expected, &bound).map_err(|_| {
                         let first = show(&self.infer.resolve(&bound), self.symbols);
                         let other = show(&self.infer.resolve(expected), self.symbols);
-                        if let Some(name) = merged {
-                            let name = self.symbols.text(name);
-                            return failure(
-                                module,
-                                span,
-                                format!("`{name}` is read where the branches meet, so it has one type there"),
-                            )
-                            .label(format!("a `{first}` one way through, and a `{other}` another"))
-                            .help("give the value a name of its own in the branch");
-                        }
                         let message = "the alternatives of this `|` bind a name at different types";
                         failure(module, span, message).label(format!(
                             "bound as `{first}` by one alternative and as `{other}` by another"
@@ -1283,21 +1220,6 @@ impl Checker<'_> {
             h::ExprKind::Block(body) => {
                 self.bindings(module, &body.bindings, locals)?;
                 self.expr(module, &body.result, locals)
-            }
-            h::ExprKind::Loop(looped) => self.looped(module, looped, locals),
-            // What a `continue` or a `break` hands on has the types of the
-            // names the loop carries; the leave itself is worth whatever its
-            // place asks.
-            h::ExprKind::Continue(values) | h::ExprKind::Break(values) => {
-                let carried = self.loops.last().cloned().unwrap_or_default();
-                for (value, ty) in values.iter().zip(&carried) {
-                    let handed = self.expr(module, value, locals)?;
-                    self.unify_at(module, value.span, &handed, ty)
-                        .map_err(|error| {
-                            error.note("a name read in a loop's next round or after it has one type across its rounds")
-                        })?;
-                }
-                Ok(self.infer.fresh())
             }
             h::ExprKind::Local(local) => {
                 let Some(scheme) = locals[local.index()].as_ref() else {

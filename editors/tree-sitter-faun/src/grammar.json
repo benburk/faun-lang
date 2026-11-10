@@ -1322,139 +1322,9 @@
           "type": "FIELD",
           "name": "otherwise",
           "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "SYMBOL",
-                "name": "return_expression"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "leave"
-              }
-            ]
+            "type": "SYMBOL",
+            "name": "return_expression"
           }
-        }
-      ]
-    },
-    "leave": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "continue"
-        },
-        {
-          "type": "STRING",
-          "value": "break"
-        }
-      ]
-    },
-    "loop_line": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SEQ",
-          "members": [
-            {
-              "type": "STRING",
-              "value": "while"
-            },
-            {
-              "type": "FIELD",
-              "name": "condition",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_expression"
-              }
-            },
-            {
-              "type": "STRING",
-              "value": "do"
-            },
-            {
-              "type": "FIELD",
-              "name": "body",
-              "content": {
-                "type": "SYMBOL",
-                "name": "round"
-              }
-            }
-          ]
-        },
-        {
-          "type": "SEQ",
-          "members": [
-            {
-              "type": "STRING",
-              "value": "for"
-            },
-            {
-              "type": "FIELD",
-              "name": "pattern",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_operand"
-              }
-            },
-            {
-              "type": "STRING",
-              "value": "in"
-            },
-            {
-              "type": "FIELD",
-              "name": "list",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_expression"
-              }
-            },
-            {
-              "type": "STRING",
-              "value": "do"
-            },
-            {
-              "type": "FIELD",
-              "name": "body",
-              "content": {
-                "type": "SYMBOL",
-                "name": "round"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    "round": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "("
-        },
-        {
-          "type": "SYMBOL",
-          "name": "_block_line"
-        },
-        {
-          "type": "REPEAT",
-          "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "SYMBOL",
-                "name": "_block_newline"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "_block_line"
-              }
-            ]
-          }
-        },
-        {
-          "type": "STRING",
-          "value": ")"
         }
       ]
     },
@@ -1485,10 +1355,6 @@
         {
           "type": "SYMBOL",
           "name": "if_line"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "loop_line"
         }
       ]
     },
@@ -1511,17 +1377,8 @@
           "type": "FIELD",
           "name": "leave",
           "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "SYMBOL",
-                "name": "return_expression"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "leave"
-              }
-            ]
+            "type": "SYMBOL",
+            "name": "return_expression"
           }
         }
       ]
@@ -1919,17 +1776,8 @@
               "type": "FIELD",
               "name": "leave",
               "content": {
-                "type": "CHOICE",
-                "members": [
-                  {
-                    "type": "SYMBOL",
-                    "name": "return_expression"
-                  },
-                  {
-                    "type": "SYMBOL",
-                    "name": "leave"
-                  }
-                ]
+                "type": "SYMBOL",
+                "name": "return_expression"
               }
             }
           ]

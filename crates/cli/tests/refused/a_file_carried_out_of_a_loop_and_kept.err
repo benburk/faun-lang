@@ -1,7 +1,0 @@
-error: the `File` this loop carries is neither used up nor answered on every way `program!` goes on
-  --> a_file_carried_out_of_a_loop_and_kept.fn:12:3
-   |
-12 |   for name in names do (
-   |   ^^^^^^^^^^^^^^^^^^^^^^ this loop carries the `File`
-   |
-   = help: use it up, as `close!` does, or answer it

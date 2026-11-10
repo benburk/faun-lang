@@ -1,0 +1,7 @@
+error: `total` is bound again here and nothing reads it
+ --> a_name_bound_again_and_never_read_binds_for_nothing.fn:6:3
+  |
+6 |   total = total + 1
+  |   ^^^^^ bound for nothing
+  |
+  = help: read what it binds, or leave the binding out

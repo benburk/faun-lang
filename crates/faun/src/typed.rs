@@ -112,11 +112,9 @@ impl Expr {
             | ExprKind::Constructor(_)
             | ExprKind::Literal(_)
             | ExprKind::Numeral(_) => {}
-            ExprKind::Construct(_, list)
-            | ExprKind::Tuple(list)
-            | ExprKind::Method(_, list)
-            | ExprKind::Continue(list)
-            | ExprKind::Break(list) => list.iter().for_each(visit),
+            ExprKind::Construct(_, list) | ExprKind::Tuple(list) | ExprKind::Method(_, list) => {
+                list.iter().for_each(visit);
+            }
             ExprKind::Record(fields) => {
                 for (_, value) in fields {
                     visit(value);
@@ -155,16 +153,6 @@ impl Expr {
                 }
             }
             ExprKind::Block(body) => body.exprs().for_each(visit),
-            ExprKind::Loop(looped) => {
-                for (initial, _, _) in &looped.carried {
-                    visit(initial);
-                }
-                match &looped.head {
-                    LoopHead::While(value) | LoopHead::For(_, value) => visit(value),
-                }
-                looped.body.exprs().for_each(&mut visit);
-                looped.rest.exprs().for_each(visit);
-            }
         }
     }
 
@@ -234,26 +222,4 @@ pub enum ExprKind {
     Match(Box<Expr>, Vec<Arm>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
-    /// A loop; see [`crate::hir::Loop`].
-    Loop(Box<Loop>),
-    /// `continue`; see [`crate::hir::ExprKind::Continue`].
-    Continue(Vec<Expr>),
-    /// `break`; see [`crate::hir::ExprKind::Break`].
-    Break(Vec<Expr>),
-}
-
-/// A loop; see [`crate::hir::Loop`].
-#[derive(Clone, Debug)]
-pub struct Loop {
-    pub carried: Vec<(Expr, LocalId, LocalId)>,
-    pub head: LoopHead,
-    pub body: Body,
-    pub rest: Body,
-}
-
-/// What a loop runs over; see [`crate::hir::LoopHead`].
-#[derive(Clone, Debug)]
-pub enum LoopHead {
-    While(Expr),
-    For(Pattern, Expr),
 }

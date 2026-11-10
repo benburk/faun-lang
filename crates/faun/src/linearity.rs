@@ -27,9 +27,7 @@
 //! A test is two ways on, where it holds and where it fails. Where a
 //! pattern names a part holding a resource, the value is taken apart there,
 //! as a binding takes it; where it fails, the value is as it was, holding
-//! none where the test shows it cannot. A loop's round must end as it began,
-//! what it made used up or handed to the next round in a name the loop
-//! carries, and every way out of the loop must agree. A branch of type `[]`
+//! none where the test shows it cannot. A branch of type `[]`
 //! where the rest of its `if` or `is` answers never answers: it is a way the
 //! function ends, as a `return` is, so it uses up what it holds there and has
 //! no say in what the branches that answer agree on.
@@ -612,8 +610,6 @@ enum Maker {
     Built,
     /// Answered by this function.
     Call(Symbol),
-    /// Made in a loop's round and carried to the next, or out of it.
-    Carried,
 }
 
 /// How one way a function goes on ends.
@@ -645,17 +641,6 @@ enum State {
     /// it is not there on this way, as what a test bound where it failed.
     /// A record whose fields are held each on its own holds none itself.
     Empty,
-}
-
-impl State {
-    /// As a round leaving it would find it next: a value shown to hold
-    /// nothing is the value it was.
-    const fn settled(self) -> Self {
-        match self {
-            Self::Empty => Self::Held,
-            other => other,
-        }
-    }
 }
 
 /// Where a condition holds and where it fails: the state of everything
@@ -711,20 +696,6 @@ impl Apart {
     }
 }
 
-/// The loop being walked: how its round begins, and every way the round
-/// ends, by `continue`, or the loop, by `break`.
-struct Frame {
-    /// What was held when the round begins.
-    start: Vec<State>,
-    /// How many things were held before the loop; the rest are its own.
-    outer: usize,
-    /// What holds the part of a list a `for` has not walked yet.
-    walking: Option<usize>,
-    continues: Vec<(Place, Vec<State>)>,
-    /// Each `break`, with what each name the loop carries is handed.
-    breaks: Vec<(Vec<State>, Vec<Vec<State>>)>,
-}
-
 /// One way a function goes on, to its answer or out by `?`: which
 /// parameters' resources it took, where, and which it kept.
 struct Path {
@@ -773,11 +744,9 @@ struct Walk<'f, 'a> {
     guarded: bool,
     /// Where the clause walked answers, for what its head is refused.
     answering: Option<Place>,
-    /// Whether the branch walked last left by `return`, `continue` or
-    /// `break`, so that nothing after it is held as it left things.
+    /// Whether the branch walked last left by `return`, so that nothing
+    /// after it is held as it left things.
     left: bool,
-    /// The loops being walked, the innermost last.
-    loops: Vec<Frame>,
     /// Where a test took apart what it tested, which it holds no longer.
     taken_apart: HashSet<Place>,
     /// A named record's fields holding a resource, each held on its own,
@@ -805,7 +774,6 @@ impl<'f, 'a> Walk<'f, 'a> {
             guarded: false,
             answering: Some(answering),
             left: false,
-            loops: Vec::new(),
             taken_apart: HashSet::new(),
             fields: HashMap::new(),
         }
@@ -1047,15 +1015,6 @@ impl<'f, 'a> Walk<'f, 'a> {
             // A block's bindings hold what they bind, as a body's do, and
             // its answer is what it is worth.
             ExprKind::Block(block) => self.block(block),
-            ExprKind::Loop(looped) => self.looped(expr, looped),
-            ExprKind::Continue(values) => {
-                self.continued(expr, values);
-                Vec::new()
-            }
-            ExprKind::Break(values) => {
-                self.broke(expr, values);
-                Vec::new()
-            }
         }
     }
 
@@ -1114,137 +1073,6 @@ impl<'f, 'a> Walk<'f, 'a> {
         Some(held)
     }
 
-    /// A loop, whose round may run any number of times. What it carries is
-    /// taken going in and held within a round, and what it walks is taken
-    /// and held until walked. Each round must end as it began: what was held
-    /// before the loop as it was, and what the round made used up or handed
-    /// to the next. The lines after it go on from every way out, which must
-    /// agree.
-    fn looped(&mut self, expr: &d::Expr, looped: &d::Loop) -> Vec<Origin> {
-        let outer = self.held.len();
-        let within: Vec<Option<usize>> = looped
-            .carried
-            .iter()
-            .map(|(initial, local, _)| self.carry(initial, *local))
-            .collect();
-        let walking = match &looped.head {
-            d::LoopHead::For(_, list) => {
-                let origins = self.value(list);
-                self.held_by_none(origins)
-            }
-            d::LoopHead::While(_) => None,
-        };
-        self.loops.push(Frame {
-            start: self.states(),
-            outer,
-            walking,
-            continues: Vec::new(),
-            breaks: Vec::new(),
-        });
-        let ended = self.round_begun(&looped.head, walking);
-        let outer_left = std::mem::take(&mut self.left);
-        self.block(&looped.body);
-        self.left = outer_left;
-        let frame = self.loops.pop().expect("the loop walked is the innermost");
-        for (at, states) in &frame.continues {
-            self.round_ended(&frame, *at, states);
-        }
-        self.after_loop(expr, looped, &within, ended, frame.breaks);
-        self.block(&looped.rest)
-    }
-
-    /// A round begun by its head: a `while`'s condition holding, or a
-    /// `for`'s next element bound. Answers how the loop ends, where the
-    /// condition fails or nothing is left to walk.
-    fn round_begun(&mut self, head: &d::LoopHead, walking: Option<usize>) -> Vec<State> {
-        match head {
-            d::LoopHead::While(condition) => {
-                let outcome = self.condition(condition);
-                self.set(&outcome.holds);
-                outcome.fails
-            }
-            d::LoopHead::For(pattern, list) => {
-                let mut ended = self.states();
-                let mut origins = Vec::new();
-                if let Some(walking) = walking {
-                    ended[walking] = State::Empty;
-                    origins.clone_from(&self.held[walking].origins);
-                }
-                if let Type::Named(_, arguments) = &list.ty
-                    && let Some(element) = arguments.first()
-                {
-                    self.bind(pattern, element, &origins);
-                }
-                ended
-            }
-        }
-    }
-
-    /// Out of a loop, by its head as `ended` says or by each of `breaks`:
-    /// what it carried held after it, by the names it binds there, and
-    /// every way out met.
-    fn after_loop(
-        &mut self,
-        expr: &d::Expr,
-        looped: &d::Loop,
-        within: &[Option<usize>],
-        ended: Vec<State>,
-        breaks: Vec<(Vec<State>, Vec<Vec<State>>)>,
-    ) {
-        let after: Vec<Option<usize>> = within
-            .iter()
-            .zip(&looped.carried)
-            .map(|(within, (initial, _, after))| {
-                let origins = self.held[(*within)?].origins.clone();
-                let held = self.named(&origins, &initial.ty);
-                self.locals.insert(*after, held);
-                Some(held)
-            })
-            .collect();
-        let mut states = self.extended(ended);
-        for (within, after) in within.iter().zip(&after) {
-            if let (Some(within), Some(after)) = (within, after) {
-                for (within, after) in self.leaves(*within).into_iter().zip(self.leaves(*after)) {
-                    states[after] = states[within];
-                    states[within] = State::Empty;
-                }
-            }
-        }
-        self.set(&states);
-        for (states, handed) in breaks {
-            let mut states = self.extended(states);
-            for (after, handed) in after.iter().zip(handed) {
-                if let Some(after) = after {
-                    for (at, leaf) in self.leaves(*after).into_iter().enumerate() {
-                        states[leaf] = handed
-                            .get(at)
-                            .or_else(|| handed.first())
-                            .copied()
-                            .unwrap_or(State::Empty);
-                    }
-                }
-            }
-            self.agreed(expr, states);
-        }
-    }
-
-    /// What a loop carries in `local`, taken from `initial`: held within
-    /// each round, with whatever a round made and handed on.
-    fn carry(&mut self, initial: &d::Expr, local: LocalId) -> Option<usize> {
-        let mut origins = self.value(initial);
-        if !self.facts.carries(&initial.ty) {
-            return None;
-        }
-        let made = Made {
-            resource: self.facts.resource_in(&initial.ty),
-            by: Maker::Carried,
-        };
-        origins.push(Origin::Made(place(initial), made));
-        let held = self.named(&origins, &initial.ty);
-        self.locals.insert(local, held);
-        Some(held)
-    }
-
     /// `origins`, held by something not named, if there are any.
     fn held_by_none(&mut self, origins: Vec<Origin>) -> Option<usize> {
         if origins.is_empty() {
@@ -1255,143 +1083,6 @@ impl<'f, 'a> Walk<'f, 'a> {
             state: State::Held,
         });
         Some(self.held.len() - 1)
-    }
-
-    /// `continue`: what the loop carries handed to the next round, which
-    /// must begin as this one did.
-    fn continued(&mut self, expr: &d::Expr, values: &[d::Expr]) {
-        for value in values {
-            let origins = self.value(value);
-            if !is_local(value) {
-                self.hold(&origins);
-            }
-        }
-        let states = self.states();
-        if let Some(frame) = self.loops.last_mut() {
-            frame.continues.push((place(expr), states));
-        }
-        self.left = true;
-    }
-
-    /// `break`: what the loop carries handed to the lines after it. Any
-    /// part of a list a `for` has not walked yet would be left held.
-    fn broke(&mut self, expr: &d::Expr, values: &[d::Expr]) {
-        let mut handed = Vec::new();
-        for value in values {
-            let states = if is_local(value) {
-                let states = self.local(value).map_or_else(Vec::new, |held| {
-                    let leaves = self.leaves(held);
-                    leaves.iter().map(|leaf| self.held[*leaf].state).collect()
-                });
-                self.value(value);
-                states
-            } else if self.value(value).is_empty() {
-                vec![State::Empty]
-            } else {
-                vec![State::Held]
-            };
-            handed.push(states);
-        }
-        let walking = self.loops.last().and_then(|frame| frame.walking);
-        if let Some(walking) = walking
-            && self.held[walking].state == State::Held
-        {
-            let resource = self.facts.called(self.resource_of(walking), "resource");
-            self.refused.push(Refusal {
-                at: Some(place(expr)),
-                message: format!(
-                    "a `break` leaves held the {resource}s its `for` has not walked yet"
-                ),
-                label: "leaves here".to_owned(),
-                also: None,
-                help: Some("walk every element, using each up".to_owned()),
-            });
-            self.held[walking].state = State::Empty;
-        }
-        let states = self.states();
-        if let Some(frame) = self.loops.last_mut() {
-            frame.breaks.push((states, handed));
-        }
-        self.left = true;
-    }
-
-    /// A round ending at `at` as `states` say: what was held before the
-    /// loop must be as the round found it, and what the round made, and
-    /// what the loop carried in, used up or handed on.
-    fn round_ended(&mut self, frame: &Frame, at: Place, states: &[State]) {
-        for (held, state) in states.iter().enumerate() {
-            if Some(held) == frame.walking {
-                continue;
-            }
-            if held < frame.outer {
-                if frame.start[held].settled() != state.settled() {
-                    let refusal = self.round_used_up(held, *state, at);
-                    self.refused.push(refusal);
-                }
-            } else if *state == State::Held {
-                let refusal = self.round_kept(held, at);
-                self.refused.push(refusal);
-            }
-        }
-    }
-
-    /// What was held before a loop, used up by a round that goes on.
-    fn round_used_up(&self, held: usize, state: State, at: Place) -> Refusal {
-        let resource = self.facts.called(self.resource_of(held), "resource");
-        let gone = match state {
-            State::Gone(gone) => Some(gone),
-            _ => None,
-        };
-        Refusal {
-            at: gone.or(Some(at)),
-            message: format!("a loop's round uses up a {resource} held before the loop"),
-            label: "used up here".to_owned(),
-            also: gone.map(|_| (at, "the next round would find it used up".to_owned())),
-            help: Some("use it up after the loop, or `break` once it is used up".to_owned()),
-        }
-    }
-
-    /// What a round made, or the loop carried in, still held where the
-    /// round goes on.
-    fn round_kept(&self, kept: usize, at: Place) -> Refusal {
-        let made = self.held[kept]
-            .origins
-            .iter()
-            .find_map(|origin| match origin {
-                Origin::Made(place, made) => Some((*place, *made)),
-                Origin::Parameter(_) => None,
-            });
-        let help =
-            Some("use it up within the round, or hand it on in a name the loop carries".to_owned());
-        let Some((made_at, made)) = made else {
-            let resource = self.facts.called(self.resource_of(kept), "resource");
-            return Refusal {
-                at: Some(at),
-                message: format!(
-                    "a {resource} this round holds is neither used up nor carried to the next"
-                ),
-                label: "still held where the round goes on".to_owned(),
-                also: None,
-                help,
-            };
-        };
-        let resource = self.facts.called(made.resource, "resource");
-        let message = match made.by {
-            Maker::Carried => format!(
-                "the {resource} this loop carried into the round is neither used up nor handed to the next"
-            ),
-            Maker::Built | Maker::Call(_) => format!(
-                "{} is neither used up nor carried to the next round",
-                self.described(made)
-            ),
-        };
-        Refusal {
-            at: Some(made_at),
-            message,
-            label: made_label(made, &resource),
-            also: (made_at != at).then(|| (at, "still held where the round goes on".to_owned())),
-            help,
-        }
     }
 
     /// The resource type what is held at `held` holds, as its origins say.
@@ -1745,21 +1436,9 @@ impl<'f, 'a> Walk<'f, 'a> {
     }
 
     /// A resource held at `held` used up at `gone`, in one branch of the
-    /// `if` at `expr` and not the other, one arm and not another, or on
-    /// one way out of a loop and not another.
+    /// `if` at `expr` and not the other, or one arm and not another.
     fn one_branch(&self, expr: &d::Expr, held: usize, gone: Place) -> Refusal {
         let resource = self.facts.called(self.resource_of(held), "resource");
-        if matches!(expr.kind, ExprKind::Loop(..)) {
-            return Refusal {
-                at: Some(gone),
-                message: format!(
-                    "this {resource} is used up on one way out of a loop and not another"
-                ),
-                label: self.gone_label(gone),
-                also: Some((place(expr), "another way out still holds it".to_owned())),
-                help: Some("use it up on every way out of the loop, or on none".to_owned()),
-            };
-        }
         if matches!(expr.kind, ExprKind::Match(..)) {
             return Refusal {
                 at: Some(gone),
@@ -2107,7 +1786,6 @@ impl<'f, 'a> Walk<'f, 'a> {
         match made.by {
             Maker::Built => format!("the {resource} built here"),
             Maker::Call(by) => format!("the {resource} from `{}`", self.facts.spelled(by)),
-            Maker::Carried => format!("the {resource} this loop carries"),
         }
     }
 }
@@ -2153,7 +1831,6 @@ fn disagreeing(
 /// What is at the place `made` was made.
 fn made_label(made: Made, resource: &str) -> String {
     match made.by {
-        Maker::Carried => format!("this loop carries the {resource}"),
         Maker::Built | Maker::Call(_) => format!("this {resource} is made here"),
     }
 }
@@ -2185,7 +1862,7 @@ fn answering(expr: &d::Expr) -> &d::Expr {
 /// Whether `expr` never answers where it stands.
 fn leaves(expr: &d::Expr) -> bool {
     match &expr.kind {
-        ExprKind::Return(_) | ExprKind::Continue(_) | ExprKind::Break(_) => true,
+        ExprKind::Return(_) => true,
         ExprKind::Block(body) => leaves(&body.result),
         _ => false,
     }

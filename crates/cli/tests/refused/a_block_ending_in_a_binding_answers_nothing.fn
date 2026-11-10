@@ -3,7 +3,7 @@ import std.host {Host}
 next : Nat -> Nat
 next(n) -> (
   x = n
-  x = x + 1
+  y = x + 1
 )
 
 main! : Host -> []

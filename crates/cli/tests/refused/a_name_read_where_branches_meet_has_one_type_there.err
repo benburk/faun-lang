@@ -1,7 +1,0 @@
-error: `x` is read where the branches meet, so it has one type there
- --> a_name_read_where_branches_meet_has_one_type_there.fn:6:7
-  |
-6 |   y = if c then (
-  |       ^^^^^^^^^^^ a `Str` one way through, and a `Nat` another
-  |
-  = help: give the value a name of its own in the branch

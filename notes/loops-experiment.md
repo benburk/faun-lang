@@ -1,6 +1,6 @@
 # Loops, measured against recursion
 
-Faun has `for` and `while` since the [loops](proposals/approved/loops.md)
+Faun has `for` and `while` since the [loops](proposals/superseded/loops.md)
 proposal. Gleam, the nearest language in spirit, has none: recursion, folds
 and `use` do their work. This note records an experiment asking what Faun's
 loops buy, by writing a real program both ways, and what Gleam's users say

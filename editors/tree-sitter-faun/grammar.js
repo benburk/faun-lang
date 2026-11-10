@@ -281,30 +281,7 @@ module.exports = grammar({
     else_line: $ => seq(
       field('condition', $._expression),
       'else',
-      field('otherwise', choice($.return_expression, $.leave)),
-    ),
-
-    // `continue` or `break`: on to the next round, or out of the loop.
-    leave: $ => choice('continue', 'break'),
-
-    // A loop runs its body each round, any of whose lines may be its last.
-    loop_line: $ => choice(
-      seq('while', field('condition', $._expression), 'do', field('body', $.round)),
-      seq(
-        'for',
-        field('pattern', $._operand),
-        'in',
-        field('list', $._expression),
-        'do',
-        field('body', $.round),
-      ),
-    ),
-
-    round: $ => seq(
-      '(',
-      $._block_line,
-      repeat(seq($._block_newline, $._block_line)),
-      ')',
+      field('otherwise', $.return_expression),
     ),
 
     _block_line: $ => choice($._statement_line, $._expression),
@@ -313,14 +290,13 @@ module.exports = grammar({
       $.binding,
       $.else_line,
       $.if_line,
-      $.loop_line,
     ),
 
     // A block's line: leave where the condition holds, else go on.
     if_line: $ => seq(
       'if',
       field('condition', $._expression),
-      field('leave', choice($.return_expression, $.leave)),
+      field('leave', $.return_expression),
     ),
 
     return_expression: $ => prec.right(seq('return', field('value', $._expression))),
@@ -352,7 +328,7 @@ module.exports = grammar({
       optional(seq('if', field('guard', $._expression))),
       choice(
         seq('then', field('value', $._expression)),
-        field('leave', choice($.return_expression, $.leave)),
+        field('leave', $.return_expression),
       ),
     ),
 
@@ -445,7 +421,7 @@ module.exports = grammar({
 
     tuple: $ => seq('(', commaSep1($._expression), ')'),
 
-    // Lines, as a loop's body's are, answering the last where it is a
+    // Lines, answering the last where it is a
     // value and `{}` where it is not; one line is a block only where it is
     // no value, which would be grouped.
     block: $ => seq(

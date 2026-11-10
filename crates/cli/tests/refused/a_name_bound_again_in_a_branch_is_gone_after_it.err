@@ -1,0 +1,7 @@
+error: `n` is bound again here and nothing reads it
+ --> a_name_bound_again_in_a_branch_is_gone_after_it.fn:7:22
+  |
+7 |   if n > limit then (n = limit) else {}
+  |                      ^ bound for nothing
+  |
+  = help: a name bound again is seen to the end of its block, so this binding is gone after the branch, arm or lambda it stands in; to keep what a branch decides, bind the branch: `n = if … then … else n`

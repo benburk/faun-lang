@@ -4,7 +4,7 @@ error: mismatched types
 3 | next : Nat -> Nat
   |               --- expected `Nat` because of return type
 ...
-6 |   x = x + 1
+6 |   y = x + 1
   |   ^^^^^^^^^ expected `Nat`, found `{}`
   |
-  = note: a block whose last line is a binding, a loop or a leaving line answers `{}`
+  = note: a block whose last line is a binding or a leaving line answers `{}`

@@ -98,12 +98,6 @@ pub enum Kind {
     KwElse,
     KwIs,
     KwReturn,
-    KwContinue,
-    KwBreak,
-    KwFor,
-    KwIn,
-    KwWhile,
-    KwDo,
     KwPackage,
     KwImport,
     KwExport,
@@ -143,8 +137,6 @@ impl Kind {
                 | Self::RBrace
                 | Self::DotStar
                 | Self::Question
-                | Self::KwContinue
-                | Self::KwBreak
                 | Self::Error
         )
     }
@@ -597,12 +589,6 @@ impl Lexer<'_> {
             "else" => Kind::KwElse,
             "is" => Kind::KwIs,
             "return" => Kind::KwReturn,
-            "continue" => Kind::KwContinue,
-            "break" => Kind::KwBreak,
-            "for" => Kind::KwFor,
-            "in" => Kind::KwIn,
-            "while" => Kind::KwWhile,
-            "do" => Kind::KwDo,
             "package" => Kind::KwPackage,
             "import" => Kind::KwImport,
             "export" => Kind::KwExport,

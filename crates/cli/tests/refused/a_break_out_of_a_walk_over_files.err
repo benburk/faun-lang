@@ -1,7 +1,0 @@
-error: a `break` leaves held the `File`s its `for` has not walked yet
-  --> a_break_out_of_a_walk_over_files.fn:18:25
-   |
-18 |     if closed is Err(_) break
-   |                         ^^^^^ leaves here
-   |
-   = help: walk every element, using each up

@@ -485,7 +485,7 @@ fn a_test_is_not_tested_again_or_compared() {
 }
 
 /// A block answers its last line where that is a value, and `{}` where it
-/// is a binding, a leaving line or a loop; a round goes on to the next.
+/// is a binding or a leaving line.
 #[test]
 fn a_block_ending_in_no_value_answers_nothing() {
     for source in [
@@ -493,7 +493,6 @@ fn a_block_ending_in_no_value_answers_nothing() {
         "f(x) -> (y = x)",
         "f(x) -> (\n  y = x\n  y > 0 else return 0\n)",
         "f(x) -> (\n  y = x\n  if y return 0\n)",
-        "f(x) -> (\n  for y in x do (\n    if y break\n  )\n)",
     ] {
         let clause = clauses(source).remove(0);
         let mut answer = &clause.body.result;
@@ -501,8 +500,7 @@ fn a_block_ending_in_no_value_answers_nothing() {
             answer = match &answer.kind {
                 ExprKind::Block(body)
                 | ExprKind::Else { rest: body, .. }
-                | ExprKind::Leave { rest: body, .. }
-                | ExprKind::Loop { rest: body, .. } => &body.result,
+                | ExprKind::Leave { rest: body, .. } => &body.result,
                 _ => break,
             };
         }
@@ -511,7 +509,6 @@ fn a_block_ending_in_no_value_answers_nothing() {
             "{source}: {answer:?}"
         );
     }
-    assert!(parse("f(x) -> (\n  for y in x do (\n    y = 1\n  )\n  0\n)").is_ok());
 }
 
 /// A parenthesis holds lines; a tuple's member and an arm's pattern are
@@ -571,17 +568,12 @@ fn an_arm_does_not_begin_with_equals() {
 fn a_body_leaves_only_by_a_leaving_line() {
     let error = parse("f(n) -> return n").unwrap_err();
     assert!(error.message.contains("only by a leaving line"), "{error}");
-    let error = parse("f(xs) -> (\n  for x in xs do (\n    break\n  )\n  0\n)").unwrap_err();
-    assert!(error.message.contains("`if c break`"), "{error}");
     let error = parse("f(n) -> (\n  n > 0 else 0\n  n\n)").unwrap_err();
     assert!(error.message.contains("`return`"), "{error}");
-    let error = parse("f(xs) -> (\n  for x in xs (\n    if x break\n  )\n  0\n)").unwrap_err();
-    assert!(error.message.contains("touches what it calls"), "{error}");
-    let error = parse("f(xs) -> (\n  for x in xs do log!(x)\n  0\n)").unwrap_err();
-    assert!(
-        format!("{error:?}").contains("lines in parentheses"),
-        "{error:?}"
-    );
+    let error = parse("f(xs) -> (\n  for x in xs do (\n    x\n  )\n  0\n)").unwrap_err();
+    assert!(error.message.contains("no `for` loop"), "{error}");
+    let error = parse("f(xs) -> (\n  while xs is [_, *xs] do (\n    xs\n  )\n  0\n)").unwrap_err();
+    assert!(error.message.contains("no `while` loop"), "{error}");
     let error = parse("f(x) -> g (x)").unwrap_err();
     assert!(error.message.contains("touches what it calls"), "{error}");
 }
@@ -593,7 +585,7 @@ fn a_body_leaves_only_by_a_leaving_line() {
 fn an_arm_answers_after_then_or_leaves() {
     let bound = "f(r) -> (\n  y = r is (\n    Ok(v) then v\n    Err(e) return 0\n  )\n  y\n)\n";
     assert!(parse(bound).is_ok());
-    let alone = "f(xs) -> (\n  for x in xs do (\n    x is (\n      0 break\n      _ then {}\n    )\n  )\n  0\n)\n";
+    let alone = "f(x) -> (\n  x is (\n    0 return 1\n    _ then {}\n  )\n  0\n)\n";
     let module = parse(alone).unwrap();
     assert!(format!("{module:?}").contains("open: false"), "{module:?}");
     let error = parse("f(r) -> g(r is (\n  Ok(v) then v\n  Err(_) return 0\n))\n").unwrap_err();

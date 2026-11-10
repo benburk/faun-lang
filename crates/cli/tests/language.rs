@@ -167,105 +167,43 @@ const RUNNING: &[(&str, &str, u32)] = &[
         107,
     ),
     (
-        "loops nested deep are each read ahead once",
-        "count : Nat -> Nat
-         count(z) -> (
-           t = z
-           while t < 1 do (
-             while t < 1 do (
-               while t < 1 do (
-                 while t < 1 do (
-                   while t < 1 do (
-                     while t < 1 do (
-                       while t < 1 do (
-                         while t < 1 do (
-                           while t < 1 do (
-                             while t < 1 do (
-                               while t < 1 do (
-                                 while t < 1 do (
-                                   while t < 1 do (
-                                     while t < 1 do (
-                                       while t < 1 do (
-                                         while t < 1 do (
-                                           while t < 1 do (
-                                             while t < 1 do (
-                                               while t < 1 do (
-                                                 while t < 1 do (
-                                                   while t < 1 do (
-                                                     while t < 1 do (
-                                                       while t < 1 do (
-                                                         while t < 1 do (
-                                                           t = t + 1
-                                                         )
-                                                       )
-                                                     )
-                                                   )
-                                                 )
-                                               )
-                                             )
-                                           )
-                                         )
-                                       )
-                                     )
-                                   )
-                                 )
-                               )
-                             )
-                           )
-                         )
-                       )
-                     )
-                   )
-                 )
-               )
-             )
-           )
-           t
-         )
-         
-         main! : Host -> []
-         main!(host) -> host.exit!(U8.of_nat(count(host.args.len() - 1) + 40))",
-        41,
-    ),
-    (
-        "a buffer handed through many ifs in a round is asked about once for each",
+        "a buffer handed through many ifs in a step is asked about once for each",
         "work : (List(U8), Nat) -> Nat
-         work(xs, n) -> (
-           i = 0
-           count = 0
-           while i < n do (
-             xs = xs.set(i % 3, U8.of_nat(i % 200)).ok_or([])
-             (xs, count) = if i % 2 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 3 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 4 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 5 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 6 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 7 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 8 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 9 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 10 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 11 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 12 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 13 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 14 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 15 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 16 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 17 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 18 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 19 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 20 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 21 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 22 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 23 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 24 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 25 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 26 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 27 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 28 == 0 then (xs, count + 1) else (xs, count)
-             (xs, count) = if i % 29 == 0 then (xs, count + 1) else (xs, count)
-             i = i + 1
-           )
-           xs.len() + count
+         work(xs, n) -> worked(xs, 0, 0, n)
+
+         worked : (List(U8), Nat, Nat, Nat) -> Nat
+         worked(xs, i, count, n) if i >= n -> xs.len() + count
+         worked(xs, i, count, n) -> (
+           xs = xs.set(i % 3, U8.of_nat(i % 200)).ok_or([])
+           (xs, count) = if i % 2 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 3 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 4 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 5 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 6 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 7 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 8 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 9 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 10 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 11 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 12 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 13 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 14 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 15 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 16 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 17 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 18 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 19 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 20 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 21 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 22 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 23 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 24 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 25 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 26 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 27 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 28 == 0 then (xs, count + 1) else (xs, count)
+           (xs, count) = if i % 29 == 0 then (xs, count + 1) else (xs, count)
+           worked(xs, i + 1, count, n)
          )
          
          main! : Host -> []
@@ -990,7 +928,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
         17,
     ),
     (
-        "a method's receiver is read before its arguments, as a call's first argument is",
+        "a block's binding is its own, unseen by the arguments after it",
         "assigned(n) -> (
            x = n
            (x = 5
@@ -1004,7 +942,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
          main! : Host -> []
          main!(host) -> host.exit!(U8.of_nat(assigned(1) + called(1) * 10))",
-        110,
+        66,
     ),
     (
         "values say themselves as text",

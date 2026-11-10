@@ -1,0 +1,11 @@
+import std.host {Host}
+
+counted : Nat -> Nat
+counted(n) -> (
+  total = n
+  total = total + 1
+  n
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(counted(3)))

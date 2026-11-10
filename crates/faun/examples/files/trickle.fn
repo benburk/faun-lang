@@ -7,13 +7,14 @@
 import std.host {Host, Files, File, Stdout, IoError, Mode.*}
 
 trickle! : (File, File) -> Result(Nat, IoError)
-trickle!(source, target) -> (
-  copied = 0
-  while source.read!(2)? is Data(bytes) do (
-    wrote = target.write_all!(bytes)?
-    copied = copied + bytes.len()
-  )
-  Ok(copied)
+trickle!(source, target) -> trickled!(source, target, 0)
+
+# The rest of `source` copied to `target`, `copied` bytes copied before.
+trickled! : (File, File, Nat) -> Result(Nat, IoError)
+trickled!(source, target, copied) -> (
+  source.read!(2)? is Data(bytes) else return Ok(copied)
+  wrote = target.write_all!(bytes)?
+  trickled!(source, target, copied + bytes.len())
 )
 
 copy! : (Files, Stdout) -> Result(Nat, IoError)

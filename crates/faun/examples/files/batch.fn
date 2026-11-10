@@ -1,8 +1,8 @@
-# Files opened in one loop and closed in another, as Python would write it.
-# A name the loop carries holds the files opened so far, from round to
-# round and out of the loop; a `for` walking them uses each up. A test
-# takes apart what opening answered, and arms say what reading met. Every
-# file opened is closed once, which is checked, not trusted.
+# Files opened by one recursion and closed by another, each walking its
+# list a clause at a time. The files opened so far go back up as a list,
+# and a walk over them uses each up. A test takes apart what opening
+# answered, and arms say what reading met. Every file opened is closed
+# once, which is checked, not trusted.
 
 import std.host {Host, File, Files, Mode.*}
 
@@ -10,29 +10,47 @@ main! : Host -> []
 main!(host) -> (
   names = ["a.txt", "../outside.txt", "b.txt"]
   written = batch!(host.files, names)
-  for name in names do (
-    text = read_back!(host.files, name)
-    said = host.stdout.write_all!(text)
-  )
+  echoed = echoed!(host, names)
   host.exit!(U8.of_nat(written))
 )
 
 # Each name that opens, written its own name and closed: how many were.
 batch! : (Files, List(Str)) -> Nat
 batch!(files, names) -> (
-  opened = []
-  for name in names do (
-    files.open!(name, Overwrite) is Ok(file) else continue
-    opened = [(name, file), *opened]
+  opened = opening!(files, names)
+  writing!(opened)
+)
+
+# Each of `names` that opens for writing, with its file.
+opening! : (Files, List(Str)) -> List((Str, File))
+opening!(_, []) -> []
+opening!(files, [name, *names]) -> (
+  opened = files.open!(name, Overwrite)
+  rest = opening!(files, names)
+  opened is (
+    Ok(file) then [(name, file), *rest]
+    Err(_) then rest
   )
-  written = 0
-  for (name, file) in opened do (
-    wrote = file.write_all!("${name}\n".to_utf8())
-    closed = file.close!()
-    wrote is Ok(_) & closed is Ok(_) else continue
-    written = written + 1
-  )
-  written
+)
+
+# How many of `opened` were written their name and closed well. Each is
+# closed, whatever writing it met.
+writing! : List((Str, File)) -> Nat
+writing!([]) -> 0
+writing!([(name, file), *opened]) -> (
+  wrote = file.write_all!("${name}\n".to_utf8())
+  closed = file.close!()
+  others = writing!(opened)
+  if wrote is Ok(_) & closed is Ok(_) then others + 1 else others
+)
+
+# What each of `names` holds, written out in turn.
+echoed! : (Host, List(Str)) -> {}
+echoed!(_, []) -> {}
+echoed!(host, [name, *names]) -> (
+  text = read_back!(host.files, name)
+  said = host.stdout.write_all!(text)
+  echoed!(host, names)
 )
 
 # What `name` holds, or nothing where it cannot be opened or read.

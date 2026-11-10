@@ -13,8 +13,8 @@
 
 use super::ast::{
     Align, Arm, BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl,
-    Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, LoopHead, Name, Numeral,
-    NumeralKind, Span, StringPart, Type, UnaryOp, Width,
+    Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span,
+    StringPart, Type, UnaryOp, Width,
 };
 use super::diagnostic::{Advice, Advised};
 use super::lex::{Kind, Token};
@@ -488,26 +488,19 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// A block's or a loop's body's line: a value, a binding, a leaving
-    /// line or a loop. Where it begins `if`, the token after the condition
-    /// says whether it is the ternary or a line leaving where its condition
-    /// holds.
+    /// A block's line: a value, a binding or a leaving line. Where it
+    /// begins `if`, the token after the condition says whether it is the
+    /// ternary or a line leaving where its condition holds.
     fn statement(&mut self) -> Parsed<Statement> {
         self.no_expect_in_a_block()?;
-        match self.peek() {
-            Kind::KwIf => {}
-            Kind::KwWhile | Kind::KwFor => return self.loop_line(),
-            _ => {
-                let value = self.expr()?;
-                return self.statement_after(value);
-            }
+        self.no_loop()?;
+        if self.peek() != Kind::KwIf {
+            let value = self.expr()?;
+            return self.statement_after(value);
         }
         let keyword = self.bump();
         let condition = self.expr()?;
-        if !matches!(
-            self.peek(),
-            Kind::KwReturn | Kind::KwContinue | Kind::KwBreak
-        ) {
+        if self.peek() != Kind::KwReturn {
             self.note("`return`");
             let ternary = self.if_after(keyword, condition)?;
             self.after_ternary()?;
@@ -522,63 +515,39 @@ impl Parser<'_> {
     }
 
     /// What a leaving line leaves by: `return value`, its value any
-    /// expression, a block among them; `continue`; or `break`.
+    /// expression, a block among them.
     fn leaving(&mut self) -> Parsed<Expr> {
-        let kind = match self.peek() {
-            Kind::KwContinue => ExprKind::Continue,
-            Kind::KwBreak => ExprKind::Break,
-            Kind::KwReturn => {
-                let keyword = self.bump();
-                let value = self.expr()?;
-                return Ok(Expr {
-                    span: keyword.span().through(value.span),
-                    kind: ExprKind::Return(Box::new(value)),
-                });
-            }
-            _ => {
-                self.note("`return`");
-                self.note("`continue`");
-                self.expect(Kind::KwBreak, "`break`")?;
-                unreachable!("the token is no `break`")
-            }
-        };
-        let keyword = self.bump();
-        Ok(atom(keyword, kind))
+        let keyword = self.expect(Kind::KwReturn, "`return`")?;
+        let value = self.expr()?;
+        Ok(Expr {
+            span: keyword.span().through(value.span),
+            kind: ExprKind::Return(Box::new(value)),
+        })
     }
 
-    /// `while condition ( … )` or `for pattern in list ( … )`, a block's
-    /// line, with its body's lines.
-    fn loop_line(&mut self) -> Parsed<Statement> {
-        let keyword = self.bump();
-        let head = if keyword.kind == Kind::KwWhile {
-            LoopHead::While(Box::new(self.expr()?))
-        } else {
-            let written = self.operand()?;
-            self.expect(Kind::KwIn, "`in`")?;
-            let list = self.expr()?;
-            let pattern = lines::pattern(written, self.source)?;
-            LoopHead::For(pattern, Box::new(list))
-        };
-        self.expect(Kind::KwDo, "`do`")?;
-        if self.peek() != Kind::LParen {
-            let error = self
-                .expect(Kind::LParen, "`(`, beginning the loop's body")
-                .expect_err("the token is no `(`");
-            return Err(error
-                .help("a loop's body is lines in parentheses, as one line is too: `do (` … `)`"));
+    /// A block's line beginning as a loop would, `for x in` or `while c`:
+    /// Faun walks by recursion and folds, and has no loops to read it as.
+    fn no_loop(&self) -> Parsed<()> {
+        let token = self.tokens[self.at];
+        let word = token.span().text(self.source);
+        let next = self.tokens.get(self.at + 1).map(|token| token.kind);
+        let looping = token.kind == Kind::Ident
+            && matches!(word, "for" | "while")
+            && matches!(
+                next,
+                Some(Kind::Ident | Kind::TypeIdent | Kind::Wild | Kind::Number | Kind::LParen)
+            );
+        if !looping {
+            return Ok(());
         }
-        self.bump();
-        let mut lines = vec![self.statement()?];
-        while self.eat(Kind::Newline).is_some() {
-            lines.push(self.statement()?);
-        }
-        self.note("a new line");
-        let close = self.expect(Kind::RParen, "`)`")?;
-        Ok(Statement::Loop(
-            keyword.span().through(close.span()),
-            head,
-            lines,
-        ))
+        Err(
+            SyntaxError::new(token.span(), format!("Faun has no `{word}` loop"))
+                .label("a loop")
+                .help(
+                    "walk a list with a function calling itself on the rest, a fold, or a list's \
+                 own methods: `fold`, `fold_until`, `map`, `find`",
+                ),
+        )
     }
 
     /// A block's line beginning `expect`, which a later assumption will be.
@@ -970,8 +939,6 @@ impl Parser<'_> {
         match self.peek() {
             Kind::KwIf => self.if_(),
             Kind::KwReturn => Err(self.not_leaving("return x")),
-            Kind::KwContinue => Err(self.not_leaving("continue")),
-            Kind::KwBreak => Err(self.not_leaving("break")),
             _ => self.binary(0),
         }
     }
@@ -1263,12 +1230,9 @@ impl Parser<'_> {
         match self.peek() {
             Kind::Comma => self.tuple(open, value_of(first, "a tuple's member")?),
             // `->` too, for the arm to say it wants `then`.
-            Kind::KwThen
-            | Kind::KwIf
-            | Kind::KwReturn
-            | Kind::KwContinue
-            | Kind::KwBreak
-            | Kind::Arrow => self.arms(open, value_of(first, "an arm's pattern")?),
+            Kind::KwThen | Kind::KwIf | Kind::KwReturn | Kind::Arrow => {
+                self.arms(open, value_of(first, "an arm's pattern")?)
+            }
             Kind::Newline => self.lines_from(open, first),
             _ => {
                 let Statement::Value(first) = first else {
@@ -1309,7 +1273,7 @@ impl Parser<'_> {
             None => None,
         };
         let body = match self.peek() {
-            Kind::KwReturn | Kind::KwContinue | Kind::KwBreak => self.leaving()?,
+            Kind::KwReturn => self.leaving()?,
             Kind::Arrow => {
                 return Err(SyntaxError::new(
                     self.tokens[self.at].span(),
@@ -1514,19 +1478,18 @@ enum Operand {
     One(Type),
 }
 
-/// The value `line` is, where `what` must be one: a binding, a leaving line
-/// and a loop stand only as a block's lines.
+/// The value `line` is, where `what` must be one: a binding and a leaving
+/// line stand only as a block's lines.
 fn value_of(line: Statement, what: &str) -> Parsed<Expr> {
     let (span, kind) = match line {
         Statement::Value(value) => return Ok(value),
         Statement::Binding(pattern, value) => (pattern.span.through(value.span), "a binding"),
         Statement::Else(span, ..) | Statement::If(span, ..) => (span, "a leaving line"),
-        Statement::Loop(span, ..) => (span, "a loop"),
     };
     Err(
         SyntaxError::new(span, format!("{what} is a value, and this is {kind}"))
             .label("a block's line")
-            .help("a binding, a leaving line and a loop each stand on a block's line of their own"),
+            .help("a binding and a leaving line each stand on a block's line of their own"),
     )
 }
 

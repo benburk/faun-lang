@@ -14,8 +14,8 @@
 
 use super::ast::{
     AliasDecl, BinaryOp, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl, DataDecl,
-    DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item, LoopHead,
-    MethodItem, Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
+    DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item, MethodItem,
+    Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
 use super::diagnostic::Advised;
 use super::grammar::SyntaxError;
@@ -76,8 +76,6 @@ pub(crate) enum Statement {
     Else(Span, Expr, Expr),
     /// `if condition out`, written at `span`.
     If(Span, Expr, Expr),
-    /// A loop and its body's lines, written at `span`.
-    Loop(Span, LoopHead, Vec<Self>),
 }
 
 /// Whether `name` is a type's or a constructor's.
@@ -409,23 +407,14 @@ fn body_of(value: Expr) -> Body {
 ///
 /// A binding whose head is no pattern.
 pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, SyntaxError> {
-    block(lines, source, Ends::Answer)
+    block(lines, source)
 }
 
-/// How a block's lines end: with its answer, or, a loop's body, going on
-/// to the next round.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Ends {
-    Answer,
-    Round,
-}
-
-/// [`body`], or a loop's body, its lines ending as `ends` says: a block
-/// answers its last line where that is a value, and `{}` where it is not;
-/// a round goes on to the next.
-fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, SyntaxError> {
-    let (mut lines, held) = held(lines, source, ends)?;
-    let answered = ends == Ends::Answer && matches!(lines.last(), Some(Statement::Value(_)));
+/// [`body`]: a block answers its last line where that is a value, and `{}`
+/// where it is not.
+fn block(lines: Vec<Statement>, source: &str) -> Result<Body, SyntaxError> {
+    let (mut lines, held) = held(lines, source)?;
+    let answered = matches!(lines.last(), Some(Statement::Value(_)));
     let result = match held {
         Some(held) => held,
         None if answered => {
@@ -434,24 +423,15 @@ fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, Syntax
             };
             value
         }
-        None => {
-            let last = lines.last();
-            match ends {
-                // The whole of the line it answers after, a binding's
-                // pattern too, where a mismatch is told.
-                Ends::Answer => Expr {
-                    span: match last {
-                        Some(Statement::Binding(bound, value)) => bound.span.through(value.span),
-                        line => line.map_or_else(Span::default, statement_span),
-                    },
-                    kind: ExprKind::Record(Vec::new()),
-                },
-                Ends::Round => Expr {
-                    span: last.map_or_else(Span::default, statement_span),
-                    kind: ExprKind::Continue,
-                },
-            }
-        }
+        // The whole of the line it answers after, a binding's pattern too,
+        // where a mismatch is told.
+        None => Expr {
+            span: match lines.last() {
+                Some(Statement::Binding(bound, value)) => bound.span.through(value.span),
+                line => line.map_or_else(Span::default, statement_span),
+            },
+            kind: ExprKind::Record(Vec::new()),
+        },
     };
     let bindings = lines
         .into_iter()
@@ -503,8 +483,8 @@ fn binding(line: Statement, source: &str) -> Result<Binding, SyntaxError> {
             value,
             discarded: false,
         }),
-        Statement::Else(..) | Statement::If(..) | Statement::Loop(..) => {
-            unreachable!("a leaving line and a loop hold the lines after them")
+        Statement::Else(..) | Statement::If(..) => {
+            unreachable!("a leaving line holds the lines after it")
         }
     }
 }
@@ -513,25 +493,22 @@ fn binding(line: Statement, source: &str) -> Result<Binding, SyntaxError> {
 const fn statement_span(line: &Statement) -> Span {
     match line {
         Statement::Value(value) | Statement::Binding(_, value) => value.span,
-        Statement::Else(span, ..) | Statement::If(span, ..) | Statement::Loop(span, ..) => *span,
+        Statement::Else(span, ..) | Statement::If(span, ..) => *span,
     }
 }
 
-/// `lines` before their first leaving line or loop, and that line holding
-/// the lines after it, which go on where it does, those taken apart the
-/// same way. The lines after it answer, or end the round; where there are
-/// none, the block answers `{}`, or the round goes on.
+/// `lines` before their first leaving line, and that line holding the
+/// lines after it, which go on where it does, those taken apart the same
+/// way. The lines after it answer; where there are none, the block answers
+/// `{}`.
 fn held(
     mut lines: Vec<Statement>,
     source: &str,
-    ends: Ends,
 ) -> Result<(Vec<Statement>, Option<Expr>), SyntaxError> {
-    let Some(at) = lines.iter().position(|line| {
-        matches!(
-            line,
-            Statement::Else(..) | Statement::If(..) | Statement::Loop(..)
-        )
-    }) else {
+    let Some(at) = lines
+        .iter()
+        .position(|line| matches!(line, Statement::Else(..) | Statement::If(..)))
+    else {
         return Ok((lines, None));
     };
     let rest = lines.split_off(at + 1);
@@ -541,10 +518,9 @@ fn held(
     let line = lines.pop().expect("the line found");
     let span = statement_span(&line);
     let empty = rest.is_empty();
-    let mut rest = Box::new(block(rest, source, ends)?);
+    let mut rest = Box::new(block(rest, source)?);
     if empty {
-        // A round going on after its last line, which is this one, or a
-        // block answering `{}` after it.
+        // A block answering `{}` after its last line, which is this one.
         rest.result.span = span;
     }
     let span = span.through(rest.result.span);
@@ -559,12 +535,7 @@ fn held(
             out: Box::new(out),
             rest,
         },
-        Statement::Loop(_, head, round) => ExprKind::Loop {
-            head,
-            body: Box::new(block(round, source, Ends::Round)?),
-            rest,
-        },
-        _ => unreachable!("the line found leaves or loops"),
+        _ => unreachable!("the line found leaves"),
     };
     Ok((lines, Some(Expr { span, kind })))
 }
@@ -797,10 +768,6 @@ fn body_expressions(body: &Body, source: &str) -> Result<(), SyntaxError> {
     for binding in &body.bindings {
         expression(&binding.value, source, true)?;
     }
-    // A round ends by going on to the next, or by leaving the loop.
-    if matches!(body.result.kind, ExprKind::Continue | ExprKind::Break) {
-        return Ok(());
-    }
     expression(&body.result, source, true)
 }
 
@@ -870,10 +837,7 @@ fn expression(expr: &Expr, source: &str, whole: bool) -> Result<(), SyntaxError>
                 if let Some(guard) = &arm.guard {
                     expression(guard, source, false)?;
                 }
-                let leaves = matches!(
-                    arm.body.kind,
-                    ExprKind::Return(_) | ExprKind::Continue | ExprKind::Break
-                );
+                let leaves = matches!(arm.body.kind, ExprKind::Return(_));
                 if leaves && !whole {
                     return Err(SyntaxError::new(
                         arm.body.span,
@@ -906,23 +870,6 @@ fn expression(expr: &Expr, source: &str, whole: bool) -> Result<(), SyntaxError>
             left_by(otherwise, source)?;
             body_expressions(rest, source)
         }
-        // A loop's head is worked out as values are; its body and what
-        // follows it are blocks of their own.
-        ExprKind::Loop { head, body, rest } => {
-            match head {
-                LoopHead::While(condition) => expression(condition, source, false)?,
-                LoopHead::For(_, list) => expression(list, source, false)?,
-            }
-            body_expressions(body, source)?;
-            body_expressions(rest, source)
-        }
-        ExprKind::Continue | ExprKind::Break => Err(SyntaxError::new(
-            expr.span,
-            format!(
-                "`{}` stands only in a leaving line, `if c {0}` or `c else {0}`, or an arm, `P {0}`",
-                expr.span.text(source)
-            ),
-        )),
         // What the condition binds, the leave sees; the lines after it
         // answer where it fails.
         ExprKind::Leave {
@@ -947,10 +894,9 @@ fn expression(expr: &Expr, source: &str, whole: bool) -> Result<(), SyntaxError>
 fn left_by(leave: &Expr, source: &str) -> Result<(), SyntaxError> {
     match &leave.kind {
         ExprKind::Return(value) => expression(value, source, true),
-        ExprKind::Continue | ExprKind::Break => Ok(()),
         _ => Err(SyntaxError::new(
             leave.span,
-            "a leaving line leaves by `return` a value, `continue` or `break`",
+            "a leaving line leaves by `return` a value",
         )),
     }
 }

@@ -1,0 +1,7 @@
+error: `total` is bound again here and nothing reads it
+ --> a_lambda_binding_a_name_again_binds_its_own.fn:7:5
+  |
+7 |     total = total + x
+  |     ^^^^^ bound for nothing
+  |
+  = help: a name bound again is seen to the end of its block, so this binding is gone after the branch, arm or lambda it stands in; to keep what a branch decides, bind the branch: `total = if … then … else total`
