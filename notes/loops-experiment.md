@@ -6,7 +6,10 @@ and `use` do their work. This note records an experiment asking what Faun's
 loops buy, by writing a real program both ways, and what Gleam's users say
 about living without them.
 
-Measured 2026-11-10 on the `assemulator-fixes` branch.
+Measured 2026-11-10 on the `assemulator-fixes` branch. What it found
+decided the [recursion](proposals/approved/recursion.md) proposal, which
+took loops out of the language the same day; the programs below are now
+written as recursion.
 
 ## The program
 
