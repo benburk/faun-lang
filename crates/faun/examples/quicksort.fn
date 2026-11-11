@@ -1,0 +1,13 @@
+# Quicksort: the first element is the pivot, the rest is split around it,
+# and each side is sorted the same way. Any type with an order will do.
+
+sort : List(a) -> List(a) where Ordered(a)
+sort([]) -> []
+sort([pivot, *rest]) -> (
+  smaller = rest.filter(|x| x < pivot)
+  larger = rest.filter(|x| x >= pivot)
+  sort(smaller).concat([pivot]).concat(sort(larger))
+)
+
+expect sort([3, 1, 4, 1, 5, 9, 2, 6]) == [1, 1, 2, 3, 4, 5, 6, 9]
+expect sort(["pear", "fig", "apple"]) == ["apple", "fig", "pear"]

@@ -619,6 +619,14 @@ fn newton_finds_the_square_root_of_two() {
     );
 }
 
+/// Quicksort, as the README shows it: its expectations hold.
+#[test]
+fn quicksort_sorts_numbers_and_strings() {
+    let (failed, count) = support::test_file(&example("quicksort.fn"));
+    assert_eq!(failed, Vec::<String>::new());
+    assert_eq!(count, 2);
+}
+
 /// A DPLL SAT solver: its expectations hold, refuting what has no model, and
 /// running it colours the map of Australia in three colours.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]

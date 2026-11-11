@@ -1,9 +1,8 @@
 # Newton's method: from a guess `x`, step to `x - f(x)/f'(x)` until `f(x)`
 # is within tolerance of zero, giving up after `n` steps. The two functions
-# are passed by name, as any function argument is. The step count is what
-# makes the search total: a root the method never reaches, because the
-# guess was poor or the derivative vanished, answers `NoConvergence` rather
-# than looping.
+# are passed by name, as any function argument is. A root the method never
+# reaches, because the guess was poor or the derivative vanished, answers
+# `NoConvergence` once the steps run out, rather than looping.
 
 package {}
 

@@ -59,15 +59,43 @@ Editors
 
 - Helix highlighting, by the tree-sitter grammar in [`editors/tree-sitter-faun`](editors/tree-sitter-faun/README.md)
 
-```ruby
-gcd : (Nat, Nat) -> Nat
-gcd(a, 0) -> a
-gcd(a, b) -> gcd(b, a % b)
+## Examples
 
-fib : Nat -> Nat
-fib(0) -> 0
-fib(1) -> 1
-fib(n) -> fib(n - 1) + fib(n - 2)
+Newton's method, from [`newton.fn`](crates/faun/examples/newton.fn): functions passed by name, a guard, and a failure that is a value
+
+```ruby
+Func = F64 -> F64
+
+# Newton's method, giving up after `n` steps: a root it never reaches is an
+# error value, not a crash.
+newton : (Func, Func, F64, Nat) -> Result(F64, [NoConvergence])
+newton(_, _, _, 0) -> Err(NoConvergence)
+newton(f, _, x, _) if f(x).abs() < 1.0e-12 -> Ok(x)
+newton(f, df, x, n) -> newton(f, df, x - f(x) / df(x), n - 1)
+
+f : Func
+f(x) -> x * x - 2.0
+
+df : Func
+df(x) -> 2.0 * x
+
+expect newton(f, df, 2.0, 50).ok_or(0.0).to_fixed(12) == "1.414213562373"
+expect newton(f, df, 0.0, 50) == Err(NoConvergence)
+```
+
+Quicksort, from [`quicksort.fn`](crates/faun/examples/quicksort.fn): a generic function over any ordered type, list patterns, and lambdas
+
+```ruby
+sort : List(a) -> List(a) where Ordered(a)
+sort([]) -> []
+sort([pivot, *rest]) -> (
+  smaller = rest.filter(|x| x < pivot)
+  larger = rest.filter(|x| x >= pivot)
+  sort(smaller).concat([pivot]).concat(sort(larger))
+)
+
+expect sort([3, 1, 4, 1, 5, 9, 2, 6]) == [1, 1, 2, 3, 4, 5, 6, 9]
+expect sort(["pear", "fig", "apple"]) == ["apple", "fig", "pear"]
 ```
 
 ## Open design questions
