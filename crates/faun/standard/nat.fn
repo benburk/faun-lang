@@ -78,6 +78,16 @@ Nat : [Zero, Succ(Nat)].(
   xor : (Nat, Nat) -> Nat
   xor(a, b) -> xor_bits(a, b, 1, 0)
 
+  # The bits moved up by `amount`, a natural having no top to lose them
+  # past: `n * 2.pow(amount)`.
+  shift_left : (Nat, Nat) -> Nat
+  shift_left(n, amount) -> n * 2.pow(amount)
+
+  # The bits moved down by `amount`, those below the bottom lost:
+  # `n / 2.pow(amount)`.
+  shift_right : (Nat, Nat) -> Nat
+  shift_right(n, amount) -> n / 2.pow(amount)
+
   # The decimal text.
   to_str : Nat -> Str
   to_str(n) -> Str.from_ascii(nat_decimal(n)).ok_or("")
@@ -198,6 +208,8 @@ expect 3.min(5) == 3 & 3.max(5) == 5
 expect (12 & 10) == 8 & (12 | 10) == 14 & (12 ^ 10) == 6
 expect (0 & 7) == 0 & (0 | 7) == 7 & (7 ^ 7) == 0 & (5 | 0) == 5
 expect (1267650600228229401496703205376 | 1) == 1267650600228229401496703205377
+expect 5.shift_left(3) == 40 & 1.shift_left(100) == 1267650600228229401496703205376 & 0.shift_left(9) == 0
+expect (40007.shift_right(10) & 7) == 7 & 40007.shift_right(13) == 4 & 5.shift_right(3) == 0
 expect 2.pow(0) == 1 & 2.pow(10) == 1024 & 3.pow(5) == 243 & 0.pow(0) == 1 & 0.pow(3) == 0
 expect (-3).pow(3) == -27 & Nat.pow_mod(3, 200, 1000) == 1 & Nat.pow_mod(5, 0, 1) == 0
 expect Nat.from_int(-2) == Err(Negative) & Nat.from_int(4) == Ok(4)

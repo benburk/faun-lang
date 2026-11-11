@@ -311,7 +311,9 @@ bitwise on `Nat` and the words, and looser than a comparison, so
 `b & c | !b & d` reads as it would in C. The words also have `zero`, and
 `shift_left`, `shift_right`, `rotate_left` and
 `rotate_right`, each by a `Nat` count of bits; a shift by the width or more
-is nought. `Int` has no bitwise operations.
+is nought. `Nat` has `shift_left` and `shift_right` too, which lose no bits
+going up, so `inst.shift_right(10) & 7` takes a field out of an encoded
+instruction. `Int` has no bitwise operations.
 
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
 defining one `cmp : (T, T) -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
