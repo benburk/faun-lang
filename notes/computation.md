@@ -91,8 +91,8 @@ program means. On x86-64 Linux and on the 6502 the program says
 the engine stops it with a trap. The 6502 holds 128 return addresses, so
 there calls run out of room at most 128 deep.
 
-Nothing about stopping is refused. The decision, its measurements and its
-costs are in the [termination proposal](proposals/approved/termination.md).
+Nothing about stopping is refused. Why, what it measured and what it cost
+are in [totality](totality.md).
 
 ## Iteration is tail calls
 
@@ -153,15 +153,15 @@ holds what it reads for as long as it waits.
 Much of what laziness is used for is recovered by the compiler instead.
 Fusion runs a walk that builds a list together with the walk that takes it
 apart, so the list in between is never made, and stops the producer where
-the consumer stops. Pruning drops a loop whose answer nothing reads.
+the consumer stops. Pruning drops a walk whose answer nothing reads.
 Constant folding works out closed calls during compilation, within a
 budget.
 
 The cost is that work the optimizer misses is done: `select` works out
 both candidates, and an unfused pipeline builds its intermediate lists.
 There are no infinite lists and no memoized lazy values. The recourse is
-`if` where a choice should skip work, and a loop or explicit state where
-demand is part of the algorithm.
+`if` where a choice should skip work, and a walk carrying explicit state
+where demand is part of the algorithm.
 
 ### Why pure?
 
@@ -180,43 +180,41 @@ whole, `order = order.append(node)`, and effects need `Host` threaded to
 them. In-place update is the compiler's to find: a list nothing else holds
 is written where it lies.
 
+### Why may unneeded work be left out?
+
+Because the optimizer needs it, and nothing more. Fusion skips what a
+producer would have made past where its consumer stops, and pruning drops a
+walk whose answer nothing reads. Both only skip work nothing needs, and the
+rule makes that sound with no proof that the skipped work would have
+stopped. The rule licenses only leaving work out: the optimizer never
+concludes that anything stops, so a walk that never ends is a hang, never a
+miscompile ([totality](totality.md) weighs this against C++'s
+forward-progress assumption).
+
+The alternative was to make a hang fully observable: fuse only consumers
+that read every element, and keep every walk a definition wrote. That is
+sound without any rule, but gives up optimizations on programs that stop to
+keep the behaviour of programs that do not.
+
+The cost is that optimization can change whether a buggy program hangs: one
+whose unneeded pure work never comes back may hang unoptimized and finish
+optimized. Only programs that are already wrong are affected. The recourse
+is the rule itself: a program must not rely on either outcome.
+
 ### Why not check termination?
 
-Faun checked it once, as Ori does, and stopped. The guarantee caught a real
-but rare class of bug, and cost much more: step limits written only so the
-checker would accept loops that plainly stop, limits that turned a hang
-into a silently wrong answer, 8 to 41% of checking time, and refusals of
-programs that stop, reported as the program's fault. The optimizer needed
-only the rule that unneeded pure work may be left out. The
-[termination proposal](proposals/approved/termination.md) has the
-measurements, and [totality](totality.md) the trade in full.
-
-### Why not assume forward progress, as C++ does?
-
-C++ makes a loop without side effects that never ends undefined behaviour,
-and LLVM's `mustprogress` lets the optimizer assume such a loop ends. From
-that assumption it derives facts about the code after the loop, and when
-the assumption is false, anything can happen: the proposal shows clang
-falling out of an endless `main` into the next function. Before LLVM 12
-the same assumption deleted Rust's `loop {}` (rust-lang/rust#28728).
-
-Faun's rule licenses only leaving work out. The optimizer never concludes
-that anything stops, so a loop that never ends is a hang, never a
-miscompile. The cost is the optimizations that need that conclusion:
-pruning must keep a loop that never breaks even when nothing reads its
-answer, since the code after it is reached only if it ends.
-
-### What did Faun give up by not requiring totality?
-
-Mostly simplicity of meaning: with every pure call known to come back, the
-order pure code runs in could not be observed, so the optimizer could move
-work as freely as it skips it, and no function would need a promised
-evaluation order. What it gained: no step limits, walks whose test is
-partway through, a recursion leaving where it is done, and checking
-without the analysis. [Totality](totality.md) owns the whole
-trade. Exhaustive matching stays, for its own reason: a pure function
-answers for every input it can be given
-([pattern matching](forms/pattern-matching.md)).
+Faun checked it once, as Ori does, and stopped on 2026-09-29. The guarantee
+caught a real but rare class of bug and cost much more: step limits written
+only for the checker, limits that turned a hang into a silently wrong
+answer, 8 to 41% of checking time, and refusals of programs that stop. The
+optimizer needed only the rule above. What Faun gave up is mostly one
+meaning for pure code: with every pure call known to come back, the order
+it runs in could not be observed, the optimizer could move work as freely
+as it skips it, and `&` and `|` would need no promised order. Exhaustive
+matching stays, for its own reason: a pure function answers for every input
+it can be given ([pattern matching](forms/pattern-matching.md)).
+[Totality](totality.md) owns the decision, its measurements and the
+alternatives weighed.
 
 ### Why are `&` and `|` on `Bool` a condition form, not calls?
 
@@ -234,11 +232,30 @@ making `&` strict only where its left binds nothing, which is a worse
 special case. The [totality](totality.md) note weighs this against a
 language where the question could not be observed.
 
+## History
+
+- **2026-09-29:** termination stopped being checked, and the rule that
+  unneeded pure work may be left out replaced the guarantee fusion and
+  pruning had relied on ([totality](totality.md)). Building a program whose
+  needed call never comes back showed two machine-tier passes needed more
+  than the rule: pruning dropped a loop that never breaks, leaving its
+  function with no end, and lowering turned a definition going round only by
+  calling itself into a loop in its caller with the caller's instructions
+  after it. Both now keep code reached only because something never comes
+  back: `ir/prune.rs` keeps a loop that never breaks and an `if` with an arm
+  that never comes back, and `once_round` in `ir/lower.rs` leaves such a
+  definition a function.
+- **2026-10-04:** when `if` was built, `&` and `|` on `Bool` began working
+  out their right side only where the left had not decided, though the
+  termination decision still said a program must not rely on it.
+- **2026-11-03:** the skip was promised and given to the operators. Until
+  then the compiler found `and` and `or` by name, so every spelling skipped;
+  since, `a.and(b)`, `a.or(b)` and `Bool.and(a, b)` are ordinary calls.
+
 ## Related
 
-- [Termination proposal](proposals/approved/termination.md): the decision
 - [Totality](totality.md): what requiring every call to come back buys and
-  costs
+  costs, and why Faun stopped checking it
 - [Iteration](iteration.md): walks as tail calls, and why there are no
   loops
 - [Effects](forms/effects.md): `!`, `Host` and the order of effects

@@ -27,7 +27,6 @@ check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
-    just proposals
     just tree-sitter-fresh
 
 # Run the test suite: every test at once, the doc tests nextest skips, then the tree-sitter grammar's
@@ -40,25 +39,6 @@ test:
 tree-sitter:
     cd editors/tree-sitter-faun && tree-sitter generate && tree-sitter test
     fd -e fn -0 | xargs -0 tree-sitter parse --quiet --stat -p editors/tree-sitter-faun
-
-# Fail where a proposal's Status line disagrees with the folder it is in
-[private]
-proposals:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    bad=0
-    for file in notes/proposals/*/*.md; do
-        folder=$(basename "$(dirname "$file")")
-        status=$(sed -n 's/^- \*\*Status:\*\* //p' "$file" | head -n 1)
-        case "$folder:$status" in
-            drafts:Draft | approved:Approved | rejected:Rejected | superseded:Superseded) ;;
-            *)
-                echo "$file: Status is '$status', but it is in $folder/" >&2
-                bad=1
-                ;;
-        esac
-    done
-    exit "$bad"
 
 # Fail if the committed tree-sitter parser is not what grammar.js generates
 [private]

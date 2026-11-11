@@ -3,8 +3,8 @@
 What a linter should flag, and the compiler leaves alone. The compiler
 refuses what has no meaning, or one a reader would misread; a lint flags
 what means one thing plainly but is likely a slip, or is better written
-another way. No linter is built yet. This list gathers what the proposals
-left to one, so none is lost.
+another way. No linter is built yet. This list gathers what the design
+notes left to one, so none is lost.
 
 ## Likely slips
 
@@ -17,7 +17,7 @@ left to one, so none is lost.
 - **Lines no path reaches,** after an unconditional leave.
 - **An effect's answer dropped** where it is a `Result`: a `write!(…)` on
   a line of its own, neither bound nor passed on with `?`. See
-  [discarded answers](proposals/rejected/discarded-answers.md).
+  [effects](forms/effects.md#why-not-refuse-an-effects-answer-dropped-on-a-line-of-its-own).
 - **A clause or arm no value reaches,** one after others that already
   cover every value, `area(_) -> 1` after `area(Dot)` and `area(Square(n))`,
   or one an earlier catch-all covers. Rust, OCaml and Haskell warn of it;

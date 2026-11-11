@@ -62,9 +62,6 @@ not needed.
 
 ### Decisions and explorations
 
-- [Proposals](proposals/README.md): every change to the language, by status.
-  An approved proposal records why a decision was made when it was made.
-  The concept note above owns what holds now.
 - [Pattern matching, the domain](forms/pattern-matching-domain.md): the exploration
   behind `is`, arms, leaving lines and loops
 - [Host effects](host-effects.md), the
@@ -87,10 +84,13 @@ not needed.
   note that owns the topic. Another note may say it in a sentence and link
   there.
 - **True today.** A concept note describes the language as built on `main`.
-  Something planned is marked planned and names the proposal that plans it.
-- **Proposals are history; notes are the present.** When a proposal is
-  approved and built, its lasting contract and rationale move to the owning
-  note. The proposal stays as the record, with its errata.
+  Something planned is marked planned, under an `## Open questions` of the
+  note that will own it.
+- **A change is written into its note.** A change to the language is argued
+  and decided in the note that owns the topic: its reasons and costs in the
+  `## Rationale`, the alternatives weighed as `### Why not …?` questions, and
+  when it was decided, built or reversed as a dated line in a `## History`
+  near the note's end. There are no separate proposals.
 - **Rationale answers questions.** Each concept note ends with a
   `## Rationale` of `### Why …?` and `### Why not …?` questions. Each answer
   gives the reason, the cost accepted and, where there is one, the recourse.

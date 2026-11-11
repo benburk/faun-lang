@@ -188,8 +188,27 @@ The cost is that `${x}` and `x.to_str()` differ for a `Str`, and only for a
 `Str`, which a definition writing its own `to_str` has to choose between: a
 splice for a part shown as text, `"${degrees}°C"`, and `to_str` for one
 shown as a value. Where the type is generic, the splice is decided when
-the definition is specialized, as `&` on `Bool` is. See
-[quoted strings](../proposals/approved/quoted-strings.md).
+the definition is specialized, as `&` on `Bool` is. A `Str`'s `to_str`
+also walks its bytes and builds a new string, where it once answered the
+string it had.
+
+### Why not a second member for a value shown inside another?
+
+Rust has `Debug` beside `Display`. In Faun every type with `to_str` would
+need the second member too, a declared type's own `to_str` a matching one,
+and generic containers a bound on it: a second protocol for one type's
+sake. Quoting only in the `to_str` the compiler makes for records, tuples
+and tags would not do either: `List` and `Result` are written in Faun and
+cannot ask whether an element is a `Str`, so a list of strings would stay
+ambiguous.
+
+### Why is a splice of a `Str` decided at specialization?
+
+Because only then is its type always known. Decided where it is checked, a
+generic definition splicing a value it was handed would quote a `Str`, and
+the runners, which splice what a program answers, would print a program
+answering a `Str` in quotes. The splice is checked as a `to_str` call, so
+a generic one still asks `to_str` through its `where` bound.
 
 ### Why `${…}` rather than `{…}`?
 
@@ -207,6 +226,11 @@ a Faun string, since `"é"` holds `0xc3` then `0xa9`. Refusing it turns that
 silent mismatch into an error naming the bytes. The cost is that a program
 that does mean the byte 233 writes `0xe9`, which says what it means. At the
 wider types a character is its scalar value, which is what a code point is.
+No program in the corpus wrote a non-ASCII character literal at any type.
+
+Making `'é'` at a `U8` its UTF-8 bytes was the other way to keep it, but a
+character would then be a list where a byte is wanted, which no position
+can hold.
 
 ### Why is `cmp` byte order rather than a collation?
 
@@ -217,6 +241,19 @@ Unicode scalar order, and claims to be nothing more. A program that wants a
 reader's order sorts with `sort_on` over a key it chooses. Ori first
 shipped no string order at all for this reason. Every program that sorted
 names then had to work around the gap, so it gained this one.
+
+## History
+
+- **2026-11-04:** a character at a `U8` must be ASCII. `'é'` there had been
+  233 and `'€'` out of range; both are refused now, naming their bytes. The
+  lexer began reading `'\u{…}'`, which the standard library's README and
+  the tree-sitter grammar already described. Found while writing this note,
+  which had to set `'é'` at a `U8` as 233 beside `"é".to_utf8()` as
+  `[0xc3, 0xa9]`.
+- **2026-11-05:** a `Str`'s `to_str` quotes it, so a string inside a value
+  reads as one: `["a", "b, c"]` had printed `[a, b, c]`, and a runner's
+  `Ok("")` had printed `Ok()`. clap's help, which showed a default by its
+  `to_str`, splices it instead, so `[default: <stdout>]` stays unquoted.
 
 ## Related
 

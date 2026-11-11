@@ -118,6 +118,30 @@ bound is missing the checker offers the alias that names it.
 A type with an identity of its own is declared with `:`, as
 `Stack(a) : [Empty, Push(a, Stack(a))]`.
 
+## What never answers
+
+`[]`, the tag row with no tags, has no values, so it is the type of what
+never answers: `exit! : (Host, U8) -> []`, and `main!` answers it
+([effects](forms/effects.md)). Where paths join, a path whose type is `[]`
+takes the type the others answer, and where every path is `[]`, so is the
+join. The joins are the branches of an `if`, the arms of an `is`, and a
+`return` or leaving line meeting its clause's or lambda's answer:
+
+```ruby
+port! : Host -> Nat
+port!(host) -> if host.args.len() > 1 then 8080 else host.exit!(2)
+```
+
+It is one way: nothing becomes `[]` by it. `bad : Nat -> []` answering `3`
+is refused, since its answer is a `Nat` where `[]` is wanted, and an `if`
+whose branches both exit is a `[]` and cannot be used as a number. Only a
+path known to be `[]` when its definition is checked fits: in an unsigned
+helper whose `host` is still generic, `host.exit!(2)` is not yet `[]`, so a
+signature naming `Host` is needed. A branch that never answers ends the
+program, so it must use up what it holds: a `File` still held there is
+refused, "still held where this never answers"
+([effects](forms/effects.md#resources)).
+
 ## Specialization
 
 Faun compiles a whole program at once and monomorphizes it: each generic
@@ -234,8 +258,41 @@ Rows cover most of what subtyping is used for: a function asks for
 joining. The cost is no heterogeneous collections and no implicit widening
 of a declared type: a conversion is written. The one exception is `[]`, the
 type of what never answers: where paths meet, a path of type `[]` takes the
-others' type, one way only
-([proposal](proposals/approved/never-at-joins.md)).
+others' type, one way only (below).
+
+### Why does a path that never answers fit any join?
+
+A program that cannot go on says so and exits, in a branch or an arm beside
+the paths that do go on. Unifying the paths of a join asks their types to
+be equal, and `[]` equals only itself, so a helper that reads an argument
+or exits, answering a `Nat`, had no way to write the exit. `main!` hid the
+gap, since its own answer is `[]`.
+
+The rule is one-way, so no value is ever handed out as a `[]`, nor one of
+another type where a `[]` was wanted. It applies only at joins because an
+effect stands on a line of its own, never as an argument or an operand: a
+branch's, an arm's or a `return`'s value, or a whole body, is every place
+what never answers turns up. Barb already lowers a call that never comes
+back at whatever type its position wants.
+
+The cost is one rule in the checker, applied where it already unifies
+paths, measured at 2–4% of checking time on the benchmark's cases. A reader
+meets it as code that builds, and as a refusal where a branch that exits
+leaves a file open.
+
+### Why not make `[]` a free type variable or a coercion?
+
+- **`[]` equal to every type.** Unification is symmetric, so values would
+  flow into `[]` as freely as out of it: `bad` above would check, and its
+  `3` could be read as a `Str`. Unsound.
+- **A free result, `exit! : (Host, U8) -> a`,** as OCaml's `exit`. HM needs
+  no new rule, but the signature stops saying the call never answers, and
+  every helper that exits would need the same idiom.
+- **A coercion wherever a type is wanted,** as Rust's `!`. More general,
+  and a form of subtyping in inference, with nothing more for it to do in a
+  language whose effects stand on lines of their own.
+- **An explicit `absurd : [] -> a`,** as Haskell's. No rule, but
+  `host.exit!(2).absurd()` in exactly the code the rule tidies.
 
 ### Why no higher-kinded or higher-rank types?
 
@@ -268,11 +325,20 @@ are typed by the binders around them, `Lam(Term(Maybe(a)))`. The recourse
 is a regular encoding: de Bruijn indices, `Var(Nat)`, give the same tree
 with scope checked by the program rather than the type.
 
+## History
+
+- **2026-11-04:** a path whose type is `[]` came to fit any join, proposed,
+  approved and built the same day, while weighing a never type: `[]` was
+  already the right type for `exit!`, and the branches beside it could not
+  be written. Before, `if ok then 3 else host.exit!(2)` was refused.
+
 ## Related
 
 - [Records](values/records.md): record rows, update and builders
 - [Tags](values/tags.md): tag rows, how they join and close
 - [Numbers](values/numbers.md): how a numeral takes its type
 - [Functions](values/functions.md): callbacks, specialized like bounds
+- [Effects](forms/effects.md): `exit!`, and what a path that never answers
+  must use up
 - [Methods](forms/methods.md): type blocks, and members a type derives
 - [Dependent types](dependent-types.md): why types stop here

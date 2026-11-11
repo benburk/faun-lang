@@ -134,11 +134,11 @@ the terms in them: it runs the program. The MLTT core accepts
 `plus(one, one)` while checking.
 
 That collides with two of Faun's decisions. Termination is not checked
-([termination](proposals/approved/termination.md)), so a term in a type may
+([totality](totality.md)), so a term in a type may
 never come back, and the checker would hang on it. The only defence is a
 budget, and the toy QTT and BendTT checkers have exactly that: a node
 budget on normalization, which their READMEs say can reject valid
-programs. That is the step-limit problem the termination proposal removed,
+programs. That is the step-limit problem dropping termination checking removed,
 moved into the type checker. And checking a small program in under 10 ms
 is a goal; a checker that runs user code has no bound on its own time.
 
@@ -171,7 +171,7 @@ caller.
 
 Optional proofs also do not make the language smaller. Every reader must
 still know the proof syntax to read a library, and the checker must still
-normalize terms wherever proofs appear. The termination proposal rejected
+normalize terms wherever proofs appear. [Totality](totality.md) rejected
 a `partial` marker for the same reason: it keeps the cost and adds a word
 to the language.
 
@@ -188,8 +188,8 @@ open; [indexed types](indexed-types.md) owns the question.
 - [Types](types.md): what the type system is, and why it stops at HM
 - [Indexed types](indexed-types.md): the restricted form left open
 - [Computation](computation.md): why termination is not checked
-- [Totality](totality.md): what a total language would allow types to do
-- [Termination proposal](proposals/approved/termination.md): the 10 ms goal
+- [Totality](totality.md): what a total language would allow types to do,
+  why termination stopped being checked, and the 10 ms goal
 - [Pattern matching](forms/pattern-matching.md): exhaustive matching
 - [Effects](forms/effects.md): linear resources
 - [Numbers](values/numbers.md): division by zero, word ranges

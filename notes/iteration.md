@@ -228,9 +228,8 @@ an early-exit fold rather than loops back.
 
 ## Related
 
-- [Pattern matching](forms/pattern-matching.md): clauses, leaving lines,
-  coverage, and binding again as a shadow
+- [Pattern matching](forms/pattern-matching.md): clauses, `is`, arms,
+  leaving lines, coverage, and binding again as a shadow
 - [Computation](computation.md): strict evaluation, and why termination is
   not checked
-- [Conditions](proposals/approved/conditions.md): `is`, arms, leaving lines
 - [Lints](lints.md): a recursion that is a list's method already

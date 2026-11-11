@@ -140,6 +140,81 @@ map whose hashing begins from `seed`; `Map.empty` begins from nought.
 Any type with the two write methods is a hasher, so a library can write its
 own, with containers over it, and reuse every `hash_into` there is.
 
+## Open question: containers taking a policy
+
+Undecided, and not built. Drafted on 2026-10-01: a container whose layout
+depends on how its keys compare would take that comparison as a type
+parameter, a policy, whose methods answer what the container asks of a
+key. The container keeps the policy's value beside its entries, and each
+call to it is resolved by the policy's type at specialization, so dispatch
+stays static.
+
+```ruby
+CaseFold : {}.(
+  same : (CaseFold, Str, Str) -> Bool
+  same(_, a, b) -> folded(a) == folded(b)
+
+  feed : (CaseFold, Str, h) -> h where Hasher(h)
+  feed(_, key, hasher) -> folded(key).hash_into(hasher)
+)
+
+KeyHash(p, k) = where
+  p.same : (p, k, k) -> Bool,
+  p.feed : (p, k, Mixer) -> Mixer
+
+KeyOrder(p, k) = where
+  p.compare : (p, k, k) -> Order
+```
+
+`Map` and `Set` would ask `KeyHash`, and the sorted containers and the heap
+`KeyOrder`. The type gains a trailing parameter, `Map(k, v, p)`, and
+`empty_by(policy)` and `of_list_by(entries, policy)` take one; `empty` and
+`of_list` answer a container under `Own`, whose methods are the key's own
+`equals`, `hash_into` and `cmp`. The standard package would also export
+`Reverse(p)`; others, such as `Lex(p, q)`, are a library's to write. The
+names avoid `equals`, `hash_into` and `cmp`, since a type with `cmp` is
+refused an `equals` written beside it. `feed` meets the hasher at `Mixer`,
+so a policy can feed it and never read a digest: the hasher stays the
+library's.
+
+For it:
+
+- A case-blind map is `Map.empty_by(CaseFold({}))`, passed once, and its
+  keys stay what they are; a largest-first heap is `Reverse(Own({}))`.
+- The policy is in the type, so the checker refuses mixing two maps under
+  different policies. Scala's `TreeMap` holds its `Ordering` as a value
+  outside the type, so two maps of one type can be ordered two ways and
+  merged silently. A comparison passed to each call would let two calls on
+  one map disagree.
+- It is OCaml's `Map.Make(CaseFold)` without modules as a second language,
+  and Rust's `HashMap<K, V, S>` for comparison rather than hashing.
+- It needs no compiler change: `Own`, `Reverse`, combinators of policies
+  and a policy holding a value all met their bounds under `faun test`.
+
+Against it:
+
+- Every signature naming a container gains a parameter, `Map(Str, Nat, Own)`;
+  20 lines in 7 files outside the standard library name one. A generic
+  signature bounds the policy, `KeyHash(p, k)`, a step further from the key.
+- A policy is a named type with a block, since functions are never held.
+- Two values of one policy type, `Within(0.01)` and `Within(0.1)`, are not
+  told apart: an operation on two containers keeps the receiver's, so
+  `a == b` may differ from `b == a`.
+- Nothing in the corpus yet wraps a key only to change how it compares; the
+  evidence is from Haskell, Rust and Scala.
+
+Open points:
+
+- Whether an alias should answer for the methods of the type it names, so
+  `Map(k, v) = HashMap(k, v, Own)` keeps signatures as they are without
+  default parameters, a syntax for one purpose.
+- Whether `same`, `feed` and `compare` read well.
+- Whether a policy without fields costs nothing in the container's record:
+  to be measured before deciding.
+
+Operations that compare and are done, a sort or a `max`, would keep taking
+a callback.
+
 ## Rationale
 
 ### Why an insertion-ordered map, with a mixer no program sees?
@@ -211,8 +286,12 @@ maps built in different orders are written differently, as Python's are.
 Writing the keys in order would ask a `cmp` of them that nothing else a
 map does asks; the order is already observable through `to_list`, and a
 `SortedMap` is written in key order by construction. A seeded map is
-written without its seed, which its equality ignores too. See
-[container text](../proposals/approved/container-text.md).
+written without its seed, which its equality ignores too.
+
+The cost is text longer than Python's, and a `Map`'s order showing in it.
+The alternative was no text at all: a container could not be spliced,
+printed by a runner or shown inside another value, and a program wanting
+to see one wrote `"${m.to_list()}"`, which loses which container it was.
 
 ### Why is `hash_into` generic over a hasher it cannot read?
 
@@ -237,12 +316,33 @@ with a container over it, and reuses every `hash_into`.
 
 A different need is open: comparing keys another way, such as case-blind
 strings or a reversed order. Today that takes a wrapper key with its own
-`equals`, `hash_into` or `cmp`, wrapped at every insert and lookup. The
-[policies draft](../proposals/drafts/policies.md), an open proposal, would
-let a container take a policy as a type parameter, `Map(k, v, p)`, whose
-methods say which keys are the same and in what order they go. It keeps
-the hasher `Mixer`'s, and it would add a parameter to every signature that
-names a container.
+`equals`, `hash_into` or `cmp`; a policy, under
+[open questions](#open-question-containers-taking-a-policy), would let the
+container say it instead.
+
+### Why does a key type have one `equals`, `hash_into` and `cmp`?
+
+Because each is defined in the type's own block and nowhere else, so every
+container in a program agrees on which keys are the same and how they go.
+Methods added to a type from outside its block, or instances chosen in a
+scope, would give one type two meanings in one program, and a map filed
+under one would be read under the other. The cost is that one way of
+comparing a key is the only way any container may compare it, and a second
+way costs a wrapper type: a `CiStr` around `Str`, wrapped at every insert
+and lookup, or Haskell's `Down` and Rust's `Reverse` for an order, with
+another wrapper for each combination. The heap library is a min-heap only,
+so a heap answering largest first wraps its keys. A wrapper suits a value
+that means something different everywhere, an `Email` rather than a `Str`;
+for a comparison only one container needs, the recourse drafted, and
+undecided, is a policy.
+
+## History
+
+- **2026-10-01:** containers taking a policy were drafted, and are
+  undecided; see [open questions](#open-question-containers-taking-a-policy).
+- **2026-11-05:** `Map`, `Set`, `SortedMap` and `SortedSet` gained `to_str`,
+  writing the call that builds them. Before, splicing a container was
+  refused.
 
 ## Related
 

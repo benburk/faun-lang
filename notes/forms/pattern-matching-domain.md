@@ -2,10 +2,11 @@
 
 An exploration, not a proposal (2026-10-04). What taking values apart has to
 do, what Faun does today, how other languages spell each part, and a few
-whole designs compared on the same programs. The proposals that come out of
-it are [conditions](../proposals/approved/conditions.md),
-[branching](../proposals/superseded/branching.md) and loops, since removed
-([iteration](../iteration.md)).
+whole designs compared on the same programs. What came out of it is
+[pattern matching](pattern-matching.md), which says what holds now and why;
+loops, which it also shaped, were removed on 2026-11-10
+([iteration](../iteration.md)). The `when` draft it replaced is
+[below](#the-when-draft).
 
 ## Decided
 
@@ -17,13 +18,14 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   held: along `&`, into `then`, below an `else` line. Built.
 - **`condition else …`,** a block's line, goes on where the condition
   holds, keeping its names for the lines below, and otherwise leaves: `else
-  return x`, `else continue` or `else break`, `return`'s value any
-  expression, a block doing effects first among them; beside it, `if c
-  return x` leaves where `c` holds. These replace design E's `if` lines.
-  Both fresh designs led the line with a keyword, `guard`, and it was built
-  first as `expect … else`; the keyword went on 2026-10-07, since `return`,
-  `continue` and `break` already mark every leave, and a block ending in a
-  leave as an `else`'s went on 2026-10-08, `return` taking a block. Built.
+  return x`, `return`'s value any expression, a block doing effects first
+  among them; beside it, `if c return x` leaves where `c` holds. These
+  replace design E's `if` lines. Both fresh designs led the line with a
+  keyword, `guard`, and it was built first as `expect … else`; the keyword
+  went on 2026-10-07, since `return` already marks every leave (and
+  `continue` and `break` did, while there were loops), and a block ending
+  in a leave as an `else`'s went on 2026-10-08, `return` taking a block.
+  Built.
 - **A bare `expect` in a body,** an assumption checked in development and
   skipped in optimized builds, binding nothing, is for later; until then a
   body's line beginning `expect` is refused.
@@ -31,8 +33,8 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   with guards, 2026-10-07. Arms on a bare parameter are left to style:
   clauses by default, arms where the other parameters would repeat on every
   clause. Revised 2026-10-16: an arm's value follows `then`, as an `if`'s
-  does, and a leave may stand in its place, `P return x`; see the
-  [conditions](../proposals/approved/conditions.md) errata.
+  does, and a leave may stand in its place, `P return x`; see
+  [pattern matching](pattern-matching.md#tests-and-arms).
 - **Many ways on a value** are `is` with arms, `x is ( P then … )`, with no
   `match` or `when` keyword. Both fresh designs used `match`; the brief did
   not offer Finch's idea, so that says nothing against it.
@@ -44,13 +46,14 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   equal, `[a, a, *_]`, in a test as in a clause's head; `[a, ==a]` is
   refused, since `==` reads as reaching outside the pattern.
   Built, 2026-10-06.
-- **`=` binds a name from here on,** Python's model: past branches and
-  across a loop's rounds, at any type on a straight line and one type where
-  paths meet, if it is read there. Nothing changes in place, so a step is `order =
-  order.append(node)`. A pattern binds a name in scope again where it
-  matched, as `=` does (2026-10-11). This replaced no-rebinding (built 2026-10-05) and the
-  loops draft's `$` variables on 2026-10-07, after a separate assignment
-  operator was weighed against it.
+- **`=` binds a name again as a shadow,** to the end of its block, at any
+  type; a binding again that nothing reads is refused. Nothing changes in
+  place, so a step is `order = order.append(node)`. A pattern binds a name
+  in scope again where it matched, as `=` does (2026-10-11). No-rebinding
+  (built 2026-10-05) gave way on 2026-10-07 to binding from here on,
+  Python's model, past branches and across a loop's rounds; that gave way
+  to shadowing on 2026-11-10, when loops went. See
+  [binding again](#binding-again-the-designs-weighed).
 - **Leaving where a test holds** is an `if` line, `if n1 is Bot return
   Bot`, beside the `else` line for what should hold: one passes names down,
   the other bails out. First accepted as a negated `else` line, to keep one
@@ -60,7 +63,7 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   or `|`, leaving the clause or lambda from there. Today's refusals are a
   gap in lowering, closed by join points: the rest of a body after a branch
   made a local function each branch calls, so a branch can leave instead.
-  Loops need the same.
+  Built, 2026-10-07.
 - **A name both sides of `|` bind,** at one type, is seen where the `|` held:
   to its right along `&`, in `then`, below an `else` line. Whichever side held
   supplies it. A name only one side binds is seen nowhere past the `|`.
@@ -89,7 +92,7 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **Infallible destructure:** `(a, b) = pair`. A pattern that can fail is
   refused, with advice.
 - **Fallible destructure:** pattern and optional conditions, else leave by
-  `return`, `continue` or `break`: `r is Ok(v) else return 0`. A
+  `return`: `r is Ok(v) else return 0`. A
   default is a ternary, `n = if r is Ok(v) then v else 0`, or `r.ok_or(0)`.
 - **Leave early on a test:** `if n == 0 return 0`, or `n != 0 else
   return 0` for what should hold.
@@ -98,7 +101,8 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **Plain test:** is it this shape, as a `Bool`: `x is P`. Several values
   at once as a tuple, `(a, b) is (Ok(x), Ok(y))`; a chain, `x is Some(y) &
   f(y) is Some(z)`, where a test reads what an earlier one bound.
-- **Loops:** `for` takes an infallible pattern; `while x is P` binds.
+- **Loops:** `for` took an infallible pattern and `while x is P` bound;
+  removed 2026-11-10, a walk being recursion or a fold.
 - **Lambda parameters:** infallible patterns, as today.
 
 **Pattern vocabulary**
@@ -117,8 +121,7 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - Names are seen where success is known: along the `&` chain, in the
   success branch or body, and below a guard line.
 - A guard may bind, `r is Ok(v) & v > 0`, on one line.
-- Exits are explicit: `return`, `continue`, `break`, `?`. No `return`
-  expression.
+- Exits are explicit: `return` and `?`. No `return` expression.
 - `&` and `|` short-circuit on `Bool`. Built.
 - Effects stand one to a line. Built.
 - `?` leaves from a branch, an arm or a block inside either. Built. On the
@@ -163,10 +166,8 @@ count = Nat.from_str(text).ok_or(0)
 empty = list is []
 found = results.filter(|result| result is Ok(_))
 
-# Go on only where a test holds: else leave the function, a round, the loop. Built.
+# Go on only where a test holds: else leave the function. Built.
 n != 0 else return 0
-!seen.contains(node) else continue
-total <= limit else break
 
 # Take apart, or leave: what it binds goes on below. Built.
 heap.pop() is Ok({key, value, rest}) else return state
@@ -274,13 +275,6 @@ zip_with(f, [x, *xs], [y, *ys]) -> (
 )
 zip_with(_, [], []) -> Ok([])
 zip_with(_, _, _) -> Err(Mismatch)
-
-# A worklist taken apart as a loop goes round. Built.
-while stack is [node, *stack] do (
-  if seen.contains(node) continue
-  seen = seen.insert(node)
-  stack = stack.concat(graph.targets(node))
-)
 ```
 
 `r is Ok(limit)` where `limit` is a name already binds it again, as `=`
@@ -715,6 +709,128 @@ leaving where it holds an `if` line beside it. See Decided, at the top.
 | Guards migrate       | no  | ~100  | no    | no   | no   |
 | Grammar size         | mid | least | most  | mid  | most |
 | Familiar from        | C#  | Hask. | Swift | Rust | Ruby |
+
+## The `when` draft
+
+Drafted on 2026-10-01, before the exploration above, and superseded on
+2026-10-14 by `is` with arms, which branch on a computed value as `when`
+would have. It never was built.
+
+A Faun body could not branch on a value it computed, so each such branch
+was a definition of its own. The draft counted eight in the graph and heap
+libraries: `visiting` and `drained` took apart `heap.pop()`, `stepped` the
+step a path walks back through, `sorted` whether toposort ordered every
+node, and `climb_past`, `sink_past`, `cheaper` and `either` the heap's
+comparisons. Its answer was a value, then clauses in parentheses:
+
+```ruby
+back(settled, node, route) -> (
+  step = settled.get_or(node, Err(Unreachable))?
+  walked = [node, *route]
+  when step.from (
+    from if from == node -> Ok(walked)
+    from -> back(settled, from, walked)
+  )
+)
+```
+
+- **Arms were clause lines,** `pattern [if guard] -> expr`, parted by line
+  ends and never commas, as a block's lines are. After the value, a plain
+  `(` could not go on with an expression, so it opened the arms, and the
+  grammar stayed LL(1).
+- **The parentheses were needed.** Without the `)`, a `when` ending a
+  top-level body would take the next definition's clauses as arms; inside a
+  block, a line after the arms could be the next statement or another arm
+  until an `->` arrived; and a `when` inside another would take the outer
+  one's later arms.
+- **An arm could leave,** `Err(error) -> return Err(error)`, where the
+  `when` was a block's line or a binding's value: the many-way form of a
+  destructuring that can fail. Arms of `is` kept this.
+- **The keyword was `when`,** after Kotlin's. `match` was left free as a
+  name, which parsers, regular expressions and templates want, and Faun's
+  guards being `if`, `when` did not read as a guard, as it does in Elixir,
+  F# and OCaml.
+- **The space before `(` mattered:** `when x(` is a call of `x`, so the
+  formatter would always write the space and the parser name the likely
+  mistake.
+- **An unclosed `when`** ran on through every clause after it, since a
+  top-level clause reads as an arm, and was to be told at its `(`.
+
+Its costs were two ways to take a parameter apart, `f(x) -> when x (…)`
+doing what clauses do; nesting, which languages with match expressions
+tend to; less pressure to name a step that was a real one; and a keyword.
+
+Weighed against it, and left:
+
+- **Keep the grammar,** a helper and its signature for each branch on a
+  computed value: a visible, bounded cost, but one falling hardest on data
+  structures, where most of a step is comparisons partway through a walk.
+- **A postfix form,** `heap.pop().( Err(Empty) -> …, Ok(e) -> … )`,
+  reusing a type's `.(`: no keyword or token, but cryptic, and its gain is
+  chaining, which naming each step works against.
+- **Lambdas of several clauses** handed to a method, `popped.match(|Err(Empty)|
+  -> …, |Ok(e)| -> …)`: one construct for branching in name, with a heavier
+  spelling of the same meaning.
+- **Commas between arms,** for one-line branches: they parse, but blocks
+  and method blocks take line ends only, and a two-way branch on one line is
+  usually better as a method call.
+- **No separator between arms:** almost parses, except a pattern beginning
+  with `-`, `n -> a -1 -> b` reading as a subtraction.
+- **`if` expressions,** a `when` on a `Bool`, for the helpers that were
+  two-way tests on a comparison. These were built, with `is`.
+
+Discussed beside it on 2026-10-02 and recorded with it, aiming at one way
+to write each thing and the classic algorithms as short as their Python:
+
+- **A local function as a binding of a lambda,** `walk = |stack| …`,
+  seeing its own name, lifted with what it reads as extra parameters, as
+  Haskell's `where` and Erlang's named funs end the passing of context by
+  hand. Clauses would stay the top-level form: a third of the 1,974
+  definitions then written had several clauses, each of which would become
+  a `when` on a tuple of its parameters if a lambda were the only form. Not
+  built.
+- **Local lambdas need no lambda sets** if what is bound must be a lambda
+  written there or a named function, each name then standing for one known
+  function.
+- **Functions in data** would cost lambda sets, and every call being a
+  static edge. Nothing written wanted it.
+- **Guard conditions, `else` lines and a destructuring `if`** became the
+  `is` design above.
+
+## Binding again, the designs weighed
+
+A step, `order = order.append(node)`, binds a name again. The designs
+tried, in order, and what each cost:
+
+- **No rebinding,** built 2026-10-05: a name meant one value for its whole
+  scope, at the price of a fresh name for every step, `degrees2`.
+- **`$` variables,** the loops draft's: a name a loop changed was marked at
+  every use, `$order.append(node)`, a sigil on every mention.
+- **A separate assignment operator,** `x := x + 1`, `=` binding only new
+  names: every change and every new name would show on its line, and a
+  typo would be refused rather than warned of; but a second binding
+  operator for what one `=` says.
+- **Binding from here on,** Python's model, built 2026-10-07: a name bound
+  again was seen past branches and across a loop's rounds, at any type on
+  a straight line and one type where paths met, if read there. It cost
+  resolution a merge of every name each way bound again, join points
+  taking those names as parameters, and a loop's round a call with them.
+- **A name keeping one type everywhere,** as binding from here on was
+  first built: a straight line of steps converting a value, `Str` to `Nat`,
+  needed a name for each; held to one type only where read from
+  2026-10-12.
+- **A pattern only declaring,** `r is Ok(limit)` refused where `limit` was
+  in scope, until 2026-10-11: it guarded against meaning a comparison, but
+  made a name in a pattern read by what was in scope, and cost a worklist
+  `ready = rest`, a step a `continue` above it would skip.
+- **Writing back,** a bare `order.append(node)` changing `order`: whether a
+  line changed a name would hang on its shape and the method's type.
+- **Shadowing,** a name bound again hiding the one before to the end of its
+  block. Turned down on 2026-10-07, since a branch's `count = count + 1`
+  would vanish after the branch, silently; taken on 2026-11-10, when loops
+  went and with them most of what binding from here on carried, together
+  with refusing a binding again that nothing reads, which catches that
+  case.
 
 ## Open questions
 

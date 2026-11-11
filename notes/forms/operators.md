@@ -179,7 +179,7 @@ On `Bool`, logical and is bitwise and on a single bit, so the two are one
 operation. Faun has one method per type, `and`, so one symbol is enough,
 and `&&` and `||` would be second spellings of the same call. Word
 operators, `and` and `or`, which would leave `|` to patterns, were
-considered by the conditions proposal and declined: every `Bool` expression
+considered with conditions and declined: every `Bool` expression
 would change.
 
 ### Why do `&`, `|` and `^` sit looser than comparisons?
@@ -219,5 +219,5 @@ it does.
 - [Floats](../values/floats.md): a total `cmp`, and IEEE 754's comparisons
   by name
 - [Types](../types.md): `where` bounds, which ask for an operator's method
-- [Conditions proposal](../proposals/approved/conditions.md): `if`, `is`,
-  and `&` and `|` binding along a condition
+- [Pattern matching](pattern-matching.md): `if`, `is`, and `&` and `|`
+  binding along a condition

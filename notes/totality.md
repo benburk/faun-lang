@@ -2,15 +2,15 @@
 
 A language is total when every call of a pure function comes back with an
 answer. Faun is not: termination is not checked, and a pure call may never
-come back ([termination proposal](proposals/approved/termination.md)). Ori,
-which Faun began as a port of, was total, and enforced it. This note keeps
-the whole trade: what totality makes simple, what it makes hard, the
-designs in between, and what would change the decision.
+come back ([computation](computation.md#termination-is-not-checked)). Ori,
+which Faun began as a port of, was total, and enforced it. This note owns
+the decision and the whole trade: what totality makes simple, what it makes
+hard, the designs in between, and what would change the decision.
 
 ## What totality is, and is not
 
 Total means every call answers. It does not mean every call answers soon. A
-loop counting to 2^64 is total. So totality is a promise about meaning,
+walk counting to 2^64 is total. So totality is a promise about meaning,
 not about time or memory.
 
 Safety-critical rules ask for more. JPL's "Power of Ten" rules for flight
@@ -182,10 +182,24 @@ measure is needed exactly where the quantity is not an argument's size.
 ### Slower checking, and an analysis that keeps growing
 
 The analysis was 2,315 lines and took 8–41% of `faun check` time on the
-example programs; the termination proposal has the table. Each extension to
+example programs. Built in release and timed best of three, `faun check`
+with and without the termination pass, on 2026-09-29:
+
+| Program              |    With | Without | Saved |
+| -------------------- | ------: | ------: | ----: |
+| `libraries/template` | 35.3 ms | 20.8 ms |   41% |
+| `aoc/201512`         | 33.6 ms | 21.7 ms |   35% |
+| `libraries/json`     | 33.8 ms | 24.0 ms |   29% |
+| `aoc/201515`         | 25.3 ms | 20.4 ms |   19% |
+| `aoc/201519`         | 31.3 ms | 25.6 ms |   18% |
+| `libraries/graph`    | 31.1 ms | 28.5 ms |    8% |
+
+Checking a small program in under 10 ms is a goal, and the pass was the
+largest single piece of checking that could simply go. Each extension to
 prove another shape reached into every match the analysis reads. One
-experiment to prove a walk over a table of marks took 540 lines and slowed
-unrelated programs by up to 1.8×. The October revival ended near 2,900
+experiment to prove a walk over a table of `Bool` marks took about 540
+lines across `stops.rs` and `relations.rs` and slowed checking unrelated
+programs by up to 1.8×. The October revival ended near 2,900
 lines, adding 3–10 ms to a check. Ori's tiers were about 3,100.
 
 The analysis is also trusted. A bug in it accepts a program that never
@@ -203,9 +217,10 @@ October work found three such bugs in the old checker.
   at. `countdown(n) -> countdown(n - 1) + 1` with a base case at nought is
   proved at `Nat`, whose subtraction stops at nought. It is refused at
   `Int`, where a negative argument never comes back, and at `U8`, where it
-  does come back, by wrapping round, but no size shows it. A library author cannot see what their definition
-  requires of its type, and one no program instantiates is never judged:
-  about 5% of the standard library's signatures were never seen.
+  does come back, by wrapping round, but no size shows it. A library author
+  cannot see what their definition requires of its type, and one no program
+  instantiates is never judged: about 5% of the standard library's
+  signatures were never seen.
 
 ### Refusals that blame the program
 
@@ -239,9 +254,26 @@ The guarantee caught a real but rare mistake, and the bill was visible in
 every program that recursed on anything but a part of its input: fuel,
 wrong answers where fuel ran short, refusals of correct programs, and a
 large share of checking time. The optimizer turned out to need only that
-unneeded work may be skipped. The cost Faun accepted is semantic: pure code
-no longer means one thing under every evaluation order, and the language
-has to say where that matters.
+unneeded work may be skipped: fusion and pruning, the two passes that
+relied on every call coming back, only ever skip work nothing needs
+([computation](computation.md#why-may-unneeded-work-be-left-out)).
+Dropping it removed the 2,315-line analysis, and 14 refused programs about
+stopping became accepted ones.
+
+The costs Faun accepted:
+
+- **One meaning for pure code.** Pure code no longer means one thing under
+  every evaluation order, and the language has to say where that matters.
+  Ori was built on the premise that purity and totality make unused pure
+  work unobservable; Faun makes it unobservable by the rule directly.
+- **A class of mistake moves to run time.** Recursing on a list instead of
+  its rest was refused; now the program hangs.
+- **No diagnostic for a definition that may not stop.** The recourse, if
+  one is ever wanted, is the analysis from the history, as an opt-in report
+  and never a gate.
+
+A program ported from Ori means the same in Faun, since everything Ori
+accepts stops; a Faun program need not run under Ori's rules.
 
 ### Why not make recursion total by construction?
 
@@ -276,9 +308,10 @@ separates `Tot` from `Dv`. Nothing is refused, and the compiler knows
 where totality holds. In Faun it would be inferred, like an effect a
 function might have, and not written. It still needs the analysis, with
 its cost and its bugs, since an optimization trusting the fact must never
-be told wrong. And it adds a second kind of purity for a reader to track.
-The termination proposal rejected the same idea as "keep the analysis as a
-fact, not a refusal."
+be told wrong, which is the subtlety the experiments kept tripping over:
+about 2,300 lines kept to answer a question the rule for unneeded work
+makes unnecessary. And it adds a second kind of purity for a reader to
+track.
 
 ### Why not assume every call comes back, as C++ does?
 
@@ -286,20 +319,33 @@ It would give the optimizer everything totality gives it, with no checker.
 C++ makes a side-effect-free loop that never ends undefined behaviour, and
 LLVM's `mustprogress` lets the optimizer assume such loops end. From the
 assumption it derives facts about the code after them, and a false
-assumption makes anything possible: the termination proposal shows clang
-falling out of an endless `main` into the next function.
+assumption makes anything possible. With clang, this prints `hello`:
+
+```c
+int main() { while (1) ; }
+void unreachable() { printf("hello\n"); }
+```
+
+The loop has no exit, so the code after it is unreachable, so the loop and
+`main`'s return go, and execution falls into the next function. LLVM itself
+moved away from assuming it everywhere: before LLVM 12 it deleted Rust's
+`loop {}` (rust-lang/rust#28728), and the fix made forward progress a
+function attribute, `mustprogress`, that a frontend opts into.
 
 Faun has no undefined behaviour anywhere: no operation fails, and every
 one answers. Assuming termination would add the one exception, where a
 looping bug could skip a check and run an effect it should not have.
 Faun's rule is the safe half of the assumption: it permits leaving work
 out, and never concluding that anything stops, so a looping bug is a hang,
-never a miscompile.
+never a miscompile. The cost is the optimizations that need that
+conclusion: pruning must keep a compiled loop that never breaks even when
+nothing reads its answer, since the code after it is reached only if it
+ends.
 
 ### Why not use what obviously stops?
 
 Most of what speculation wants is small: straight-line arithmetic with no
-call that can come round again, and a `for` over a list, which stops since
+call that can come round again, and a fold over a list, which stops since
 the list is finite. Both stop with nothing to prove. A fact the compiler
 reads off such code, as LLVM deduces `willreturn` for straight-line code
 and counted loops, would let the optimizer work out both branches of a
@@ -328,12 +374,30 @@ is unexplored.
   guarantee that can be handed to someone. Faun has no such use today, and
   totality alone does not bound time.
 
+## History
+
+- **2026-09-29:** termination stopped being checked, proposed and approved
+  the same day. Porting the graph library, whose worklists needed step
+  limits, led to the experiment extending the checker; it worked, at a cost
+  out of proportion to the limits it removed, and following it through
+  showed the optimizer needed only that unneeded work may be skipped.
+  `barb/stops.rs` and `barb/relations.rs` went, keeping only `breakers`
+  (loop breakers for inlining) and `callees_first` (folding order) in a
+  module of their own; the 14 refused programs about stopping went; the
+  graph library's `drain_stack`, `drain_queue` and `stored_edges` were
+  dropped, while bounds that mean something, such as Newton's method's,
+  stayed. Range analysis then read a term nothing ever answers as able to
+  hold anything, so `host.exit!(spin(3))` was refused where
+  `host.println!(spin(3).to_str())` built and hung.
+- **2026-10:** the check was revived as an experiment on Faun's code as
+  written. It ended near 2,900 lines, adding 3–10 ms to a check, found
+  three bugs in the old checker, and left the worklists, invariants and
+  searches above unproved. The decision stood.
+
 ## Related
 
-- [Termination proposal](proposals/approved/termination.md): the decision,
-  its measurements and its errata
 - [Computation](computation.md): strict evaluation, the rule for unneeded
-  work, and `&` and `|`
+  work, termination not being checked, and `&` and `|`
 - [Dependent types](dependent-types.md): why types that compute are out
 - [Pattern matching](forms/pattern-matching.md): exhaustiveness, kept for
   its own reasons

@@ -39,10 +39,13 @@ solar_mass = 4.0 * F64.pi * F64.pi
 ```
 
 `zero() -> 0` is refused with "a definition of no parameters is a value:
-`zero = ...`", and `zero()` with "`zero` is a value, not a function". A
-value's name takes no `!`, since a value is no effect. The
-[values proposal](../proposals/approved/values.md) made this change and
-gives its reasons.
+`zero = ...`", and `zero()` with "`zero` is a value, not a function". The
+same holds for a type's value, `Vec3.zero`, and for one a `where` bound
+gives, `a.zero` where the bound is `a.zero : a`. The head is one name: a
+pattern before `=` is refused, and so is an effect's name, since a value is
+no effect. A value's expression may start on the line after `=`, as a body
+may after `->`. Below name resolution a value is still a definition of no
+parameters, and a use of it is a call.
 
 ## Lambdas
 
@@ -69,8 +72,7 @@ doubled : List(Str) -> Result(List(Nat), [Malformed])
 doubled(texts) -> texts.try_map(|text| Ok(Nat.from_str(text)? * 2))
 ```
 
-A lambda written inside a loop is no part of the loop's round, so
-`continue` and `break` in its body are refused. A lambda handed to a pure
+A lambda handed to a pure
 definition is pure: `names.map(|name| host.println!(name))` is refused, as
 `map` calls no effect ([effects](../forms/effects.md)).
 
@@ -210,9 +212,8 @@ Specialization makes one definition per set of callbacks, and the wrapped
 callback is a new set each round: the lambda holds the callback it was
 handed, which held the one before. Making them would never finish. This is
 not a check that the program stops, which Faun does not make
-([computation](../computation.md)); the
-[termination proposal](../proposals/approved/termination.md) kept this one
-refusal because it is about what can be compiled, not about stopping. The
+([computation](../computation.md#why-not-check-termination)); that
+decision kept this one refusal because it is about what can be compiled, not about stopping. The
 recourse is to recurse on data, as `Wrap` does above: the chain becomes a
 value the program builds, and one `call` walks it.
 
@@ -255,10 +256,22 @@ Nothing else in Faun is a function of nothing: a lambda takes at least one
 parameter and a function type at least one type. Faun is pure, so whether a
 value is worked out once or at each use cannot be told. The corpus had 178
 such definitions, constants and each type's `zero` or `empty`, all written
-and used with `()` as if they were functions. An effect cannot hide behind
-the notation, since a value's name takes no `!`. The cost is that a value
-cannot be a function: `f = g` is refused, as binding a function always was.
-The [values proposal](../proposals/approved/values.md) has the full argument.
+and used with `()` at every use, and defined with a head naming parameters
+it does not have. An effect cannot hide behind the notation, since a value's
+name takes no `!`.
+
+The cost is that a value cannot be a function: `f = |x| x` does not parse,
+since a lambda stands only as an argument, and `f = g` is refused, as
+binding a function always was. Moving to values changed every program at
+once, which a script did.
+
+### Why not keep `name()`, or allow both?
+
+Keeping `name()` costs `()` at every use of every constant, and reads as a
+function of nothing. Allowing both would give one thing two spellings, and
+the change was small enough to make whole. Working values out once at load
+was also weighed: it means nothing different in a pure language, and a
+compile-time constant is already folded.
 
 ### Why may a lambda not assign the names around it?
 
@@ -267,6 +280,19 @@ definition likes, perhaps none. An assignment to a name outside it would
 have no single meaning after the call. The lambda answers the new value
 instead, and the code around it assigns:
 `total = xs.fold(total, |t, x| t + x)`.
+
+## History
+
+- **2026-10-02:** values, proposed, approved and built the same day. Until
+  then a constant was a definition of no parameters, `pi() -> 3.14159`, used
+  as `pi()`, `Vec3.zero()` and `a.zero()`. The corpus held 178 such
+  definitions in 59 files; comparing n-body with the branching draft, whose
+  `solar_mass`, `days_per_year`, `bodies` and `system` are constants,
+  prompted the change. Rewriting the type-qualified uses needed the list of
+  types' values, since `False.not()` is a method call on a constructor.
+- **2026-11-10:** loops were removed ([iteration](../iteration.md)), and
+  with them the refusal of `continue` and `break` in a lambda written
+  inside a loop's body.
 
 ## Related
 
@@ -278,4 +304,3 @@ instead, and the code around it assigns:
 - [Computation](../computation.md): strict evaluation, and why stopping is
   not checked
 - [Effects](../forms/effects.md): `!` definitions and capabilities
-- [Values proposal](../proposals/approved/values.md): `name = value`

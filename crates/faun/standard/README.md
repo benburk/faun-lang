@@ -317,7 +317,7 @@ applications; it needs no blessed standard-library name. `Never` remains an
 ordinary available constructor spelling. Each target has its own host module,
 `hosts/<target>.fn`, mounted at `std.host`, and what every target shares is
 `hosts/common.fn`, which each imports as `hosts.common`: the rows, `Mode`,
-and the loops that go on until a stream is done. What a host module keeps
+and the walks that go on until a stream is done. What a host module keeps
 for itself is its target's: its descriptors, its flags and its error
 numbers. Each declares Ori's host streams:
 
@@ -441,20 +441,17 @@ pattern naming nothing that holds the file, `opened is Ok(_)`, only looks. Where
 held, what the test took apart is whole again, so the `else` has `opened` to
 close.
 
-A loop's round ends as it began. A file held before the loop is not closed
-by a round that goes on, and one a round opens is closed in it or handed to
-the next round in a name the loop carries, which holds it after the loop. A
-`for` walking a list of files takes the list, each round using up its
-element; a `break` would leave the rest, so it is refused.
+A walk over files is a recursion like any other: a list of files is used
+up an element at a time, each clause closing what it takes or handing it
+on, and every file opened is closed once on every way the walk goes.
 
 ```
-opened = []
-for name in names do (
-  files.open!(name, Overwrite) is Ok(file) else continue
-  opened = [file, *opened]
-)
-for file in opened do (
+closed_all! : List(File) -> Nat
+closed_all!([]) -> 0
+closed_all!([file, *files]) -> (
   closed = file.close!()
+  rest = closed_all!(files)
+  rest + 1
 )
 ```
 
@@ -587,20 +584,21 @@ Clauses suit a body that is the dispatch;
 arms suit a value worked out partway through one.
 
 An arm's pattern and guard are a condition, so as after an `if`'s, a
-leave may stand where `then` would: `P return value`, `P continue` or `P
-break`. A leaving arm adds nothing to the type the arms answer, and stands
+leave may stand where `then` would: `P return value`. A leaving arm adds nothing to the type the arms answer, and stands
 where the `is` is a line's value or a body's answer, not inside an operand
 or an argument. Arms on a line of their own go on with nothing, each that
 does not leave answering `{}`:
 
 ```
-for r in results do (
+counted([]) -> Ok(0)
+counted([r, *results]) -> (
   r is (
-    Err(Skipped) continue
+    Err(Skipped) return counted(results)
     Err(error) return Err(error)
     Ok(_) then {}
   )
-  count = count + 1
+  count = counted(results)?
+  Ok(count + 1)
 )
 ```
 
@@ -626,36 +624,23 @@ An `else` line says what should hold, its names going on below; an `if`
 line bails out on a case. `return` stands only in a leaving line, so every
 way out of a body is one. A leaving line leaves from any block, its
 clause's body, a branch, an arm, or a block whose value goes on into more
-of the body. `continue` and `break` leave the same way, and come with
-loops. `expect` stands only at the top level, as a test; in a body it will
+of the body. `expect` stands only at the top level, as a test; in a body it will
 be an assumption checked in development, which is not built.
 
-## Loops
+## Walks
 
-`for pattern in list do ( … )` runs its body, a round, once for each
-element in order, and `while condition do ( … )` while the condition holds, what a
-test in it binds seen by the round. A name bound before a loop and again in
-its body, its `for` element or its `while` test carries from round to
-round and out of the loop, at one type where it is read in the next round
-or after the loop; one first bound in the body is the round's. `if c continue` or `c else
-continue` ends a round, `break` the loop, and `return` the clause from
-inside any loop; any line may be a round's last. A loop is a block's line,
-not an expression: what it computes comes out in the names it assigns.
+There are no loops. A walk is a function calling itself, a fold, or a
+list's own methods, and a call whose answer is its caller's is a jump, so a
+walk of any length runs in constant stack. A walk leaves early by answering
+instead of calling itself again, or by `fold_until`, whose step answers
+`Continue(state)` or `Stop(state)`. Why is in `notes/iteration.md`.
 
 ```
-summed(xs) -> (
-  total = 0
-  for x in xs do (
-    if x > 100 continue
-    total = total + x
-  )
-  total
-)
+summed : (List(Nat), Nat) -> Nat
+summed([], total) -> total
+summed([x, *xs], total) if x > 100 -> summed(xs, total)
+summed([x, *xs], total) -> summed(xs, total + x)
 ```
-
-A loop is a function of what it carries calling itself for the next
-round, so a round costs a jump. A lambda inside a loop is no part of its
-round.
 
 ## Or-patterns
 
@@ -669,41 +654,34 @@ binding's or a lambda's pattern binds each name once.
 
 ## Binding again
 
-`=` binds a name from that line on, whether or not it was bound before, as
-Python's does: past the branch, arm or block it was bound in, and in a
-loop's next round. `count = count + 1` is a step, and `(a, b) = (b, a)`
-swaps. On a straight line the name may take another type, `x =
-Nat.from_str(x)?` after `x = text.trim()`; where paths meet, after a branch
-that bound it again, it has one type whichever way was taken, if anything
-reads it there. A name first
-bound inside a block leaves with it. A block whose last line is a binding,
-a leaving line or a loop answers `{}`, so an arm on a line of its own may
-just assign. Nothing changes in place: a method
+`=` binds a name on the lines below, to the end of the block it stands in,
+whether or not it was bound before: a name bound again shadows the one
+before it there, at any type, `x = Nat.from_str(x)?` after `x =
+text.trim()`, and the one before is seen again after the block. A branch's,
+an arm's and a lambda's bindings are their own, so none is seen after it.
+`count = count + 1` is a step, and `(a, b) = (b, a)` swaps. A binding that
+binds a name again, and that nothing reads, is refused: a branch's
+binding is gone after the branch, so what a branch decides is bound where
+the branch is, `x = if c then a else x`. A block whose last line is a
+binding or a leaving line answers `{}`. Nothing changes in place: a method
 answers a new value, so a step is written whole, `order =
 order.append(node)`, and a list nothing else holds is still written where
 it lies. Values have no identity, so `snapshot = order` stays what it was
-when `order` changes.
+when `order` is bound again.
 
 ```
 bumped(up, n) -> (
-  count = n
-  label = if up then (
-    count = count + 10
-    "up"
-  ) else "down"
+  (count, label) = if up then (n + 10, "up") else (n, "down")
   (count, label)
 )
 ```
 
 A test's or an arm's pattern binds a name in scope again as `=` does,
 where it matched: `r is Ok(limit) else return 0` binds `limit` for the
-lines below, and `while ready is [node, *ready] do (` steps a worklist. A
-name in a pattern always binds; `==limit` compares. A lambda's parameters
-are its own, shadowing names around it within the lambda, and so are a
-test's names and a `for`'s element there. `=` in a lambda binds only the
-lambda's names, since what calls it may call it any number of times; and
-`=` binds no name of the body in a condition, or on the right of `&` or
-`|`, where it may not be worked out.
+lines below. A name in a pattern always binds; `==limit` compares. A
+lambda's parameters are its own, shadowing names around it within the
+lambda, and so are a test's names there. `=` binds no name of the body in a
+condition, or on the right of `&` or `|`, where it may not be worked out.
 
 A clause's head, or a test's pattern, may bind a name twice, and then
 matches only where both are equal by their type's `equals`: `doubled([a, a]) -> True` is
