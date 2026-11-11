@@ -66,7 +66,7 @@ summed([x, *xs], total) -> summed(xs, total + x)
 Two programs were written with loops and again without, on 2026-11-10.
 
 **An assembler and emulator,**
-[faun-assemulator](https://github.com/benburk/faun-assemulator): a lexer, an
+[assemulator-fn](https://github.com/benburk/assemulator-fn): a lexer, an
 expression evaluator, a two-pass assembler with macros and includes, and a
 runner stepping a CPU. Its 21 loops were written again as recursion, folds
 and clauses; the 17 example programs gave the same output and bytes.
