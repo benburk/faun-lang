@@ -90,6 +90,15 @@ Str : List(U8).(
   # anyway: no byte continuing a character equals a byte beginning one, so
   # a match never begins inside a character.
 
+  # The bytes of `text` from `start` up to `end`, as text: `"hello".slice(1,
+  # 3)` is `"el"`. A position inside a character written in more than one
+  # byte is `NotAtBoundary`, and an end past the text, or before the start,
+  # `OutOfBounds`.
+  slice : (Str, Nat, Nat) -> Result(Str, [OutOfBounds, NotAtBoundary])
+  slice(Str(bytes), start, end) if start > end | end > bytes.len() -> Err(OutOfBounds)
+  slice(Str(bytes), start, end) if !begins_at(bytes, start) | !begins_at(bytes, end) -> Err(NotAtBoundary)
+  slice(Str(bytes), start, end) -> Ok(Str(bytes.take(end).drop(start)))
+
   starts_with : (Str, Str) -> Bool
   starts_with(Str(bytes), Str(prefix)) -> strip_prefix(bytes, prefix).is_ok()
 
@@ -231,3 +240,12 @@ expect "é".pad_start(3) == "  é" & "🦌".pad_end(2) == "🦌 "
 expect ["pear", "fig", "apple"].sort() == ["apple", "fig", "pear"]
 expect Str.is_ascii("abc".to_utf8()) & !Str.is_ascii([0xc3, 0xa9]) & Str.is_utf8([0xc3, 0xa9]) & !Str.is_utf8([0xc3])
 expect Str.hex([0x0f, 0xa0, 0x00, 0xff]) == "0fa000ff" & Str.hex([]) == ""
+
+# Whether a character begins at `at` in `bytes`, or `at` is their end: no
+# byte continuing a character, `0b10xxxxxx`, stands there.
+begins_at : (List(U8), Nat) -> Bool
+begins_at(bytes, at) -> if bytes.get(at) is Ok(byte) then byte.and(192) != 128 else True
+
+expect "hello".slice(1, 3) == Ok("el") & "hello".slice(0, 5) == Ok("hello") & "hi".slice(2, 2) == Ok("")
+expect "hi".slice(1, 3) == Err(OutOfBounds) & "hi".slice(2, 1) == Err(OutOfBounds)
+expect "héllo".slice(0, 2) == Err(NotAtBoundary) & "héllo".slice(1, 3) == Ok("é")

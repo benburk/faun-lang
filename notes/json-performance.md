@@ -95,10 +95,10 @@ buffer, every one is counted, and every one is given back. Decoding is the
 same, with `seq.release`, `nat.coalesce` and `nat.allocate` the first three
 at 32% together. serde_json's typed decode builds no tree at all.
 
-Checking each string as UTF-8 is 5%. `Str.slice`, taking part of a `Str`
-without checking it again, was tried and measured no faster, and the
-[strings](values/strings.md) note keeps its reasons against slicing text by
-byte, so it was not kept.
+Checking each string as UTF-8 is 5%. An unchecked slice, taking part of a
+`Str` without checking it again, was tried and measured no faster, so it
+was not kept; `Str.slice` checks both ends
+([strings](values/strings.md)).
 
 ## What changed in the compiler
 

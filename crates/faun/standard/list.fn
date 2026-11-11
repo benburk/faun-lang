@@ -195,6 +195,13 @@ List(a) : [Nil, Cons(a, List(a))].(
   find_index : (List(a), a -> Bool) -> Result(Nat, [NotFound])
   find_index(values, test) -> find_index_from(values, test, 0)
 
+  # How many elements from the front satisfy `test`, where every one that
+  # does comes before every one that does not, as a sorted list's do:
+  # found by halving. `words.partition_point(|word| word < key)` is where
+  # `key` would go, as Python's `bisect_left` finds.
+  partition_point : (List(a), a -> Bool) -> Nat
+  partition_point(values, test) -> partition_between(values, test, 0, values.len())
+
   take : (List(a), Nat) -> List(a)
   take(values, count) -> take_into(values, count, [])
 
@@ -351,6 +358,14 @@ try_map_into([head, *tail], f, built) -> (
   try_map_into(tail, f, [converted, *built])
 )
 
+partition_between : (List(a), a -> Bool, Nat, Nat) -> Nat
+partition_between(_, _, low, high) if low >= high -> low
+partition_between(values, test, low, high) -> (
+  middle = (low + high) / 2
+  values.get(middle) is Ok(value) & test(value) else return partition_between(values, test, low, middle)
+  partition_between(values, test, middle + 1, high)
+)
+
 find_index_from : (List(a), a -> Bool, Nat) -> Result(Nat, [NotFound])
 find_index_from([], _, _) -> Err(NotFound)
 find_index_from([head, *_], test, at) if test(head) -> Ok(at)
@@ -434,3 +449,5 @@ expect [1, 2, 3, 4].fold_until(0, |total, x| if x > 2 then Stop(total) else Cont
 expect [1, 2].fold_until(0, |total, x| Continue(total + x)) == 3
 expect ["1", "2"].try_fold(0, |total, text| Nat.from_str(text).map_ok(|n| total + n)) == Ok(3)
 expect ["1", "x", "2"].try_fold(0, |total, text| Nat.from_str(text).map_ok(|n| total + n)).is_err()
+expect [1, 3, 5, 7].partition_point(|x| x < 5) == 2 & [1, 3].partition_point(|x| x < 9) == 2
+expect [1, 3].partition_point(|x| x < 0) == 0 & [0].drop(1).partition_point(|x| x < 1) == 0

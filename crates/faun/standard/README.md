@@ -84,14 +84,18 @@ its one to six hexadecimal digits, as Rust does. For reading text there are `is_
 `lines` at `\n` or `\r\n`, `trim` of ASCII white space, `starts_with`,
 `ends_with`, `drop_prefix` and `drop_suffix`; for writing it,
 `pieces.join(separator)`, `repeat`, `pad_start` and `pad_end`. Matching and cutting go byte by
-byte, which no character boundary can fall inside. There is no slicing by
-position. A numeral pattern of a word and a string pattern are each a test
+byte, which no character boundary can fall inside. `text.slice(start,
+end)` takes the bytes from `start` up to `end`, as Python's `text[start:end]`
+does, answering `Err(NotAtBoundary)` where either falls inside a character
+written in more than one byte and `Err(OutOfBounds)` past the end, so a
+slice is always text. A numeral pattern of a word and a string pattern are each a test
 of equality, asked before the clause's guard.
 
 `List` follows Ori's standard list: `len`, `is_empty`, `append`, `concat`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
 `any`, `all`, `fold`, `fold_until`, `try_fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
-`get`, `get_or`, `put`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,
+`get`, `get_or`, `put`, `set`, `exchange`, `try_map`, `find`, `find_index`,
+`partition_point`, `equals`,
 `contains`, `sum`, `take`, `drop`, `take_while`, `drop_while`, `split_at`,
 `partition`, `zip`, `unzip`, `cross`, `enumerate`, `windows`, `min`, `max`,
 `sort`, `sort_on` and `to_str`, and the constructors `List.range(n)` and
@@ -204,7 +208,12 @@ list by the container, so the caller says which: `Map.of_list(entries)`,
 `Map.grouped(values, key)` gathering values by a key, and
 `Map.counted(values)` counting how many times each occurs, as Python's
 `Counter` does, `Map.counted(["a", "b", "a"]).get_or("a", 0)` being 2.
-`SortedMap` has the same three, its keys in order. Both update a key as
+`SortedMap` has the same three, its keys in order, and both sorted
+containers answer the part of themselves from a key on, `from(low)`, or
+between two, `range(low, high)`, `high` itself left out, walking only the
+parts of the tree holding them, as Rust's `BTreeSet::range` does.
+`words.from(prefix).take_while(|w| w.starts_with(prefix))` is every word
+with that prefix. Both update a key as
 Python's `defaultdict` does with `update_or(key, missing, change)`, which
 changes the value there, or `missing` where the key is absent: `counts =
 counts.update_or(word, 0, |count| count + 1)`. Two containers are equal
@@ -333,10 +342,11 @@ Host : {args: List(Str)}.(
 Stdin    read! : (Stdin, Nat) -> Result(Chunk, ReadError)
          read_to_end! : Stdin -> Result(List(U8), ReadError)
          read_to_str! : Stdin -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8])
+         lines! : Stdin -> Result(List(Str), [IsADirectory, Other(Nat), InvalidUtf8])
 Stdout   write!, write_all! : (Stdout, List(U8)) -> Result(Nat, WriteError)
 Stderr   write!, write_all! : (Stderr, List(U8)) -> Result(Nat, WriteError)
 Files    open! : (Files, Str, Mode) -> Result(File, OpenError)
-File     read!, read_to_end!, read_to_str!, write!, write_all!, as the streams
+File     read!, read_to_end!, read_to_str!, lines!, write!, write_all!, as the streams
          close! : File -> Result({}, CloseError)
 Mode     [Read, Overwrite, Append, CreateNew, Edit, Load]
 Chunk    = [Data(List(U8)), End]
@@ -456,7 +466,10 @@ closed_all!([file, *files]) -> (
 ```
 
 `host.print!(text)` and `host.println!(text)` write a text to standard output,
-the second with a line's end, and answer `Result({}, WriteError)`. An effect whose
+the second with a line's end, and `host.print_lines!(lines)` each of a list
+with a line's end after each; each answers `Result({}, WriteError)`.
+`host.stdin.lines!()`, or a file's `lines!()`, reads every line to the end,
+each without its ending, as `read_to_str!` then `lines` would. An effect whose
 answer nothing needs is written on a line of its own, which binds it to `_`;
 `host.println!(text)?` on a line of its own passes a failed write on.
 Only an effect, a call of a name ending `!`, may stand so; anything else is

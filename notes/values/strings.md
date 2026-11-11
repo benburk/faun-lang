@@ -31,8 +31,10 @@ The library reads text with `is_empty`, `split`, `lines`, `trim`,
 with `concat`, `pieces.join(separator)`, `repeat`, `pad_start`, `pad_end`
 and `Str.hex(bytes)`. Matching and cutting go byte by byte. That is sound
 for text, since no byte that continues a character equals one that begins
-a character, so a match never starts inside one. There is no indexing and
-no slicing by position. `len` counts bytes; `pad_start` and `pad_end` count
+a character, so a match never starts inside one. There is no indexing; a
+slice by byte position, `text.slice(start, end)`, answers `Err(NotAtBoundary)`
+where either end falls inside a character, so a slice is always text. `len`
+counts bytes; `pad_start` and `pad_end` count
 Unicode scalars.
 
 ```ruby
@@ -142,21 +144,24 @@ character, are not modelled at all. Python's strings index by code point
 and Swift's by grapheme cluster; both pay for it in representation or in
 time. The names say which unit an operation counts.
 
-### Why no slicing by position?
+### Why is slicing by position checked?
 
-A byte offset into text has no use that is both correct and about text.
-Fixed-width fields are byte work, and cutting text for display needs
-characters, which a byte count is not. So a program that wants the middle
-of a string says it is working in bytes: `to_utf8`, then `take`, `drop` or
-`split_at` on the list, and `from_utf8` back, where a failure is a real
-question about what the bytes turned out to be. Ori tried a `Str.take`
-that cut to the nearest character boundary and removed it. It was sound,
-but it answered a question about letters with a count of bytes, and had no
-`Result` to say so.
+A byte offset into text is about bytes, not letters: cutting text for
+display needs characters, which a byte count is not. But fixed-format text,
+a nine-letter word read as three thirds or a column of a report, is cut by
+position, and without a slice every such program went through the bytes,
+`Str.from_utf8(word.to_utf8().take(6).drop(3))`, to say `word[3:6]`. So
+`slice` takes byte positions and answers a `Result`: `NotAtBoundary` where a
+position falls inside a character, `OutOfBounds` past the end. A slice is
+always text, which is what the bytes round trip guaranteed, and the
+`Result` says what Ori's `Str.take` could not: it cut to the nearest
+character boundary, quietly answering a question about letters with a
+count of bytes, and was removed.
 
-The cost is ceremony for programs that parse fixed-format ASCII. The
-recourse is the same round trip, or working on `List(U8)` throughout, as
-the host and `run_stdin!` already hand it.
+The cost is a `Result` at every slice, `word.slice(3, 6).ok_or("")`, where
+the text is known to be ASCII. The recourse, where many cuts are made, is
+working on `List(U8)` throughout, as the host and `run_stdin!` already hand
+it.
 
 ### Why are splices `to_str`?
 
@@ -254,6 +259,9 @@ names then had to work around the gap, so it gained this one.
   reads as one: `["a", "b, c"]` had printed `[a, b, c]`, and a runner's
   `Ok("")` had printed `Ok()`. clap's help, which showed a default by its
   `to_str`, splices it instead, so `[default: <stdout>]` stays unquoted.
+- **2026-11-11:** `Str.slice` took the place of the bytes round trip for
+  cutting text by position, checked at both ends, after a word-squares
+  program needed `word[3:6]` three times over.
 
 ## Related
 

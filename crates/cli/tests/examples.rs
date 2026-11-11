@@ -26,6 +26,18 @@ fn advent_of_code_2015_day_one_answers_the_puzzle_examples() {
     }
 }
 
+/// Word squares read their words a line each from standard input, and say
+/// each square found as a line: a sorted set's `from`, `Str.slice`,
+/// `lines!` and `print_lines!` at work.
+#[test]
+fn word_squares_are_read_and_said_a_line_each() {
+    let words = "ghijklmno\nabcdefghi\ndefxyzjkl\ndefxyzzzz\n";
+    assert_eq!(
+        support::run_file(&example("squares.fn"), words.as_bytes()),
+        (0, "abcdefghi,defxyzjkl,ghijklmno\n".to_owned())
+    );
+}
+
 /// Hello, world, written once from where it lies; how small that is, is
 /// held by the ladder's greeting.
 #[test]

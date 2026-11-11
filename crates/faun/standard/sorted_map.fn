@@ -96,10 +96,18 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
 
   # The entries of `map` in ascending key order — the map's one observable
   # shape.
+  # The entries whose keys are at least `low`, in ascending order, the
+  # parts of the tree holding only smaller keys passed over.
+  from : (SortedMap(k, v), k) -> List((k, v)) where Ordered(k)
+  from(map, low) -> from_onto(map, low, [])
+
+  # The entries whose keys are at least `low` and below `high`, in
+  # ascending order, visiting only the parts of the tree that hold them.
+  range : (SortedMap(k, v), k, k) -> List((k, v)) where Ordered(k)
+  range(map, low, high) -> range_onto(map, low, high, [])
+
   to_list : SortedMap(k, v) -> List((k, v))
-  to_list(Tip) -> []
-  to_list(Bin(left, key, value, right, _)) ->
-    to_list(left).concat(to_list(right).prepend((key, value)))
+  to_list(map) -> all_onto(map, [])
 
   # The map as the call building it is written, its entries in ascending
   # key order: `SortedMap.of_list([(1, "a"), (2, "b")])`.
@@ -230,6 +238,28 @@ split_smallest(Bin(inner_left, inner_key, inner_value, inner_right, _), key, val
   (least, balanced(rest, key, value, right))
 )
 
+
+# Every entry of `map`, in ascending order, before `after`: the walk goes
+# right to left, so each entry is put on the front of what follows it.
+all_onto : (SortedMap(k, v), List((k, v))) -> List((k, v))
+all_onto(Tip, after) -> after
+all_onto(Bin(left, key, value, right, _), after) -> all_onto(left, [(key, value), *all_onto(right, after)])
+
+# The entries whose keys are at least `low`, before `after`.
+from_onto : (SortedMap(k, v), k, List((k, v))) -> List((k, v)) where Ordered(k)
+from_onto(Tip, _, after) -> after
+from_onto(Bin(_, key, _, right, _), low, after) if key < low -> from_onto(right, low, after)
+from_onto(Bin(left, key, value, right, _), low, after) -> from_onto(left, low, [(key, value), *all_onto(right, after)])
+
+# The entries whose keys are at least `low` and below `high`, before
+# `after`.
+range_onto : (SortedMap(k, v), k, k, List((k, v))) -> List((k, v)) where Ordered(k)
+range_onto(Tip, _, _, after) -> after
+range_onto(Bin(_, key, _, right, _), low, high, after) if key < low -> range_onto(right, low, high, after)
+range_onto(Bin(left, key, _, _, _), low, high, after) if key >= high -> range_onto(left, low, high, after)
+range_onto(Bin(left, key, value, right, _), low, high, after) ->
+  range_onto(left, low, high, [(key, value), *range_onto(right, low, high, after)])
+
 expect SortedMap.counted(["b", "a", "b"]).to_list() == [("a", 1), ("b", 2)]
 expect "${SortedMap.counted(["b", "a", "b"])}" == "SortedMap.of_list([(\"a\", 1), (\"b\", 2)])"
 expect SortedMap.grouped([1, 2, 3, 4, 5], |n| n % 2).to_list() == [(0, [2, 4]), (1, [1, 3, 5])]
@@ -237,3 +267,5 @@ expect SortedMap.of_list([(2, [1])]).update_or(1, [], |xs| [0, *xs]).update_or(2
 expect SortedMap.of_list([(1, 10)]).update(1, |n| n + 1).update(2, |n| n + 1).to_list() == [(1, 11)]
 expect SortedMap.of_list([(2, "b"), (1, "a")]) == SortedMap.of_list([(1, "a"), (2, "b")])
 expect SortedMap.of_list([(1, "a")]) != SortedMap.of_list([(1, "b")])
+expect SortedMap.of_list([(2, "b"), (1, "a"), (3, "c")]).from(2) == [(2, "b"), (3, "c")]
+expect SortedMap.of_list([(2, "b"), (1, "a"), (3, "c")]).range(1, 3) == [(1, "a"), (2, "b")]

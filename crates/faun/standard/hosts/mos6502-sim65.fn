@@ -16,7 +16,7 @@
 # A `File` is a resource: what opens one is the program's to close, once,
 # on every way it goes on, and nothing is asked of it afterwards.
 
-import hosts.common {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
+import hosts.common {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, read_lines!, write_everything!, finish!, serve_stdin!}
 import bounds {Printable}
 
 export {Host, Stdin, Stdout, Stderr, Files, File, Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError}
@@ -51,6 +51,10 @@ Host : {args: List(Str)}.(
   # `text` and a line's end on standard output.
   println! : (Host, Str) -> Result({}, WriteError)
   println!(host, text) -> host.print!("${text}\n")
+
+  # Each of `lines`, and a line's end after each, on standard output.
+  print_lines! : (Host, List(Str)) -> Result({}, WriteError)
+  print_lines!(host, lines) -> host.print!(lines.map(|line| "${line}\n").join(""))
 
   # Run `app` on the arguments the program was run with, its own name
   # first, and print what it answers and a line's end, finishing with
@@ -90,6 +94,10 @@ Stdin : [Stdin].(
   # Every byte to the end, as text.
   read_to_str! : Stdin -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8])
   read_to_str!(input) -> read_text!(input)
+
+  # Every line to the end, without its ending.
+  lines! : Stdin -> Result(List(Str), [IsADirectory, Other(Nat), InvalidUtf8])
+  lines!(input) -> read_lines!(input)
 )
 
 Stdout : [Stdout].(
@@ -147,6 +155,10 @@ File : [File(Fd)].(
   # Every byte to the end, as text.
   read_to_str! : File -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8])
   read_to_str!(file) -> read_text!(file)
+
+  # Every line to the end, without its ending.
+  lines! : File -> Result(List(Str), [IsADirectory, Other(Nat), InvalidUtf8])
+  lines!(file) -> read_lines!(file)
 
   # All of `bytes`: how many that is.
   write_all! : (File, List(U8)) -> Result(Nat, WriteError)

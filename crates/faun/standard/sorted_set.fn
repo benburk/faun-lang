@@ -58,6 +58,14 @@ SortedSet(k) : SortedMap(k, Bool).(
   fold : (SortedSet(k), a, (a, k) -> a) -> a
   fold(set, initial, combine) -> to_list(set).fold(initial, combine)
 
+  # The members at least `low`, in ascending order.
+  from : (SortedSet(k), k) -> List(k) where Ordered(k)
+  from(SortedSet(members), low) -> SortedMap.from(members, low).map(|(key, _)| key)
+
+  # The members at least `low` and below `high`, in ascending order.
+  range : (SortedSet(k), k, k) -> List(k) where Ordered(k)
+  range(SortedSet(members), low, high) -> SortedMap.range(members, low, high).map(|(key, _)| key)
+
   # The members of `set` in ascending order — the set's one observable shape.
   to_list : SortedSet(k) -> List(k)
   to_list(SortedSet(members)) -> SortedMap.keys(members)
@@ -81,3 +89,5 @@ SortedSet(k) : SortedMap(k, Bool).(
 expect SortedSet.of_list([3, 1, 2]) == SortedSet.of_list([1, 2, 3, 1])
 expect SortedSet.of_list([1]) != SortedSet.of_list([2])
 expect "${SortedSet.of_list(["b", "a", "b"])}" == "SortedSet.of_list([\"a\", \"b\"])"
+expect SortedSet.of_list([5, 1, 9, 3, 7]).from(4) == [5, 7, 9] & SortedSet.of_list([1, 2]).from(3) == []
+expect SortedSet.of_list([5, 1, 9, 3, 7]).range(3, 8) == [3, 5, 7] & SortedSet.of_list([5]).range(6, 9) == []

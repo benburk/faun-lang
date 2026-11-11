@@ -1,0 +1,32 @@
+# Three nine-letter words a row each, whose columns read on: the second
+# starts with the first's middle third, the third with the first's last,
+# and the second ends with the third's middle. The words come one to a
+# line on standard input; each square found goes out as a line.
+#
+# A Python program spelled this as three nested `for` loops over `bisect`
+# and slices; here the loops are `flat_map`, the bisecting a sorted set's
+# `from`, and the slices `Str.slice`.
+
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.lines!()
+  words = SortedSet.of_list(read.ok_or([]).map(|line| line.trim()))
+  said = host.print_lines!(squares(words))
+  host.exit!(0)
+)
+
+squares : SortedSet(Str) -> List(Str)
+squares(words) -> words.to_list().flat_map(|first|
+  starting(words, first.slice(6, first.len()).ok_or("")).flat_map(|third|
+    starting(words, first.slice(3, 6).ok_or(""))
+      .filter(|second| second.ends_with(third.slice(3, 6).ok_or("")))
+      .map(|second| "${first},${second},${third}")))
+
+# The words that start with `prefix`, which a sorted set holds together.
+starting : (SortedSet(Str), Str) -> List(Str)
+starting(words, prefix) -> words.from(prefix).take_while(|word| word.starts_with(prefix))
+
+expect squares(SortedSet.of_list(["abcdefghi", "defxyzjkl", "ghijklmno"])) == ["abcdefghi,defxyzjkl,ghijklmno"]
+expect squares(SortedSet.of_list(["abcdefghi", "defxyzzzz", "ghijklmno"])) == []

@@ -6,7 +6,7 @@
 
 import bounds {Printable}
 
-export {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
+export {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, read_lines!, write_everything!, finish!, serve_stdin!}
 
 # What a stream or a file moves.
 Bytes = List(U8)
@@ -68,6 +68,16 @@ read_text!(input) -> (
   bytes = read?
   text = Str.from_utf8(bytes)?
   Ok(text)
+)
+
+# Every line of what `input` reads, without its ending, as `Str.lines`
+# parts text.
+read_lines! : r -> Result(List(Str), [IsADirectory, Other(Nat), InvalidUtf8]) where
+  r.read! : (r, Nat) -> Result(Chunk, ReadError)
+read_lines!(input) -> (
+  read = read_text!(input)
+  text = read?
+  Ok(text.lines())
 )
 
 # All of `bytes`: how many that is.
