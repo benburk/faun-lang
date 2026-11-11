@@ -72,6 +72,17 @@ apply_twice(f, x) -> f(f(x))
 
 expect apply_twice(|n| n + 5, 1) == 11
 
+# An update names a field of a field by its path, and keeps the rest of
+# each record it goes through.
+Machine = {cpu: {pc: Nat, flags: {zero: Bool, carry: Bool}}, ticks: Nat}
+
+jumped : (Machine, Nat) -> Machine
+jumped(m, to) -> {cpu.pc: to, cpu.flags.zero: False, ticks: m.ticks + 1, *m}
+
+start = {cpu: {pc: 0, flags: {zero: True, carry: True}}, ticks: 0}
+
+expect jumped(start, 8) == {cpu: {pc: 8, flags: {zero: False, carry: True}}, ticks: 1}
+
 # Constraints: what a type variable's type must answer, parted by commas, on
 # one line or a line apiece.
 largest : (List(a), a) -> a where a.cmp : (a, a) -> Order

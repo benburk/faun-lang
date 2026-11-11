@@ -1,0 +1,5 @@
+error: a pattern takes a field of a field apart by nesting: `{a: {b, *}, *}`
+ --> a_pattern_takes_a_field_of_a_field_apart_by_nesting.fn:2:3
+  |
+2 | f({a.b: n, *}) -> n
+  |   ^^^^^^^^^^^

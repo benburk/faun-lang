@@ -1,0 +1,5 @@
+error: record expression repeats a field
+ --> an_update_names_each_path_once.fn:1:9
+  |
+1 | f(c) -> {a.b: 1, a.b: 2, *c}
+  |         ^^^^^^^^^^^^^^^^^^^^

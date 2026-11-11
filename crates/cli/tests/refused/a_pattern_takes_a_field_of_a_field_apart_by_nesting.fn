@@ -1,0 +1,2 @@
+# Paths replace fields in an update; a pattern nests instead.
+f({a.b: n, *}) -> n

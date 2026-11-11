@@ -66,6 +66,21 @@ flag_parsed(Found(value, claims), doc) -> Value(value, {claims, *doc})
 An update asks for a record, not a declared type, since it would build the
 type without its constructor.
 
+A field named in an update may be a path, replacing a field of a field and
+keeping the rest of each record the path goes through. `{a.b: e, *r}` is
+`{a: {b: e, *r.a}, *r}`, with `r` worked out once:
+
+```ruby
+step(cpu, to) -> {regs.pc: to, flags.zero: False, *cpu}
+```
+
+Paths sharing a start are one update of that field, so `regs.pc` and
+`regs.sp` together update `regs` once. A field is replaced whole or in
+part, never both in one update, and a path is given its value: `{a.b,
+*r}` has no name to pun. A path is only an update's: a record with no base
+has nothing to keep, and a pattern takes a field of a field apart by
+nesting, `{a: {b, *}, *}`.
+
 ### Equality, text and hashing
 
 A closed record has `equals`, `to_str` and `hash_into` without declaring
@@ -163,6 +178,36 @@ know them. What the rest holds differs from one call to the next, so a name
 has nothing to say about it. Update needs no name either: `{x: e, *r}`
 takes the rest from the value `r`, not from a type variable.
 
+### Why may an update name a path?
+
+State threaded through a walk is a record of records: a CPU's registers in
+the CPU, an assembler in its cursor. Without paths, changing one field
+deep down names every record on the way twice, once to build it and once
+to keep its rest:
+
+```ruby
+{asm: {macros, *cursor.asm}, lines: cursor.lines.drop(end + 1), *cursor}
+```
+
+With them, the line says only what changes, as a read of the same field
+would name it:
+
+```ruby
+{asm.macros: macros, lines: cursor.lines.drop(end + 1), *cursor}
+```
+
+The path is the read's `cursor.asm.macros` with the base moved to the
+`*`, so there is nothing new to learn, and the deeper the field the more it
+saves: three levels down, the nested form names the base three times.
+Lenses, as Haskell has them, do the same and more, composing getters and
+setters as values; they are a library and a vocabulary, where a path is
+one rule in the update a reader already knows. Writing `.` in a key also
+reads as a field read on the left of a `:`, which no other record form
+has, and that is the cost: a reader meets `a.b` in a key once and learns it.
+
+Paths stay out of patterns because a pattern already nests, and binding
+`{a.b: n, *}` would be a second spelling of `{a: {b: n, *}, *}`.
+
 ### Why builders by signature shape, and never by name?
 
 The shape is the whole requirement. A function that pairs two `F`s with a
@@ -188,6 +233,12 @@ the expected type to strip a constructor, a conversion the language does
 not make anywhere else. An unsigned field read already serves both, as
 `x_of` above does. The cost is that a signature cannot yet say "anything
 with an `x`"; the recourse is to leave that definition unsigned.
+
+## History
+
+- **2026-11-11:** an update's fields may be paths, `{a.b: e, *r}`. Writing
+  an assembler in Faun turned up the nested form,
+  `{asm: {macros, *cursor.asm}, *cursor}`.
 
 ## Related
 

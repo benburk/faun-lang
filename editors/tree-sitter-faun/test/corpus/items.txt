@@ -530,3 +530,27 @@ expect (
         (effect_identifier)
         (arguments))
       (type_identifier))))
+
+========================================
+Path update
+========================================
+
+f(c) -> {asm.macros: [], depth, *c}
+
+---
+
+(source_file
+  (clause
+    head: (call_expression
+      function: (identifier)
+      arguments: (arguments
+        (identifier)))
+    body: (record
+      (field
+        name: (identifier)
+        name: (identifier)
+        value: (list))
+      (field
+        name: (identifier))
+      (rest
+        (identifier)))))

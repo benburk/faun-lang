@@ -1,0 +1,2 @@
+# Which `b` would the update keep?
+f(c) -> {a.b: 1, a: {b: 2}, *c}

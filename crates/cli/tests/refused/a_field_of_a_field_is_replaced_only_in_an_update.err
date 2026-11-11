@@ -1,0 +1,5 @@
+error: a field of a field is replaced only in an update: `{a.b: value, *base}`
+ --> a_field_of_a_field_is_replaced_only_in_an_update.fn:3:9
+  |
+3 | f(n) -> {a.b: n}
+  |         ^^^^^^^^

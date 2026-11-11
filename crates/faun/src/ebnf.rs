@@ -567,6 +567,7 @@ const READ: &[&str] = &[
     "f(x) -> (if x return 1\n  2\n)\n",
     "f(x) -> x is (\n  A(v) if v > 0 then v\n  B | C then (\n    y = 1\n    y\n  )\n  _ then 0\n)\n",
     "f(x) -> (\n  y = x is (\n    A(v) return v\n    B if b return 2\n    _ then 1\n  )\n  y\n)\n",
+    "f(c) -> {asm.macros: [], depth, *c}\n",
     "f(xs) -> (\n  xs is [x, *_] else return 0\n  y = x\n  y > 1\n    else return (\n      z = y\n      z\n    )\n  y\n)\n",
 ];
 
@@ -577,6 +578,7 @@ const REFUSED: &[&str] = &[
     "Name = 1 + 2\n",
     "f(x) -> x .y\n",
     "f(x) -> x?? .y\n",
+    "f(c) -> {a.: 1, *c}\n",
     "f(x) -> [a\"b\"]\n",
     "f(x) -> [a b]\n",
     "f(x) -> x ->\n",

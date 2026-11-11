@@ -147,8 +147,11 @@ leave             = "return" expr ;
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]
                   | rest [ "," [ exprs ] ] ;
-fields            = NAME [ ":" expr ] [ "," [ fields ] ]
+(* A field may be a path, given its value, `{a.b: e, *base}`, replacing a
+   field of a field; a path in a record with no base is refused later. *)
+fields            = field [ "," [ fields ] ]
                   | rest [ "," ] ;
+field             = NAME ( "." NAME { "." NAME } ":" expr | [ ":" expr ] ) ;
 rest              = "*" [ expr ] ;
 
 (* A range's end may be negated, or `_` to leave that side open. Its start

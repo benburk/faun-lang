@@ -1,0 +1,3 @@
+# A path names a field of a field of the record an update starts from, so a
+# record with no base has none to name.
+f(n) -> {a.b: n}

@@ -2282,11 +2282,49 @@ impl ClauseResolver<'_> {
                     .transpose()?,
             ),
             s::ExprKind::Record(fields) => {
-                h::ExprKind::Record(self.record_fields(fields, expression.span)?)
+                let fields = fields
+                    .iter()
+                    .map(|(path, value)| match path.as_slice() {
+                        [field] => Ok((*field, value.clone())),
+                        _ => Err(error(
+                            self.module,
+                            expression.span,
+                            "a field of a field is replaced only in an update: \
+                             `{a.b: value, *base}`",
+                        )),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                h::ExprKind::Record(self.record_fields(&fields, expression.span)?)
             }
             s::ExprKind::Update(fields, base) => {
-                let base = Box::new(self.expr(base)?);
-                h::ExprKind::Update(base, self.record_fields(fields, expression.span)?)
+                let base = self.expr(base)?;
+                if fields.iter().all(|(path, _)| path.len() == 1) {
+                    let fields: Vec<_> = fields
+                        .iter()
+                        .map(|(path, value)| (path[0], value.clone()))
+                        .collect();
+                    h::ExprKind::Update(
+                        Box::new(base),
+                        self.record_fields(&fields, expression.span)?,
+                    )
+                } else {
+                    // `{a.b: v, *base}` is `{a: {b: v, *base.a}, *base}`,
+                    // the base worked out once and read at each depth.
+                    let local = self.fresh_local();
+                    let read = self.sites.expr(base.span, h::ExprKind::Local(local));
+                    let paths: Vec<_> = fields
+                        .iter()
+                        .map(|(path, value)| (path.as_slice(), value))
+                        .collect();
+                    let result = self.path_update(read, &paths, expression.span)?;
+                    h::ExprKind::Block(Box::new(h::Body {
+                        bindings: vec![h::Binding {
+                            pattern: h::Pattern::Bind(local),
+                            value: base,
+                        }],
+                        result: self.sites.expr(expression.span, result),
+                    }))
+                }
             }
             // A lambda's parameters are its own names, shadowing any around
             // it of the same spelling.
@@ -2634,6 +2672,60 @@ impl ClauseResolver<'_> {
     }
 
     /// A record expression's fields, each named once.
+    /// `base` with each path's field replaced: the paths sharing a first
+    /// field replace it with `base`'s field updated by the rest of them.
+    /// A field replaced whole is replaced by no path through it as well.
+    fn path_update(
+        &mut self,
+        base: h::Expr,
+        paths: &[(&[s::Name], &s::Expr)],
+        span: s::Span,
+    ) -> Result<h::ExprKind, Refusal> {
+        let mut heads: Vec<Symbol> = Vec::new();
+        let mut groups: HashMap<Symbol, Vec<(&[s::Name], &s::Expr)>> = HashMap::new();
+        for &(path, value) in paths {
+            let head = self.symbols.intern(path[0].text(self.source));
+            if !groups.contains_key(&head) {
+                heads.push(head);
+            }
+            groups.entry(head).or_default().push((&path[1..], value));
+        }
+        let mut fields = Vec::with_capacity(heads.len());
+        for head in heads {
+            let group = &groups[&head];
+            let value = match group.as_slice() {
+                [([], value)] => self.expr(value)?,
+                _ if group.iter().filter(|(rest, _)| rest.is_empty()).count() > 1 => {
+                    return Err(error(
+                        self.module,
+                        span,
+                        "record expression repeats a field",
+                    ));
+                }
+                _ if group.iter().any(|(rest, _)| rest.is_empty()) => {
+                    return Err(error(
+                        self.module,
+                        span,
+                        format!(
+                            "`{}` is replaced whole and in part",
+                            self.symbols.text(head)
+                        ),
+                    )
+                    .help("replace it whole, or each part of it, not both"));
+                }
+                _ => {
+                    let inner = self
+                        .sites
+                        .expr(span, h::ExprKind::Member(Box::new(base.clone()), head));
+                    let updated = self.path_update(inner, group, span)?;
+                    self.sites.expr(span, updated)
+                }
+            };
+            fields.push((head, value));
+        }
+        Ok(h::ExprKind::Update(Box::new(base), fields))
+    }
+
     fn record_fields(
         &mut self,
         fields: &[(s::Name, s::Expr)],

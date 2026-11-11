@@ -1,0 +1,5 @@
+# `a` is a `Nat`, which has no field `b` to replace.
+Outer = {a: Nat, n: Nat}
+
+f : Outer -> Outer
+f(c) -> {a.b: 1, *c}

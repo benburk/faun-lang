@@ -1,0 +1,5 @@
+error: mismatched types
+ --> a_path_goes_through_records.fn:5:9
+  |
+5 | f(c) -> {a.b: 1, *c}
+  |         ^^^^^^^^^^^^ expected `{a: {b: _, *}, *}`, found `{a: Nat, n: Nat}`

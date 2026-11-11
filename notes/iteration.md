@@ -183,8 +183,9 @@ that fails, `try_fold`, and a walk answering its state beside what it found.
 - **An effect cannot be an arm's value,** so a walk dispatching on what an
   effect answered needs a function with a clause per outcome.
 
-Nested record update would shrink the state a walk threads through
-records; it is not built.
+An update naming a path, `{asm.macros: macros, *cursor}`, keeps a walk's
+state records nested without naming each one on the way
+([records](values/records.md#why-may-an-update-name-a-path)).
 
 ### Why recursion rather than a worklist combinator?
 

@@ -554,9 +554,12 @@ pub enum ExprKind {
     Number(Numeral),
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),
-    Record(Vec<(Name, Expr)>),
-    /// `{x: e, *base}`: `base` with the fields named replaced.
-    Update(Vec<(Name, Expr)>, Box<Expr>),
+    /// `{x: e}`. A field is read as a path, as an update's is, and
+    /// refused once a path is seen to need a base.
+    Record(Vec<(Vec<Name>, Expr)>),
+    /// `{x: e, *base}`: `base` with the fields named replaced. A field
+    /// may be a path, `{a.b: e, *base}`, replacing a field of a field.
+    Update(Vec<(Vec<Name>, Expr)>, Box<Expr>),
     /// `(a, b)`: a positional product of two or more.
     Tuple(Vec<Expr>),
     Lambda(Vec<Pattern>, Box<Expr>),

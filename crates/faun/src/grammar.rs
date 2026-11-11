@@ -1412,11 +1412,24 @@ impl Parser<'_> {
             "a name",
             |parser| {
                 let field = parser.bump();
+                // A path, `a.b`, names a field of a field, which only an
+                // update replaces.
+                let mut path = vec![name(field)];
+                while parser.eat(Kind::Dot).is_some() {
+                    path.push(name(parser.expect(Kind::Ident, "a field's name")?));
+                }
                 let value = match parser.eat(Kind::Colon) {
                     Some(_) => parser.expr()?,
-                    None => atom(field, ExprKind::Name(name(field))),
+                    None if path.len() == 1 => atom(field, ExprKind::Name(name(field))),
+                    None => {
+                        let last = path.last().expect("a path has a name").0;
+                        return Err(SyntaxError::new(
+                            field.span().through(last),
+                            "a field of a field is given its value: `{a.b: value, *base}`",
+                        ));
+                    }
                 };
-                Ok((name(field), value))
+                Ok((path, value))
             },
         )?;
         let base = self.rest(fields.is_empty() || trailing)?;
@@ -1426,13 +1439,11 @@ impl Parser<'_> {
         let span = open
             .span()
             .through(self.expect(Kind::RBrace, "`}`")?.span());
-        Ok(Expr {
-            span,
-            kind: match base {
-                Some(base) => ExprKind::Update(fields, Box::new(base)),
-                None => ExprKind::Record(fields),
-            },
-        })
+        let kind = match base {
+            Some(base) => ExprKind::Update(fields, Box::new(base)),
+            None => ExprKind::Record(fields),
+        };
+        Ok(Expr { span, kind })
     }
 
     /// `rest`, where one may stand: `*rest`, or `*` alone, a pattern's

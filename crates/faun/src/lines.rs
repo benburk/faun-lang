@@ -677,7 +677,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, SyntaxError> 
             front: Box::new(pattern(*front, source)?),
             last: patterns(last, source)?,
         }),
-        ExprKind::Record(fields) => record(span, fields, false, source),
+        ExprKind::Record(fields) => record(span, single_fields(fields, span)?, false, source),
         ExprKind::Update(fields, base) => {
             if !matches!(base.kind, ExprKind::Wild) {
                 return Err(SyntaxError::new(
@@ -685,7 +685,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, SyntaxError> 
                     "a record pattern names no rest: `{x, *}` matches any other fields",
                 ));
             }
-            record(span, fields, true, source)
+            record(span, single_fields(fields, span)?, true, source)
         }
         ExprKind::Tuple(members) => Ok(Pattern::Tuple {
             span,
@@ -736,6 +736,23 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, SyntaxError> 
         }
         _ => Err(not_a_pattern()),
     }
+}
+
+/// A record pattern's fields, each one name: a path is an update's.
+fn single_fields(
+    fields: Vec<(Vec<Name>, Expr)>,
+    span: Span,
+) -> Result<Vec<(Name, Expr)>, SyntaxError> {
+    fields
+        .into_iter()
+        .map(|(path, value)| match path.as_slice() {
+            [field] => Ok((*field, value)),
+            _ => Err(SyntaxError::new(
+                span,
+                "a pattern takes a field of a field apart by nesting: `{a: {b, *}, *}`",
+            )),
+        })
+        .collect()
 }
 
 fn record(

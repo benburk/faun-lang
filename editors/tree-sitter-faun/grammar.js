@@ -437,8 +437,10 @@ module.exports = grammar({
 
     record: $ => seq('{', elements($.field, $.rest), '}'),
 
+    // A path, `a.b: e`, replaces a field of a field in an update.
     field: $ => seq(
       field('name', $.identifier),
+      repeat(seq('.', field('name', $.identifier))),
       optional(seq(':', field('value', $._expression))),
     ),
 

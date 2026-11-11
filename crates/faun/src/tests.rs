@@ -70,6 +70,26 @@ fn a_definition_of_no_parameters_is_a_value() {
 }
 
 #[test]
+fn an_update_names_a_field_of_a_field_by_its_path() {
+    let lines = body("f(c) -> {asm.macros: m, depth, *c}\n");
+    let ExprKind::Update(fields, _) = &lines.result.kind else {
+        panic!("an update, found {:?}", lines.result.kind);
+    };
+    let lengths: Vec<_> = fields.iter().map(|(path, _)| path.len()).collect();
+    assert_eq!(lengths, [2, 1]);
+    // A field alone puns its name; a path is no name, so it is given its
+    // value.
+    let error = parse("f(c, macros) -> {asm.macros, *c}\n").unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("a field of a field is given its value"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
 fn a_block_stands_wherever_an_expression_does() {
     let lines = body("f(x) -> [1].map(|y| (\n  z = y\n  z + x\n))\n");
     let ExprKind::Method(_, _, arguments) = &lines.result.kind else {

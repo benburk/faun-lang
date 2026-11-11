@@ -1,0 +1,7 @@
+error: `a` is replaced whole and in part
+ --> a_field_is_replaced_whole_or_in_part_not_both.fn:2:9
+  |
+2 | f(c) -> {a.b: 1, a: {b: 2}, *c}
+  |         ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: replace it whole, or each part of it, not both
