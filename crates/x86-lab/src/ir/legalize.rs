@@ -28,6 +28,7 @@ use super::ownership::{self, Liveness, managed};
 use super::packing::Packed;
 use super::region::{self, Chunks, Plan};
 use super::sequence::{self, Growth, Library as SequenceLibrary};
+use super::word_comparisons::{Word, word_values};
 use super::{
     Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, Relation, ShapeId,
     Terminator, ValueId, Width, validate,
@@ -56,7 +57,7 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         return Err("natural representation needs a 16, 32, or 64 bit word".into());
     }
     source.check_layout(config.layout())?;
-    let divisors = word_divisors(source, config.word_bits);
+    let divisors = word_values(source, config.word_bits);
     let needs = inspect(source, config, &divisors)?;
     let has_naturals = holds(source, Class::Natural);
     let has_cells = holds(source, Class::Cell) || holds(source, Class::Buffer);
@@ -81,7 +82,7 @@ fn prepare_pass<'a>(
     output: &mut Program,
     config: Config,
     library: Library,
-    divisors: BTreeMap<ValueId, Divisor>,
+    divisors: BTreeMap<ValueId, Word>,
 ) -> Result<Pass<'a>, String> {
     let shapes = Shapes::of(source, output, config.word_bits)?;
     let plan = if config.grows && config.word_bits == 64 {
@@ -435,45 +436,9 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
     Ok(())
 }
 
-/// A natural divisor known to fit a word, so that dividing by it is short
-/// division: as the scalar it was converted from, or as a constant.
-#[derive(Clone, Copy)]
-enum Divisor {
-    Scalar(ValueId),
-    Constant(u64),
-}
-
-/// Every natural a program makes from a scalar or knows as a word-sized
-/// constant, by the value that is it.
-fn word_divisors(source: &Program, word_bits: u16) -> BTreeMap<ValueId, Divisor> {
-    let mut divisors = BTreeMap::new();
-    for body in source.functions().iter().filter_map(super::Function::body) {
-        for (op, results) in source.walk_within(body) {
-            let [result] = results[..] else {
-                continue;
-            };
-            if source.class(result) != Class::Natural {
-                continue;
-            }
-            match *op {
-                Op::Convert { value }
-                    if matches!(source.class(value), Class::Word | Class::Held(_)) =>
-                {
-                    divisors.insert(result, Divisor::Scalar(value));
-                }
-                Op::Constant { value } if value >> (word_bits - 1) >> 1 == 0 => {
-                    divisors.insert(result, Divisor::Constant(value));
-                }
-                _ => {}
-            }
-        }
-    }
-    divisors
-}
-
 /// The helper a natural operation calls: one dividing by a word where the
 /// divisor is known to be one.
-fn helper_for(op: Binary, right: ValueId, divisors: &BTreeMap<ValueId, Divisor>) -> Helper {
+fn helper_for(op: Binary, right: ValueId, divisors: &BTreeMap<ValueId, Word>) -> Helper {
     match op {
         Binary::Div if divisors.contains_key(&right) => Helper::DivWord,
         Binary::Mod if divisors.contains_key(&right) => Helper::ModWord,
@@ -484,7 +449,7 @@ fn helper_for(op: Binary, right: ValueId, divisors: &BTreeMap<ValueId, Divisor>)
 fn inspect(
     source: &Program,
     config: Config,
-    divisors: &BTreeMap<ValueId, Divisor>,
+    divisors: &BTreeMap<ValueId, Word>,
 ) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
@@ -634,7 +599,7 @@ struct Pass<'a> {
     sequences: Option<SequenceLibrary>,
     word_bytes: u64,
     constants: BTreeMap<ValueId, Known>,
-    divisors: BTreeMap<ValueId, Divisor>,
+    divisors: BTreeMap<ValueId, Word>,
     // Validation establishes globally unique SSA definitions and lexical use.
     // Mapping is monotonic across functions and sibling regions, not path-local.
     // Cells let the builder's two sequential branch callbacks share this table
@@ -1245,14 +1210,10 @@ impl Pass<'_> {
                 _ => {
                     let function = self.library.require(helper_for(op, right, &self.divisors));
                     let divisor = match self.divisors.get(&right) {
-                        Some(&Divisor::Scalar(value))
-                            if matches!(op, Binary::Div | Binary::Mod) =>
-                        {
+                        Some(&Word::Scalar(value)) if matches!(op, Binary::Div | Binary::Mod) => {
                             word(b, v(value))
                         }
-                        Some(&Divisor::Constant(value))
-                            if matches!(op, Binary::Div | Binary::Mod) =>
-                        {
+                        Some(&Word::Constant(value)) if matches!(op, Binary::Div | Binary::Mod) => {
                             b.constant(Class::Word, value)
                         }
                         _ => v(right),

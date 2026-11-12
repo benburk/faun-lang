@@ -87,6 +87,7 @@ mod simplify;
 mod split;
 mod uniqueness;
 mod validate;
+pub(crate) mod word_comparisons;
 
 pub use bounds::conversions_taking_nothing;
 pub use builder::Builder;

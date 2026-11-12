@@ -251,8 +251,9 @@ fn prepare_counting<T: Target + ?Sized>(
     let program = &crate::ir::split(program, target.word());
     crate::ir::validate(program).map_err(|error| format!("after splitting: {error}"))?;
     let program = &crate::ir::fit(program, target.budget());
+    let compared = crate::ir::word_comparisons::lower(program, target.word());
     let prepared = crate::ir::legalize(
-        program,
+        compared.as_ref().unwrap_or(program),
         crate::ir::natural::Config {
             word_bits: target.word(),
             // The first arena the heap asks the target for; it grows
