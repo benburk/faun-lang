@@ -16,28 +16,26 @@ struct Rows {
 }
 
 impl Rows {
-    fn pack(values: &[Vec<u8>], kind: barb::ByteSequence) -> Option<(Self, Vec<u8>)> {
-        let bounds = barb::SequenceLengths::of(values.iter().map(Vec::len))?;
-        let width = bounds.longest;
+    fn from_bounds(bounds: barb::Bounds, kind: barb::ByteSequence) -> Option<Self> {
+        let high = bounds.high?;
+        let width = usize::try_from(high).ok()?;
         let limit = if kind == barb::ByteSequence::Text {
             ROW
         } else {
             ROW - 1
         };
-        if width > limit {
-            return None;
+        (bounds.low <= high && width <= limit).then_some(Self {
+            width,
+            fixed: bounds.low == high,
+        })
+    }
+
+    fn write(self, bytes: &mut Vec<u8>, value: &[u8]) {
+        bytes.extend_from_slice(value);
+        if !self.fixed {
+            bytes.resize(bytes.len() + self.width - value.len(), 0);
+            bytes.push(u8::try_from(value.len()).expect("the proven row width fits in a byte"));
         }
-        let fixed = bounds.shortest == width;
-        let layout = Self { width, fixed };
-        let mut bytes = Vec::with_capacity(values.len().checked_mul(layout.stride())?);
-        for value in values {
-            bytes.extend_from_slice(value);
-            if !fixed {
-                bytes.resize(bytes.len() + width - value.len(), 0);
-                bytes.push(u8::try_from(value.len()).ok()?);
-            }
-        }
-        Some((layout, bytes))
     }
 
     fn stride(self) -> usize {
@@ -77,18 +75,18 @@ impl Lowering<'_> {
         if byte.width().is_none_or(|bits| bits == 0 || bits > 8) {
             return None;
         }
-        let values = elements
-            .iter()
-            .map(|fields| {
-                let [value] = fields[..] else { return None };
-                let value = barb::single_field_constant(self.barb, value);
-                let barb::ConstantView::Spine(spine) = value.view() else {
-                    return None;
-                };
-                (spine.length() <= ROW.into()).then(|| spine.to_bytes())?
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let (rows, data) = Rows::pack(&values, kind)?;
+        // Sequence constructors have exactly one element field and one tail.
+        let values = elements.iter().map(|fields| fields[0]);
+        let rows = Rows::from_bounds(barb::bounds_of_constants(self.barb, values.clone()), kind)?;
+        let mut data = Vec::with_capacity(elements.len().checked_mul(rows.stride())?);
+        for value in values {
+            let barb::ConstantView::Spine(spine) =
+                barb::single_field_constant(self.barb, value).view()
+            else {
+                return None;
+            };
+            rows.write(&mut data, &spine.to_bytes()?);
+        }
         if data.is_empty() {
             return None;
         }
@@ -164,13 +162,20 @@ mod tests {
     #[test]
     fn rows_use_only_the_width_the_whole_table_needs() {
         use barb::ByteSequence::{Bytes, Text};
-        let (fixed, data) = Rows::pack(&[vec![0xff; 23], vec![0xc0; 23]], Bytes).unwrap();
-        assert!(fixed.fixed);
+        let fixed = Rows::from_bounds(barb::Bounds::at(23), Bytes).unwrap();
+        let mut data = Vec::new();
+        fixed.write(&mut data, &[0xff; 23]);
+        fixed.write(&mut data, &[0xc0; 23]);
         assert_eq!((fixed.stride(), data.len()), (23, 46));
-        let text = "é".repeat(12).into_bytes();
-        let (mixed, data) = Rows::pack(&[text.clone(), vec![]], Text).unwrap();
+        let bounds = barb::Bounds::at(24).or(barb::Bounds::at(0));
+        let mixed = Rows::from_bounds(bounds, Text).unwrap();
+        data.clear();
+        mixed.write(&mut data, &"é".repeat(12).into_bytes());
+        mixed.write(&mut data, &[]);
         assert_eq!((mixed.stride(), data[24], data[49]), (25, 24, 0));
-        assert!(Rows::pack(&[text], Bytes).is_none());
-        assert!(Rows::pack(&[vec![b'a'; 25]], Text).is_none());
+        assert!(Rows::from_bounds(bounds, Bytes).is_none());
+        assert!(Rows::from_bounds(barb::Bounds::at(25), Text).is_none());
+        assert!(Rows::from_bounds(barb::Bounds::ANY, Bytes).is_none());
+        assert!(Rows::from_bounds(barb::Bounds::NOTHING, Text).is_none());
     }
 }

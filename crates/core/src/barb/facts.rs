@@ -10,32 +10,6 @@ use super::bounds::{Bounds, Ranges};
 use super::model::{CtorId, ExprId, FnId, TypeId};
 use super::program::Program;
 
-/// Exact length bounds for a closed table of sequence values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SequenceLengths {
-    pub shortest: usize,
-    pub longest: usize,
-}
-
-impl SequenceLengths {
-    /// No bound is supplied for a table with no rows.
-    #[must_use]
-    pub fn of(lengths: impl IntoIterator<Item = usize>) -> Option<Self> {
-        let mut lengths = lengths.into_iter();
-        let first = lengths.next()?;
-        Some(lengths.fold(
-            Self {
-                shortest: first,
-                longest: first,
-            },
-            |bounds, next| Self {
-                shortest: bounds.shortest.min(next),
-                longest: bounds.longest.max(next),
-            },
-        ))
-    }
-}
-
 /// Operations on unbounded naturals. These are not wrapping machine ops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {

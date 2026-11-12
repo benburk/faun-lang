@@ -1077,6 +1077,19 @@ fn tag_count(program: &Program, ty: TypeId) -> Option<u64> {
         .then(|| u64::try_from(program.ctors(ty).len()).expect("a count of constructors"))
 }
 
+/// The values any of these constants can represent, using the same join as a
+/// match. For a sequence or a transparent wrapper around one, this is its
+/// element count. An empty set has no possible value.
+#[must_use]
+pub fn bounds_of_constants<'a>(
+    program: &Program,
+    values: impl IntoIterator<Item = super::Constant<'a>>,
+) -> Bounds {
+    values.into_iter().fold(Bounds::NOTHING, |held, value| {
+        held.or(constant_bounds(program, value))
+    })
+}
+
 fn constant_bounds(program: &Program, value: super::Constant<'_>) -> Bounds {
     let value = super::single_field_constant(program, value);
     match value.view() {
