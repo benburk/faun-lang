@@ -48,6 +48,7 @@
 use num_bigint::BigUint;
 
 use crate::facts::Facts;
+use crate::float::{Float, Format, Operation};
 
 use super::{
     Binary, Builder, Class, Direction, Exit, Op, Program, RegionId, Relation, ValueId, model::wrap,
@@ -128,6 +129,29 @@ impl rewrite::Pass for Simplify {
             return true;
         }
         match op {
+            Op::Float { float, operands } if float.operation == Operation::Mul => {
+                let two = match float.format {
+                    Format::Binary32 => u64::from(2.0f32.to_bits()),
+                    Format::Binary64 => 2.0f64.to_bits(),
+                };
+                let args = rebuild.source().values(operands);
+                let value = if self.number(args[0]) == Some(two) {
+                    args[1]
+                } else if self.number(args[1]) == Some(two) {
+                    args[0]
+                } else {
+                    return false;
+                };
+                // Doubling has the same exact result before rounding, including
+                // the sign of zero. The scalar add needs only one input register.
+                let add = Float {
+                    operation: Operation::Add,
+                    ..float
+                };
+                let value = rebuild.value(value);
+                rebuild.stands_for(results[0], b.float(add, &[value, value]));
+                true
+            }
             Op::CellField { cell, index, shape } => {
                 let Some((
                     Op::Cell {

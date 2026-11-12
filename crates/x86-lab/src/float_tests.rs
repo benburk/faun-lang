@@ -46,41 +46,41 @@ fn equal_pattern(b: &mut Builder, value: ValueId, expected: u64, format: Format)
     }
 }
 
+fn scalar_patterns(format: Format) -> &'static [u64] {
+    match format {
+        Format::Binary32 => &[
+            0,
+            0x8000_0000,
+            1,
+            0x3F80_0000,
+            0x3F80_0001,
+            0xC040_0000,
+            0x7F7F_FFFF,
+            0x7F80_0000,
+            0xFF80_0000,
+            0x7FC0_1234,
+            0x7FA0_5678,
+        ],
+        Format::Binary64 => &[
+            0,
+            0x8000_0000_0000_0000,
+            1,
+            0x3FF0_0000_0000_0000,
+            0x3FF0_0000_0000_0001,
+            0xC008_0000_0000_0000,
+            0x7FEF_FFFF_FFFF_FFFF,
+            0x7FF0_0000_0000_0000,
+            0xFFF0_0000_0000_0000,
+            0x7FF8_0000_0000_1234,
+            0x7FF0_0000_0000_5678,
+        ],
+    }
+}
+
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "a deterministic arithmetic matrix at both scalar widths"
-)]
 fn scalar_arithmetic_preserves_rounding_signed_zero_and_operand_order() {
     for format in [Format::Binary32, Format::Binary64] {
-        let patterns: &[u64] = match format {
-            Format::Binary32 => &[
-                0,
-                0x8000_0000,
-                1,
-                0x3F80_0000,
-                0x3F80_0001,
-                0xC040_0000,
-                0x7F7F_FFFF,
-                0x7F80_0000,
-                0xFF80_0000,
-                0x7FC0_1234,
-                0x7FA0_5678,
-            ],
-            Format::Binary64 => &[
-                0,
-                0x8000_0000_0000_0000,
-                1,
-                0x3FF0_0000_0000_0000,
-                0x3FF0_0000_0000_0001,
-                0xC008_0000_0000_0000,
-                0x7FEF_FFFF_FFFF_FFFF,
-                0x7FF0_0000_0000_0000,
-                0xFFF0_0000_0000_0000,
-                0x7FF8_0000_0000_1234,
-                0x7FF0_0000_0000_5678,
-            ],
-        };
+        let patterns = scalar_patterns(format);
         let (mut program, main) = Program::new("float matrix");
         program.define(main, |b, _| {
             let mut passed = b.constant(Class::Word, 0);
@@ -116,6 +116,48 @@ fn scalar_arithmetic_preserves_rounding_signed_zero_and_operand_order() {
             b.ret(&[failed]);
         });
         assert_eq!(status(&program), 0, "{format:?}");
+    }
+}
+
+#[test]
+fn doubling_by_addition_matches_multiplication_in_either_order() {
+    for format in [Format::Binary32, Format::Binary64] {
+        let mul = Float {
+            format,
+            operation: Operation::Mul,
+        };
+        let two = match format {
+            Format::Binary32 => u64::from(2.0f32.to_bits()),
+            Format::Binary64 => 2.0f64.to_bits(),
+        };
+        let class = Class::fixed(format.bits());
+        let (mut program, main) = Program::new("doubling");
+        let twice = program.declare("twice", &[class], &[class, class]);
+        program.define(twice, |b, args| {
+            let two = b.constant(class, two);
+            let left = b.float(mul, &[two, args[0]]);
+            let right = b.float(mul, &[args[0], two]);
+            b.ret(&[left, right]);
+        });
+        program.define(main, |b, _| {
+            let mut passed = b.constant(Class::Word, 1);
+            for &bits in scalar_patterns(format) {
+                let input = b.constant(class, bits);
+                for result in b.call(twice, &[input]) {
+                    let equal = equal_pattern(b, result, mul.calculate(&[two, bits]), format);
+                    passed = b.binary(Binary::And, passed, equal);
+                }
+            }
+            b.ret(&[passed]);
+        });
+        let optimized = crate::ir::optimize(&program);
+        let body = optimized.function(twice).body().unwrap();
+        assert!(
+            !optimized
+                .every(body)
+                .any(|op| matches!(op, crate::ir::Op::Float { float, .. } if *float == mul))
+        );
+        assert_eq!(status(&optimized), 1, "{format:?}");
     }
 }
 
