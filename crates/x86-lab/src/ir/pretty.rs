@@ -56,8 +56,30 @@ impl Program {
                 self.name(function.name)
             );
         }
+        self.render_cell_regions(&mut out);
         self.render_regions(&mut out, &self.cell_borrows());
         out
+    }
+
+    /// Explain the placement decision while the dump still has cell types.
+    fn render_cell_regions(&self, out: &mut String) {
+        if !self.ops.iter().any(|op| matches!(op, Op::Cell { .. })) {
+            return;
+        }
+        let packed: Vec<_> = self
+            .shape_ids()
+            .map(|s| super::packing::Packed::of(self.shaped(s), 64))
+            .collect();
+        let plan = super::region::Plan::of(self, &packed);
+        for (id, f) in self.functions.iter_enumerated() {
+            if plan.constructors.contains(&id) {
+                let _ = writeln!(
+                    out,
+                    "# {} builds in a caller-owned region on the growing 64-bit heap: every subtree joins the result and every root use borrows it",
+                    self.name(f.name)
+                );
+            }
+        }
     }
 
     fn cell_borrows(&self) -> Vec<bool> {

@@ -210,6 +210,7 @@ pub(super) fn append(
     naturals: &NaturalLibrary,
     buffers: Option<FunctionId>,
     word_bits: u16,
+    fixed: Option<&[(u64, u64)]>,
 ) -> Library {
     let release = program.declare("cell.release", &[A], &[]);
     let library = Library {
@@ -224,7 +225,11 @@ pub(super) fn append(
         buffers,
         counting: naturals.counting,
     };
-    define_release(program, library, naturals.release, claims);
+    if let Some(fields) = fixed {
+        define_fixed_release(program, library, naturals.release, claims, fields);
+    } else {
+        define_release(program, library, naturals.release, claims);
+    }
     library
 }
 
@@ -245,6 +250,44 @@ pub(super) fn byte_offset(b: &mut Builder<'_>, object: ValueId, bytes: ValueId) 
     let base = b.convert(W, object);
     let address = b.binary(Binary::Add, base, bytes);
     b.convert(A, address)
+}
+
+/// Region cells never enter this destructor. If all ordinary allocated
+/// cells have the same owned fields, only those offsets need visiting.
+/// Static nullary cells never take the last-claim branch.
+fn define_fixed_release(
+    p: &mut Program,
+    library: Library,
+    block: FunctionId,
+    claims: Claims,
+    fields: &[(u64, u64)],
+) {
+    p.define(library.release, |b, args| {
+        let object = args[0];
+        let refs = b.load(Width::Word, object, Offset::Words(1));
+        let one = number(b, 1);
+        let last = b.compare(Relation::Equal, refs, one);
+        b.if_(
+            last,
+            &[],
+            |b| {
+                for &(offset, kind) in fields {
+                    let at =
+                        u64::from(FIELDS.unsigned_abs()) * u64::from(claims.word_bits / 8) + offset;
+                    let value = b.load(
+                        Width::Word,
+                        object,
+                        Offset::Bytes(i32::try_from(at).expect("checked object layout")),
+                    );
+                    claims.release(b, kind, value);
+                }
+                b.yield_(&[]);
+            },
+            |b| b.yield_(&[]),
+        );
+        b.call(block, &[object]);
+        b.ret(&[]);
+    });
 }
 
 /// Where the last claim goes, every field the descriptor lists gives up

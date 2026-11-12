@@ -15,7 +15,10 @@
 //! is handed nothing else's once, on entry, so that each replacement in it
 //! is one of those.
 
-use std::{cell::Cell, collections::BTreeMap};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+};
 
 use num_bigint::BigUint;
 
@@ -23,6 +26,7 @@ use super::cell::{self, Library as CellLibrary};
 use super::natural::{self, Config, Helper, Inline, Library, Needs};
 use super::ownership::{self, Liveness, managed};
 use super::packing::Packed;
+use super::region::{self, Chunks, Plan};
 use super::sequence::{self, Growth, Library as SequenceLibrary};
 use super::{
     Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, Relation, ShapeId,
@@ -64,14 +68,47 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     output.runtime_cells |= has_cells;
     output.runtime_naturals |= has_naturals;
     let library = natural::append(&mut output, config, needs)?;
-    let shapes = Shapes::of(source, &mut output, config.word_bits)?;
-    let (cells, sequences) = managed_runtime(&mut output, source, &library, (config, &shapes));
-    let constants = constants(source, &mut output, config)?;
+    let pass = prepare_pass(source, &mut output, config, library, divisors)?;
+    pass.define_bodies(&mut output);
+    validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
+    Ok(output)
+}
+
+/// Lay out the managed shapes and build the ownership and region plans
+/// before rewriting any function bodies.
+fn prepare_pass<'a>(
+    source: &'a Program,
+    output: &mut Program,
+    config: Config,
+    library: Library,
+    divisors: BTreeMap<ValueId, Divisor>,
+) -> Result<Pass<'a>, String> {
+    let shapes = Shapes::of(source, output, config.word_bits)?;
+    let plan = if config.grows && config.word_bits == 64 {
+        Plan::of(source, &shapes.packed)
+    } else {
+        Plan::default()
+    };
+    let remaining = plan.remaining_claims(source, &shapes.packed);
+    let (cells, sequences) = managed_runtime(
+        output,
+        source,
+        &library,
+        (config, &shapes),
+        remaining.as_deref(),
+    );
+    let constants = constants(source, output, config)?;
     let owned = ownership::owned_parameters(source);
     let unique = super::uniqueness::unique(source, &owned, &|shape| {
         shapes.packed(shape).managed().next().is_none()
     });
-    let pass = Pass {
+    let chunks = (!plan.constructors.is_empty()).then(|| Chunks::append(output, &library));
+    Ok(Pass {
+        fixed_claims: remaining.is_some(),
+        plan,
+        chunks,
+        constructing: Cell::new(false),
+        root_heads: RefCell::default(),
         source,
         library,
         cells,
@@ -84,10 +121,7 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         unique,
         borrowed_cells: ownership::borrowed_cells(source, &owned),
         owned,
-    };
-    pass.define_bodies(&mut output);
-    validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
-    Ok(output)
+    })
 }
 
 /// The cell and sequence routines a program needs, beside its naturals'.
@@ -97,11 +131,13 @@ fn managed_runtime(
     source: &Program,
     library: &Library,
     (config, shapes): (Config, &Shapes),
+    remaining: Option<&[(u64, u64)]>,
 ) -> (Option<CellLibrary>, Option<SequenceLibrary>) {
     let has_buffers = holds(source, Class::Buffer);
     let has_cells = holds(source, Class::Cell) || has_buffers;
     let buffers = has_buffers.then(|| sequence::declare(output));
-    let cells = has_cells.then(|| cell::append(output, library, buffers, config.word_bits));
+    let cells =
+        has_cells.then(|| cell::append(output, library, buffers, config.word_bits, remaining));
     let sequences = buffers.zip(cells).map(|(release, cells)| {
         sequence::append(
             output,
@@ -586,6 +622,11 @@ fn magnitude(source: &Program, op: Op, class: Class) -> Option<BigUint> {
 }
 
 struct Pass<'a> {
+    fixed_claims: bool,
+    plan: Plan,
+    chunks: Option<Chunks>,
+    constructing: Cell<bool>,
+    root_heads: RefCell<BTreeMap<ValueId, ValueId>>,
     source: &'a Program,
     library: Library,
     cells: Option<CellLibrary>,
@@ -634,6 +675,7 @@ impl Pass<'_> {
             let Some(body) = function.body() else {
                 continue;
             };
+            self.constructing.set(self.plan.constructors.contains(&id));
             let held = self.owned_parameters(id, body);
             output.define(id, |b, params| {
                 self.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params, held);
@@ -663,6 +705,26 @@ impl Pass<'_> {
             self.values[old.index()].replace(Some(new)).is_none(),
             "each SSA definition is rebuilt once"
         );
+    }
+
+    fn region_cell(&self, old: ValueId) -> bool {
+        self.constructing.get() && self.source.class(old) == Class::Cell
+    }
+
+    fn claim(&self, b: &mut Builder, old: ValueId) -> ValueId {
+        if self.region_cell(old) {
+            self.value(old)
+        } else {
+            self.retained(b, self.source.class(old), self.value(old))
+        }
+    }
+
+    fn release_held(&self, b: &mut Builder, old: ValueId) {
+        if let Some(&head) = self.root_heads.borrow().get(&old) {
+            b.call(self.chunks.expect("region root").release, &[head]);
+        } else {
+            self.release(b, self.source.class(old), self.value(old));
+        }
     }
 
     fn retained(&self, b: &mut Builder, class: Class, value: ValueId) -> ValueId {
@@ -701,19 +763,25 @@ impl Pass<'_> {
             return b.address_of(self.shapes.bare[&tag]);
         }
         let packed = self.shapes.packed(shape);
-        let library = self.cells.expect("cell helpers were requested");
-        // The descriptor's word, then the fields.
-        let bytes = b.constant(Class::Word, self.word_bytes + packed.size);
-        let object = b.call_one(library.allocate, &[bytes]);
+        let object = if self.constructing.get() {
+            let bytes = b.constant(Class::Word, region::node_bytes(packed));
+            b.call_one(self.chunks.expect("region constructor").allocate, &[bytes])
+        } else {
+            let bytes = b.constant(Class::Word, self.word_bytes + packed.size);
+            let library = self.cells.expect("cell helpers were requested");
+            b.call_one(library.allocate, &[bytes])
+        };
         let tag = b.constant(Class::Word, u64::from(tag));
         b.store(Width::Word, object, Offset::Words(cell::TAG), tag);
-        let descriptor = self.shapes.descriptor(b, shape);
-        b.store(
-            Width::Word,
-            object,
-            Offset::Words(cell::DESCRIPTOR),
-            descriptor,
-        );
+        if !self.constructing.get() && !self.fixed_claims {
+            let descriptor = self.shapes.descriptor(b, shape);
+            b.store(
+                Width::Word,
+                object,
+                Offset::Words(cell::DESCRIPTOR),
+                descriptor,
+            );
+        }
         let fields = self.fields_at();
         Self::store_leaves(b, (object, fields), packed, claimed);
         object
@@ -919,11 +987,18 @@ impl Pass<'_> {
             let fresh = self.op(b, *op, results, scopes, &live, at);
             for (&old, new) in results.iter().zip(fresh) {
                 self.mapped(old, new);
-                if managed(self.source.class(old)) && !self.borrowed_cells[old.index()] {
+                if managed(self.source.class(old))
+                    && !self.borrowed_cells[old.index()]
+                    && !self.region_cell(old)
+                {
                     top(scopes).held.push(old);
                 }
             }
-            self.release_dead(b, scopes, &live, Some(at));
+            // A terminal loop, if or call has no continuation. Returns
+            // from its child scopes have already released their live roots.
+            if old.terminator.is_some() || at + 1 < self.source.ops(region).len() {
+                self.release_dead(b, scopes, &live, Some(at));
+            }
         }
         // Terminal child transfers already cleaned their scopes. A Never
         // call must not be followed by cleanup at this region's end.
@@ -946,7 +1021,7 @@ impl Pass<'_> {
             scope.held.iter().partition(|&&value| live.dead(value, at));
         scope.held = kept;
         for &value in dead.iter().rev() {
-            self.release(b, self.source.class(value), self.value(value));
+            self.release_held(b, value);
         }
     }
 
@@ -970,7 +1045,7 @@ impl Pass<'_> {
             scope.held.remove(held);
             return self.value(old);
         }
-        self.retained(b, class, self.value(old))
+        self.claim(b, old)
     }
 
     fn exit(&self, b: &mut Builder, scopes: &mut [Scope], terminator: Terminator) {
@@ -998,13 +1073,13 @@ impl Pass<'_> {
                         scope.held.remove(at);
                         self.value(old)
                     }
-                    _ => self.retained(b, self.source.class(old), self.value(old)),
+                    _ => self.claim(b, old),
                 }
             })
             .collect();
         for scope in scopes[start..].iter().rev() {
             for &value in scope.held.iter().rev() {
-                self.release(b, self.source.class(value), self.value(value));
+                self.release_held(b, value);
             }
         }
         match terminator.exit {
@@ -1275,7 +1350,14 @@ impl Pass<'_> {
                         }
                     })
                     .collect();
-                return b.call(function, &args);
+                let fresh = b.call(function, &args);
+                if let [root] = results
+                    && self.plan.roots.contains(root)
+                {
+                    let chunks = self.chunks.expect("region root").detach(b);
+                    self.root_heads.borrow_mut().insert(*root, chunks);
+                }
+                return fresh;
             }
             Op::If {
                 condition,

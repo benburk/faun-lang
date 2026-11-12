@@ -78,6 +78,7 @@ mod packing;
 mod pretty;
 mod program;
 mod prune;
+mod region;
 mod rewrite;
 mod rotate;
 mod sequence;
