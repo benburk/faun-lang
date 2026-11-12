@@ -89,7 +89,7 @@ pub(super) fn identities(program: &mut Program) {
 
 /// Normalize aliases and inline nonrecursive helpers within the supplied limits.
 /// A zero limit disables expansion without computing recursion or copy costs.
-#[cfg(test)]
+#[cfg(any(test, feature = "backend-tests"))]
 pub(crate) fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     let inlining = Inlining::new(program, limits);
     rewrite(
@@ -132,13 +132,13 @@ pub(super) fn join_rounds(program: &mut Program) {
 
 /// Constant folding alone: the walk evaluating what it can, without the
 /// identities or algebra.
-#[cfg(test)]
+#[cfg(any(test, feature = "backend-tests"))]
 pub(crate) fn fold(program: &mut Program) {
     fold_with_limits(program, FoldLimits::default());
 }
 
 /// [`fold`], within `limits`.
-#[cfg(test)]
+#[cfg(any(test, feature = "backend-tests"))]
 pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
     // Nothing to spend evaluates nothing, and the walk is not worth taking.
     if limits.work == 0 || limits.work_per_function == 0 {

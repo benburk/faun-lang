@@ -135,6 +135,7 @@ dependencies = [
  "faun-mos6502-sim65",
  "faun-wasm32-wasi",
  "faun-x86-64-linux",
+ "faun-x86-lab",
  "libtest-mimic",
  "num-bigint",
 ]
@@ -169,6 +170,17 @@ version = "0.1.0"
 dependencies = [
  "faun",
  "faun-core",
+]
+
+[[package]]
+name = "faun-x86-lab"
+version = "0.1.0"
+dependencies = [
+ "faun",
+ "faun-core",
+ "faun-x86-64-linux",
+ "num-bigint",
+ "num-traits",
 ]
 
 [[package]]

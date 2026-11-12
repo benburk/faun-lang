@@ -8,6 +8,10 @@ use faun_core::targets::Target;
 use crate::{Mos6502Sim65, T0, T1};
 use shared::{narrow, wide};
 
+use faun_core as backend_core;
+#[path = "../../core/tests/support/faun.rs"]
+mod faun;
+
 #[path = "../../core/tests/support/backend.rs"]
 mod shared;
 

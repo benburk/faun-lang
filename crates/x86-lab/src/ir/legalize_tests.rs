@@ -1,0 +1,919 @@
+//! Representation and ownership tests use the scalar memory interpreter, not
+//! only low exit statuses. Runtime inputs are parameters, never folded terms.
+use num_bigint::BigUint;
+
+use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
+use super::natural::Config;
+use super::test_support::{live_objects, no_live_objects, word};
+use super::*;
+
+#[test]
+#[expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "the builder method is not lifetime-general enough as a direct callback"
+)]
+fn nested_cells_are_legalized_to_managed_objects_and_released() {
+    let (mut source, main) = Program::new("main");
+    let identity = source.declare("identity", &[Class::Cell], &[Class::Cell]);
+    source.define(identity, |b, params| b.ret(params));
+    source.define(main, |b, _| {
+        let answer = b.constant(Class::Word, 42);
+        let (word, cell) = (b.shape(&[Class::Word]), b.shape(&[Class::Cell]));
+        let inner = b.cell(7, word, &[answer]);
+        let outer = b.cell(3, cell, &[inner]);
+        let returned = b.call_one(identity, &[outer]);
+        let projected = b.cell_field((Class::Cell, cell), returned, 0);
+        let result = b.cell_field((Class::Word, word), projected, 0);
+        b.ret(&[result]);
+    });
+    let config = Config {
+        word_bits: 64,
+        heap_bytes: 512,
+        grows: false,
+        inline_small: true,
+        inline_counts: false,
+        join_routines: false,
+    };
+    let legalized = legalize(&source, config).unwrap();
+    assert!(legalized.ops.iter().all(|op| !matches!(
+        op,
+        Op::Cell { .. } | Op::CellTag { .. } | Op::CellField { .. }
+    )));
+    let evaluation = run(&legalized, main, &[], 64);
+    assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(42u8)]);
+    no_live_objects(&legalized, &evaluation, config);
+}
+
+/// A managed field is not always a scalar: a cell holding an
+/// arbitrary-precision natural has to retain and release that field the way
+/// it retains and releases a nested cell.
+#[test]
+fn a_cell_holding_a_natural_retains_and_releases_that_field() {
+    let (mut source, main) = Program::new("main");
+    source.define(main, |b, _| {
+        let word = b.constant(Class::Word, 42);
+        let counted = b.convert(Class::Natural, word);
+        let natural = b.shape(&[Class::Natural]);
+        let cell = b.cell(1, natural, &[counted]);
+        let field = b.cell_field((Class::Natural, natural), cell, 0);
+        let answer = b.convert(Class::Word, field);
+        b.ret(&[answer]);
+    });
+    let config = Config {
+        word_bits: 64,
+        heap_bytes: 512,
+        grows: false,
+        inline_small: true,
+        inline_counts: false,
+        join_routines: false,
+    };
+    let legalized = legalize(&source, config).unwrap();
+    let evaluation = run(&legalized, main, &[], 64);
+    assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(42u8)]);
+    no_live_objects(&legalized, &evaluation, config);
+}
+
+/// A cell with no fields is the same whatever makes it, so each of a
+/// constructor's is one immortal object laid out before the program runs:
+/// nothing allocates one, counts claims to it, or frees it.
+#[test]
+#[expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "the builder method is not lifetime-general enough as a direct callback"
+)]
+fn a_cell_with_no_fields_is_never_allocated() {
+    let (mut source, main) = Program::new("main");
+    let identity = source.declare("identity", &[Class::Cell], &[Class::Cell]);
+    source.define(identity, |b, params| b.ret(params));
+    source.define(main, |b, _| {
+        let none = b.shape(&[]);
+        let first = b.cell(1, none, &[]);
+        let again = b.cell(1, none, &[]);
+        let other = b.cell(2, none, &[]);
+        let passed = b.call_one(identity, &[again]);
+        let tags: Vec<_> = [first, passed, other]
+            .iter()
+            .map(|&cell| b.cell_tag(cell))
+            .collect();
+        let sum = b.binary(Binary::Add, tags[0], tags[1]);
+        let sum = b.binary(Binary::Add, sum, tags[2]);
+        b.ret(&[sum]);
+    });
+    for inline_counts in [false, true] {
+        let config = Config {
+            word_bits: 64,
+            heap_bytes: 512,
+            grows: false,
+            inline_small: true,
+            inline_counts,
+            join_routines: false,
+        };
+        let legalized = legalize(&source, config).unwrap();
+        let allocations = allocations_in(&legalized, &[main, identity]);
+        assert_eq!(allocations, 0, "inline counts: {inline_counts}");
+        let evaluation = run(&legalized, main, &[], 64);
+        assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(4u8)]);
+        no_live_objects(&legalized, &evaluation, config);
+    }
+}
+
+/// How many times the bodies of `functions` call the allocator: what the
+/// program itself does, past the runtime it is given.
+fn allocations_in(program: &Program, functions: &[FunctionId]) -> usize {
+    functions
+        .iter()
+        .filter_map(|f| program.functions()[f.index()].body())
+        .flat_map(|body| program.walk_within(body))
+        .filter(|(op, _)| {
+            matches!(op, Op::Call { function, .. }
+                if program.name(program.functions()[function.index()].name) == "nat.allocate")
+        })
+        .count()
+}
+
+#[derive(Default)]
+struct TestHost {
+    calls: Vec<String>,
+}
+
+impl Host for TestHost {
+    fn call(
+        &mut self,
+        name: &str,
+        args: &[BigUint],
+        _: &mut Memory<'_>,
+    ) -> Result<HostResult, evaluate::Error> {
+        self.calls.push(name.to_owned());
+        if name == "exit!" {
+            Ok(HostResult::Halt(args.to_vec()))
+        } else if name == "mark" {
+            Ok(HostResult::Return(vec![]))
+        } else {
+            Err(evaluate::Error::Host(name.to_owned()))
+        }
+    }
+}
+
+fn run(p: &Program, f: FunctionId, args: &[BigUint], word_bits: u16) -> Evaluation {
+    evaluate::evaluate(
+        p,
+        f,
+        args,
+        evaluate::Config {
+            word_bits,
+            fuel: 100_000_000,
+            ..evaluate::Config::default()
+        },
+        &mut TestHost::default(),
+    )
+    .expect("reference execution")
+}
+
+fn base() -> (Program, FunctionId) {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let zero = b.constant(Class::Word, 0);
+        b.ret(&[zero]);
+    });
+    let test = p.declare("test", &[Class::Word], &[Class::Natural]);
+    (p, test)
+}
+
+fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
+    let address = word(&evaluation.returned().unwrap()[0].to_bytes_le());
+    // An immediate is twice its number; a handle names its object one past
+    // it.
+    if address.is_multiple_of(2) {
+        return BigUint::from(address >> 1);
+    }
+    let address = address - 1;
+    let globals = usize::try_from(evaluate::globals_base(p).unwrap()).unwrap();
+    let data = usize::try_from(evaluate::DATA_BASE).unwrap();
+    let (bytes, start) = if address >= globals {
+        (&evaluation.globals[..], address - globals)
+    } else {
+        (p.data(), address - data)
+    };
+    let w = usize::from(bits / 8);
+    let len = word(&bytes[start + 2 * w..start + 3 * w]);
+    // Each digit is a word, and the last is not nought.
+    let digits = &bytes[start + 3 * w..start + 3 * w + len * w];
+    assert!(
+        digits.is_empty() || digits[digits.len() - w..].iter().any(|&byte| byte != 0),
+        "normalized"
+    );
+    if address >= globals {
+        assert_eq!(
+            word(&bytes[start + w..start + 2 * w]),
+            1,
+            "one returned claim"
+        );
+    }
+    BigUint::from_bytes_le(digits)
+}
+
+/// Around half a word, where a natural stops being an immediate and starts
+/// being an object: every operation, on every pair of numbers either side,
+/// answers what the reference answers, at every width.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "differential fixture over widths, operations, and pairs either side of the boundary"
+)]
+fn arithmetic_across_the_immediate_boundary_matches_the_reference() {
+    for bits in [16, 32, 64] {
+        let half = natural::half(bits);
+        let most = u64::MAX >> (64 - bits);
+        let values = [0, 1, half - 2, half - 1, half, half + 1, most];
+        let ops = [
+            Ok(Binary::Add),
+            Ok(Binary::Sub),
+            Ok(Binary::Mul),
+            Ok(Binary::Div),
+            Ok(Binary::Mod),
+            Err(Relation::Equal),
+            Err(Relation::Less),
+        ];
+        for op in ops {
+            let (mut p, main) = Program::new("main");
+            p.define(main, |b, _| {
+                let zero = b.constant(Class::Word, 0);
+                b.ret(&[zero]);
+            });
+            let result = if op.is_ok() {
+                Class::Natural
+            } else {
+                Class::Word
+            };
+            let test = p.declare("test", &[Class::Word, Class::Word], &[result]);
+            p.define(test, |b, args| {
+                let left = b.convert(Class::Natural, args[0]);
+                let right = b.convert(Class::Natural, args[1]);
+                let answer = match op {
+                    Ok(op) => b.binary(op, left, right),
+                    Err(relation) => b.compare(relation, left, right),
+                };
+                b.ret(&[answer]);
+            });
+            let config = Config {
+                word_bits: bits,
+                heap_bytes: 2048,
+                grows: false,
+                inline_small: true,
+                inline_counts: false,
+                join_routines: false,
+            };
+            let scalar = legalize(&p, config).expect("legalized");
+            for &x in &values {
+                for &y in &values {
+                    let args = [BigUint::from(x), BigUint::from(y)];
+                    let expected = run(&p, test, &args, bits).returned().unwrap()[0].clone();
+                    let actual = run(&scalar, test, &args, bits);
+                    let answer = if op.is_ok() {
+                        decoded(&scalar, &actual, bits)
+                    } else {
+                        actual.returned().unwrap()[0].clone()
+                    };
+                    assert_eq!(answer, expected, "{bits} {op:?} {x} {y}");
+                    // An answer below half a word is an immediate, and one
+                    // at or past it the one object still claimed.
+                    let object = op.is_ok() && answer >= BigUint::from(half);
+                    assert_eq!(
+                        live_objects(&scalar, &actual, config),
+                        usize::from(object),
+                        "{bits} {op:?} {x} {y}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "differential fixture and its width/operation/input matrix"
+)]
+fn exact_runtime_arithmetic_and_returned_ownership_at_each_word_size() {
+    for bits in [16, 32, 64] {
+        for operation in [
+            Binary::Add,
+            Binary::Sub,
+            Binary::Mul,
+            Binary::Div,
+            Binary::Mod,
+        ] {
+            let (mut p, test) = base();
+            let arithmetic = p.declare(
+                "arithmetic",
+                &[Class::Natural, Class::Natural],
+                &[Class::Natural],
+            );
+            p.define(arithmetic, |b, a| {
+                let result = b.binary(operation, a[0], a[1]);
+                b.ret(&[result]);
+            });
+            p.define(test, |b, a| {
+                let input = b.convert(Class::Natural, a[0]);
+                let large = b.natural(&((BigUint::from(1u8) << 100usize) + BigUint::from(255u16)));
+                let left = b.binary(Binary::Add, large, input);
+                let divisor = b.constant(Class::Natural, 257);
+                let right = b.binary(Binary::Add, divisor, input);
+                let result = b.call(arithmetic, &[left, right]);
+                b.ret(&result);
+            });
+            let config = Config {
+                word_bits: bits,
+                heap_bytes: 2048,
+                grows: false,
+                inline_small: true,
+                inline_counts: false,
+                join_routines: false,
+            };
+            let scalar = legalize(&p, config).expect("legalized");
+            assert!(
+                (0..scalar.values_count())
+                    .all(|at| scalar.class(ValueId::at(at)) != Class::Natural)
+            );
+            for seed in [0u64, 1, 255, 4095] {
+                let args = [BigUint::from(seed)];
+                let expected = run(&p, test, &args, bits);
+                let actual = run(&scalar, test, &args, bits);
+                assert!(actual.returned().is_some());
+                assert_eq!(
+                    decoded(&scalar, &actual, bits),
+                    expected.returned().unwrap()[0],
+                    "{bits} {operation:?} {seed}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn zero_division_and_monus_alias_paths_keep_returned_values_live() {
+    for bits in [16, 32, 64] {
+        for operation in [Binary::Sub, Binary::Div, Binary::Mod] {
+            for zero_right in [true, false] {
+                let (mut p, test) = base();
+                p.define(test, |b, a| {
+                    let input = b.convert(Class::Natural, a[0]);
+                    let right = if zero_right {
+                        b.constant(Class::Natural, 0)
+                    } else {
+                        input
+                    };
+                    let result = b.binary(operation, input, right);
+                    b.ret(&[result]);
+                });
+                let scalar = legalize(
+                    &p,
+                    Config {
+                        word_bits: bits,
+                        heap_bytes: 256,
+                        grows: false,
+                        inline_small: true,
+                        inline_counts: false,
+                        join_routines: false,
+                    },
+                )
+                .unwrap();
+                let args = [BigUint::from(65535u32)];
+                let expected = run(&p, test, &args, bits);
+                let actual = run(&scalar, test, &args, bits);
+                assert_eq!(
+                    decoded(&scalar, &actual, bits),
+                    expected.returned().unwrap()[0]
+                );
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "nested control-flow fixture is clearest as a single graph"
+)]
+fn lifetime_program(early_return: bool) -> (Program, FunctionId) {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let zero = b.constant(Class::Word, 0);
+        b.ret(&[zero]);
+    });
+    let pair = p.declare(
+        "duplicate borrowed",
+        &[Class::Natural],
+        &[Class::Natural, Class::Natural],
+    );
+    p.define(pair, |b, a| b.ret(&[a[0], a[0]]));
+    let test = p.declare("lifetime", &[Class::Word], &[Class::Word]);
+    p.define(test, |b, args| {
+        let ancestor = b.convert(Class::Natural, args[0]);
+        let pair = b.call(pair, &[ancestor]);
+        let zero = b.constant(Class::Word, 0);
+        let result = b.loop_(
+            &[pair[0], pair[1], zero],
+            &[Class::Natural, Class::Natural],
+            |b, state| {
+                let one = b.constant(Class::Natural, 1);
+                let next = b.binary(Binary::Add, state[0], one);
+                let inner = b.loop_(&[next, zero], &[Class::Natural], |b, carried| {
+                    let first = b.compare(Relation::Equal, carried[1], zero);
+                    b.if_(
+                        first,
+                        &[],
+                        |b| {
+                            let one = b.constant(Class::Word, 1);
+                            b.continue_(&[carried[0], one]);
+                        },
+                        |b| b.yield_(&[]),
+                    );
+                    let three = b.constant(Class::Word, 3);
+                    let stop = if early_return {
+                        b.compare(Relation::Equal, state[2], three)
+                    } else {
+                        b.constant(Class::Word, 0)
+                    };
+                    b.if_(
+                        stop,
+                        &[],
+                        |b| {
+                            let old = b.convert(Class::Word, ancestor);
+                            b.ret(&[old]);
+                        },
+                        |b| b.break_(&[carried[0]]),
+                    );
+                });
+                let more = b.compare(Relation::Less, state[2], args[0]);
+                b.if_(
+                    more,
+                    &[],
+                    |b| {
+                        let one = b.constant(Class::Word, 1);
+                        let index = b.binary(Binary::Add, state[2], one);
+                        b.continue_(&[state[1], inner[0], index]);
+                    },
+                    |b| b.break_(&[inner[0], inner[0]]),
+                );
+            },
+        );
+        let sum = b.binary(Binary::Add, result[0], result[1]);
+        let status = b.convert(Class::Word, sum);
+        b.ret(&[status]);
+    });
+    (p, test)
+}
+
+#[test]
+fn loops_rotate_aliases_reuse_tiny_heaps_and_clean_nested_early_returns() {
+    for bits in [16, 32, 64] {
+        for early in [false, true] {
+            let (p, test) = lifetime_program(early);
+            let config = Config {
+                word_bits: bits,
+                heap_bytes: 512,
+                grows: false,
+                inline_small: true,
+                inline_counts: false,
+                join_routines: false,
+            };
+            let scalar = legalize(&p, config).unwrap();
+            for seed in [0u64, 3, 200] {
+                let args = [BigUint::from(seed)];
+                let expected = run(&p, test, &args, bits);
+                let actual = run(&scalar, test, &args, bits);
+                assert_eq!(actual.outcome, expected.outcome);
+                no_live_objects(&scalar, &actual, config);
+            }
+        }
+    }
+}
+
+#[test]
+fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
+    for bits in [16, 32, 64] {
+        let (mut p, main) = Program::new("main");
+        let recurse = p.declare("recurse", &[Class::Word, Class::Natural], &[Class::Natural]);
+        p.define(recurse, |b, args| {
+            let zero = b.constant(Class::Word, 0);
+            let done = b.compare(Relation::Equal, args[0], zero);
+            b.if_(
+                done,
+                &[],
+                |b| b.ret(&[args[1]]),
+                |b| {
+                    let one = b.constant(Class::Natural, 1);
+                    let next = b.binary(Binary::Add, args[1], one);
+                    let one = b.constant(Class::Word, 1);
+                    let count = b.binary(Binary::Sub, args[0], one);
+                    let inner = b.call_one(recurse, &[count, next]);
+                    // Reading a borrowed parameter after the recursive call must
+                    // remain safe even if the callee reuses released heap blocks.
+                    let result = b.binary(Binary::Add, inner, args[1]);
+                    b.ret(&[result]);
+                },
+            );
+        });
+        p.define(main, |b, _| {
+            let word = b.constant(Class::Word, 7);
+            let input = b.convert(Class::Natural, word);
+            let count = b.constant(Class::Word, 12);
+            let value = b.call_one(recurse, &[count, input]);
+            let result = b.convert(Class::Word, value);
+            b.ret(&[result]);
+        });
+        let config = fixed_heap(bits, 1024);
+        let scalar = legalize(&p, config).unwrap();
+        let expected = run(&p, main, &[], bits);
+        let actual = run(&scalar, main, &[], bits);
+        assert_eq!(actual.outcome, expected.outcome);
+        no_live_objects(&scalar, &actual, config);
+    }
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "conversion graph and cross-width differential matrix"
+)]
+fn conversion_aliases_comparisons_and_odd_width_truncation() {
+    for bits in [16, 32, 64] {
+        for narrow in [0, 1, 7, 8, 9, 15, 16, 31, 32, 63, 64]
+            .into_iter()
+            .filter(|&n| n <= bits)
+        {
+            let (mut p, main) = Program::new("main");
+            let test = p.declare("conversions", &[Class::Word], &[Class::Word]);
+            p.define(main, |b, _| {
+                let zero = b.constant(Class::Word, 0);
+                b.ret(&[zero]);
+            });
+            p.define(test, |b, args| {
+                let a = b.convert(Class::Natural, args[0]);
+                let alias = b.convert(Class::Natural, a);
+                let equal = b.compare(Relation::Equal, a, alias);
+                let zero = b.constant(Class::Natural, 0);
+                let positive = b.compare(Relation::Less, zero, alias);
+                let result = b.if_(
+                    positive,
+                    &[Class::Natural],
+                    |b| {
+                        let high = b.natural(&(BigUint::from(1u8) << 100usize));
+                        let value = b.binary(Binary::Add, alias, high);
+                        b.yield_(&[value]);
+                    },
+                    |b| b.yield_(&[zero]),
+                );
+                let narrow = b.convert(Class::fixed(narrow), result[0]);
+                let result = b.convert(Class::Word, narrow);
+                let result = b.binary(Binary::Mul, result, equal);
+                b.ret(&[result]);
+            });
+            let config = Config {
+                word_bits: bits,
+                heap_bytes: 256,
+                grows: false,
+                inline_small: true,
+                inline_counts: false,
+                join_routines: false,
+            };
+            let scalar = legalize(&p, config).unwrap();
+            for seed in [0u64, 255, 256, 65535, u64::MAX >> (64 - bits)] {
+                let args = [BigUint::from(seed)];
+                let expected = run(&p, test, &args, bits);
+                let actual = run(&scalar, test, &args, bits);
+                assert_eq!(actual.outcome, expected.outcome);
+                no_live_objects(&scalar, &actual, config);
+            }
+        }
+    }
+}
+
+#[test]
+fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
+    let (mut p, main) = Program::new("main");
+    let data = p.intern(b"unaligned");
+    let global = p.global(&[7, 8, 9]);
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit!");
+    p.define(main, |b, _| {
+        b.address_of(data);
+        b.address_of(global);
+        let value = b.constant(Class::Word, 42);
+        b.convert(Class::Natural, value);
+        b.call(exit, &[value]);
+    });
+    let scalar = legalize(&p, fixed_heap(64, 256)).unwrap();
+    assert_eq!(&scalar.data()[..p.data().len()], p.data());
+    assert_eq!(&scalar.globals()[..p.globals().len()], p.globals());
+    assert_eq!(
+        &scalar.spans.as_slice()[..p.spans.len()],
+        p.spans.as_slice()
+    );
+    assert_eq!(
+        scalar.function(exit).definition,
+        p.function(exit).definition
+    );
+    assert_eq!(scalar.function(exit).returns, Returns::Never);
+    let ops = scalar.ops(scalar.function(scalar.entry()).body().unwrap());
+    assert!(matches!(ops.last(), Some(Op::Call { function, .. }) if *function == exit));
+    let mut host = TestHost::default();
+    let result =
+        evaluate::evaluate(&scalar, main, &[], evaluate::Config::default(), &mut host).unwrap();
+    assert_eq!(result.halted().unwrap(), [BigUint::from(42u8)]);
+    assert_eq!(host.calls, ["exit!"]);
+}
+
+/// A heap of `heap_bytes` that exits when it is full.
+const fn fixed_heap(word_bits: u16, heap_bytes: usize) -> Config {
+    Config {
+        word_bits,
+        heap_bytes,
+        grows: false,
+        inline_small: true,
+        inline_counts: false,
+        join_routines: false,
+    }
+}
+
+#[test]
+fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
+    for (source, target) in [
+        (Class::Address, Class::Natural),
+        (Class::Natural, Class::Address),
+    ] {
+        let (mut p, main) = Program::new("main");
+        p.define(main, |b, _| {
+            let value = b.constant(source, 1);
+            b.convert(target, value);
+            let zero = b.constant(Class::Word, 0);
+            b.ret(&[zero]);
+        });
+        assert!(legalize(&p, fixed_heap(64, 256)).is_err());
+    }
+    let (mut p, main) = Program::new("main");
+    // Wider than the machine's word, which splitting holds as words first;
+    // legalizing it as it stands would read it as one.
+    p.define(main, |b, _| {
+        b.constant(Class::fixed(17), 1);
+        let zero = b.constant(Class::Word, 0);
+        b.ret(&[zero]);
+    });
+    assert!(
+        legalize(&p, fixed_heap(16, 256))
+            .unwrap_err()
+            .contains("held as words")
+    );
+    assert!(legalize(&split(&p, 16), fixed_heap(16, 256)).is_ok());
+}
+
+#[test]
+fn natural_host_signatures_do_not_become_address_signatures() {
+    let mut routines = crate::platform::Routines::builtin();
+    routines.push(crate::platform::Routine {
+        name: "foreign".into(),
+        offered: false,
+        authority: false,
+        takes: vec![crate::platform::Takes::Scalar(Class::Natural)],
+        returns: crate::platform::Returns::Value(Class::Natural),
+        built: None,
+        consumes: false,
+    });
+    let (mut p, main) = Program::new("main");
+    let foreign = routines.declare(&mut p, "foreign");
+    p.define(main, |b, _| {
+        let natural = b.constant(Class::Natural, 1);
+        b.call(foreign, &[natural]);
+        let zero = b.constant(Class::Word, 0);
+        b.ret(&[zero]);
+    });
+    let error = legalize(
+        &p,
+        Config {
+            word_bits: 64,
+            heap_bytes: 256,
+            grows: false,
+            inline_small: true,
+            inline_counts: false,
+            join_routines: false,
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("bigint ABI"), "{error}");
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "host setup, allocation fixture and observed failure ordering"
+)]
+fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
+    for bits in [16, 32, 64] {
+        let mut routines = crate::platform::Routines::builtin();
+        routines.push(crate::platform::Routine {
+            name: "mark".into(),
+            offered: false,
+            authority: false,
+            takes: vec![],
+            returns: crate::platform::Returns::Unit,
+            built: None,
+            consumes: false,
+        });
+        let (mut p, main) = Program::new("main");
+        let mark = routines.declare(&mut p, "mark");
+        p.define(main, |b, _| {
+            b.call(mark, &[]);
+            // Past where immediates stop, so each is an object.
+            let word = b.constant(Class::Word, natural::half(bits) + 100);
+            // Both are read after the second is made, so both are live when
+            // it asks for room: a dead first one would already be released.
+            let first = b.convert(Class::Natural, word);
+            let second = b.convert(Class::Natural, word);
+            b.compare(Relation::Equal, first, second);
+            b.call(mark, &[]);
+            b.ret(&[word]);
+        });
+        let scalar = legalize(
+            &p,
+            Config {
+                word_bits: bits,
+                heap_bytes: usize::from(bits / 8) * 4,
+                grows: false,
+                inline_small: true,
+                inline_counts: false,
+                join_routines: false,
+            },
+        )
+        .unwrap();
+        let mut host = TestHost::default();
+        let result = evaluate::evaluate(
+            &scalar,
+            main,
+            &[],
+            evaluate::Config {
+                word_bits: bits,
+                ..evaluate::Config::default()
+            },
+            &mut host,
+        )
+        .unwrap();
+        assert_eq!(result.halted().unwrap(), [BigUint::from(2u8)]);
+        assert_eq!(host.calls, ["mark", "exit!"]);
+    }
+}
+
+#[test]
+fn source_host_arguments_are_not_implicitly_truncated() {
+    // A sum of two counts a word holds may not fit a word, and a status must.
+    let routines = crate::platform::Routines::builtin().with_word(64);
+    let mut library = crate::barb::fixture::Library::new();
+    let (nat, add) = (library.nat, library.add);
+    let world = tests::host(&mut library.program, nat);
+    let main =
+        library
+            .program
+            .declare_named("main!", &[("host", world.host), ("argc", nat)], world.never);
+    // The count is a word because the target says so of a parameter named
+    // for it, when lowering.
+    library.program.define(main, |b, args| {
+        let n = args[1];
+        let doubled = b.call(add, &[n, n]);
+        b.call(world.exit, &[args[0], doubled])
+    });
+    library.program.set_entry(main);
+    let error = tests::machine(library.program, &routines).unwrap_err();
+    assert!(
+        error.contains("host arguments must be proven to fit"),
+        "{error}"
+    );
+    assert!(
+        error.contains("no bound was found for what `main!` hands it"),
+        "{error}"
+    );
+
+    // A status known to be small fits even a narrow word.
+    let routines = crate::platform::Routines::builtin().with_word(16);
+    let mut library = crate::barb::fixture::Library::new();
+    let one = library.number(1);
+    let world = tests::host(&mut library.program, library.nat);
+    let main = library
+        .program
+        .declare_named("main!", &[("host", world.host)], world.never);
+    library.program.define(main, |b, args| {
+        let one = b.known(one);
+        b.call(world.exit, &[args[0], one])
+    });
+    library.program.set_entry(main);
+    tests::machine(library.program, &routines).unwrap();
+}
+
+#[test]
+fn scalar_fast_path_has_no_runtime_code_data_or_globals() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let answer = b.constant(Class::Word, 42);
+        b.ret(&[answer]);
+    });
+    let scalar = legalize(
+        &p,
+        Config {
+            word_bits: 64,
+            heap_bytes: 0,
+            grows: false,
+            inline_small: true,
+            inline_counts: false,
+            join_routines: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(format!("{p:?}"), format!("{scalar:?}"));
+}
+
+/// One buffer's elements put before another's, in order and reversed, onto
+/// a buffer nothing else holds and onto one something else still reads:
+/// every element is where the reference puts it, and every claim an
+/// element holds -- naturals past half a word are objects -- is given back.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture builds both buffers, prepends, and reads every element back"
+)]
+fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
+    for bits in [32, 64] {
+        let half = natural::half(bits);
+        for reversed in [false, true] {
+            for shared in [false, true] {
+                let (mut p, main) = Program::new("main");
+                p.define(main, |b, _| {
+                    let zero = b.constant(Class::Word, 0);
+                    b.ret(&[zero]);
+                });
+                let test = p.declare("test", &[Class::Word], &[Class::Natural]);
+                p.define(test, |b, args| {
+                    let base = b.convert(Class::Natural, args[0]);
+                    let natural = b.shape(&[Class::Natural]);
+                    let push = |b: &mut Builder, [buffer, start]: [ValueId; 2], len: u64, value| {
+                        let len = b.constant(Class::Word, len);
+                        b.buffer_push((buffer, start, len), natural, &[value])
+                    };
+                    let nought = b.constant(Class::Word, 0);
+                    let mut from = [b.buffer_empty(natural), nought];
+                    for (at, offset) in (0u64..).zip([1, half, 3]) {
+                        let offset = b.constant(Class::Word, offset);
+                        let offset = b.convert(Class::Natural, offset);
+                        let value = b.binary(Binary::Add, base, offset);
+                        from = push(b, from, at, value);
+                    }
+                    let mut onto = [b.buffer_empty(natural), nought];
+                    for (at, value) in (0u64..).zip([7, 9]) {
+                        let value = b.constant(Class::Word, value);
+                        let value = b.convert(Class::Natural, value);
+                        onto = push(b, onto, at, value);
+                    }
+                    let (three, two) = (b.constant(Class::Word, 3), b.constant(Class::Word, 2));
+                    let (onto_three, from_three) =
+                        ((onto[0], onto[1], two), (from[0], from[1], three));
+                    let [joined, first] = if reversed {
+                        b.buffer_prepend(onto_three, from_three, natural)
+                    } else {
+                        b.buffer_extend(from_three, onto_three, natural)
+                    };
+                    // Every element, each weighted by where it is.
+                    let mut total = b.constant(Class::Natural, 0);
+                    for (at, place) in (0u64..5).zip(0u32..) {
+                        let at = b.constant(Class::Word, at);
+                        let at = b.binary(Binary::Add, first, at);
+                        let value = b.buffer_field((Class::Natural, natural), (joined, at), 0);
+                        let weight = b.constant(Class::Natural, 10u64.pow(place));
+                        let weighted = b.binary(Binary::Mul, value, weight);
+                        total = b.binary(Binary::Add, total, weighted);
+                    }
+                    if shared {
+                        let first = b.buffer_field((Class::Natural, natural), onto.into(), 0);
+                        total = b.binary(Binary::Add, total, first);
+                    }
+                    b.ret(&[total]);
+                });
+                let config = Config {
+                    word_bits: bits,
+                    heap_bytes: 4096,
+                    grows: false,
+                    inline_small: true,
+                    inline_counts: false,
+                    join_routines: false,
+                };
+                let scalar = legalize(&p, config).expect("legalized");
+                let args = [BigUint::from(5u8)];
+                let expected = run(&p, test, &args, bits).returned().unwrap()[0].clone();
+                let actual = run(&scalar, test, &args, bits);
+                let answer = decoded(&scalar, &actual, bits);
+                assert_eq!(answer, expected, "{bits} {reversed} {shared}");
+                // What is left is the answer, which is past half a word.
+                assert_eq!(
+                    live_objects(&scalar, &actual, config),
+                    1,
+                    "{bits} {reversed} {shared}"
+                );
+            }
+        }
+    }
+}

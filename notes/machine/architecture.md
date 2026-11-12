@@ -191,9 +191,9 @@ instructions such as the 6502, and
 
 ## Open questions
 
-A planned experimental x86-64 backend takes optimized Barb and owns its
-machine IR, including representation and placement. The existing targets
-continue to use the shared IR. The [experiment contract](../../crates/faun/examples/benchmarks-game/LAB.md)
+The [experimental x86-64 backend](../../crates/x86-lab/README.md) takes
+optimized Barb and starts with its own copy of x86 lowering and emission.
+Its machine IR can choose representation and placement independently. The [experiment contract](../../crates/faun/examples/benchmarks-game/LAB.md)
 describes the boundary, the first milestones and how to compare results.
 
 ## Related

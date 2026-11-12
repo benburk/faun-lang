@@ -224,7 +224,7 @@ impl Facts {
         self.ranges.takes.get(id.index()).map_or(&[], Vec::as_slice)
     }
     #[must_use]
-    pub(crate) fn affine(&self, id: ExprId) -> Option<&Affine> {
+    pub fn affine(&self, id: ExprId) -> Option<&Affine> {
         self.affine.get(id.index())?.as_ref()
     }
     /// What field `at` of `ctor` can hold: every value built into it, or

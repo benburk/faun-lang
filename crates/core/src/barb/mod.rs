@@ -122,7 +122,7 @@ mod types;
 mod validate;
 mod walk;
 
-pub(crate) use affine::Affine;
+pub use affine::Affine;
 pub use bounds::{Assumed, Bounds};
 pub use budget::{Budget, FoldLimits, LimitExceeded};
 pub use builder::Builder;
@@ -149,9 +149,27 @@ pub(crate) use normalize::structural;
 pub use optimize::optimize;
 pub(crate) use program::shape;
 pub use program::{Program, type_shape};
-pub(crate) use program::{single_field, single_field_constant};
+pub use program::{single_field, single_field_constant};
 pub use types::TypeShape;
 pub use validate::{Refusal, validate};
+
+/// Individual optimizer steps used to construct machine-IR test inputs.
+#[cfg(feature = "backend-tests")]
+pub mod test_support {
+    use super::{InlineLimits, Program, normalize};
+
+    pub fn structural(program: &mut Program) {
+        normalize::structural(program);
+    }
+
+    pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
+        normalize::normalize_with_limits(program, limits);
+    }
+
+    pub fn fold(program: &mut Program) {
+        normalize::fold(program);
+    }
+}
 
 #[cfg(test)]
 use constant::decode;

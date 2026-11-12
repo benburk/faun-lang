@@ -1,6 +1,7 @@
 //! Shared backend conformance tests. Each target supplies its runner and size
 //! baselines; every test here still runs independently against every emitter.
 
+use super::{backend_core as faun_core, faun};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -15,8 +16,6 @@ use super::{ARITHMETIC_SIZES, CORPUS_SIZES, EXAMPLE_SIZES, LADDER_SIZES, RUNNER,
 
 #[path = "expressions.rs"]
 mod expressions;
-#[path = "faun.rs"]
-mod faun;
 
 pub(super) const EXIT_ZERO: &str = "import std.host {Host}
 

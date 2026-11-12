@@ -5,6 +5,7 @@
 //! what the compiler makes. The compiler itself is the `faun` library.
 
 mod args;
+mod compiler;
 
 use std::fs;
 use std::io;
@@ -12,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 
 use args::{Command, Stage};
+use compiler::Compiler;
 use faun::diagnostic::{Diagnostic, Location};
 use faun_core::barb;
 use faun_core::targets::{Favour, SymbolTable, Target};
@@ -50,23 +52,23 @@ fn answer(command: Command) -> ExitCode {
     let outcome = match command {
         Command::Check { target, source } => check(&source, target).map(|()| ExitCode::SUCCESS),
         Command::Build {
-            target,
+            compiler,
             source,
             output,
             favour,
             symbols,
-        } => build(&source, target, &output, favour, symbols).map(|()| ExitCode::SUCCESS),
+        } => build(&source, compiler, &output, favour, symbols).map(|()| ExitCode::SUCCESS),
         Command::Run {
-            target,
+            compiler,
             source,
             args,
-        } => run(&source, target, &args),
-        Command::Test { target, source } => test(&source, target).map(|()| ExitCode::SUCCESS),
+        } => run(&source, compiler, &args),
+        Command::Test { compiler, source } => test(&source, compiler).map(|()| ExitCode::SUCCESS),
         Command::Emit {
-            target,
+            compiler,
             stage,
             source,
-        } => emit(stage, &source, target).map(|()| ExitCode::SUCCESS),
+        } => emit(stage, &source, compiler).map(|()| ExitCode::SUCCESS),
     };
     match outcome {
         Ok(exit) => exit,
@@ -100,11 +102,12 @@ fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
 /// build, so building one checks it.
 fn build(
     source: &Path,
-    target: &dyn Target,
+    compiler: Compiler,
     output: &Path,
     favour: Favour,
     symbols: SymbolTable,
 ) -> Result<(), Diagnostic> {
+    let target = compiler.host();
     let barb = faun::lower_to_barb(source, target)?;
     if barb.entry().is_none() {
         println!(
@@ -113,7 +116,7 @@ fn build(
         );
         return Ok(());
     }
-    let image = faun::compile_barb_to_image_with(barb, target, favour, symbols)?;
+    let image = compiler.compile(barb, favour, symbols)?;
     let written = write(target, &image, output)?;
     println!("wrote {}", written.display());
     Ok(())
@@ -122,9 +125,14 @@ fn build(
 /// Compile for the machine this runs on, run it, and answer how it exited.
 /// Where a signal stopped it, say which, and answer as a shell does,
 /// 128 and the signal's number.
-fn run(source: &Path, target: &dyn Target, args: &[String]) -> Result<ExitCode, Diagnostic> {
+fn run(source: &Path, compiler: Compiler, args: &[String]) -> Result<ExitCode, Diagnostic> {
+    let target = compiler.host();
     runs_here(target)?;
-    let image = faun::compile_to_image(source, target)?;
+    let image = compiler.compile(
+        faun::lower_to_barb(source, target)?,
+        Favour::Speed,
+        SymbolTable::Omitted,
+    )?;
     let status = execute(target, &image, |program| program.args(args).status())?;
     if let Some(signal) = stopping_signal(status) {
         eprintln!("the program was stopped by signal {signal}");
@@ -152,7 +160,8 @@ fn stopping_signal(_status: std::process::ExitStatus) -> Option<i32> {
 
 /// Build a package's expectations for the machine this runs on, run them,
 /// and say where each one that does not hold was written.
-fn test(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
+fn test(source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
+    let target = compiler.host();
     runs_here(target)?;
     let tests = faun::lower_tests_to_barb(source, target)?;
     let count = tests.expectations.len();
@@ -160,7 +169,7 @@ fn test(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
         println!("no expectations");
         return Ok(());
     }
-    let image = faun::compile_barb_to_image(tests.barb, target)?;
+    let image = compiler.compile(tests.barb, Favour::Speed, SymbolTable::Omitted)?;
     let output = execute(target, &image, Process::output)?;
     if !output.status.success() {
         let message = format!("the expectations stopped with {}", output.status);
@@ -246,24 +255,11 @@ fn execute<T>(
 }
 
 /// Print one stage of a program.
-fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
+fn emit(stage: Stage, source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
+    let target = compiler.host();
     let mut barb = faun::lower_to_barb(source, target)?;
     barb::optimize(&mut barb);
-    let routines = target.routines();
-    let text = match stage {
-        Stage::Barb => barb.render_analyzed(&barb.analyze()),
-        Stage::Machine => {
-            let machine =
-                faun_core::lower_to_machine_ir(&barb, &routines).map_err(Diagnostic::new)?;
-            machine.render()
-        }
-        Stage::Target => {
-            let machine =
-                faun_core::lower_to_machine_ir(&barb, &routines).map_err(Diagnostic::new)?;
-            let prepared = target.prepare(&machine).map_err(Diagnostic::new)?;
-            target.render(&prepared)
-        }
-    };
+    let text = compiler.render(stage, &barb).map_err(Diagnostic::new)?;
     print!("{text}");
     Ok(())
 }

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use bpaf::{Parser, choice, construct, long, positional, short};
 use faun_core::targets::{Favour, SymbolTable, Target};
 
+use crate::compiler::Compiler;
 use crate::{NATIVE, TARGETS};
 
 #[derive(Clone, Debug)]
@@ -15,24 +16,24 @@ pub(crate) enum Command {
         source: PathBuf,
     },
     Build {
-        target: &'static dyn Target,
+        compiler: Compiler,
         source: PathBuf,
         output: PathBuf,
         favour: Favour,
         symbols: SymbolTable,
     },
     Run {
-        target: &'static dyn Target,
+        compiler: Compiler,
         source: PathBuf,
         /// What the program is run with, after its own name.
         args: Vec<String>,
     },
     Test {
-        target: &'static dyn Target,
+        compiler: Compiler,
         source: PathBuf,
     },
     Emit {
-        target: &'static dyn Target,
+        compiler: Compiler,
         stage: Stage,
         source: PathBuf,
     },
@@ -73,7 +74,7 @@ fn check() -> impl Parser<Command> {
 }
 
 fn build() -> impl Parser<Command> {
-    let target = target();
+    let compiler = compiler();
     let source = positional::<PathBuf>("PATH").help("The source file to compile");
     let output = short('o')
         .long("output")
@@ -98,7 +99,7 @@ fn build() -> impl Parser<Command> {
     construct!(Command::Build {
         output,
         symbols,
-        target,
+        compiler,
         favour,
         source,
     })
@@ -108,13 +109,13 @@ fn build() -> impl Parser<Command> {
 }
 
 fn run() -> impl Parser<Command> {
-    let target = target();
+    let compiler = compiler();
     let source = positional::<PathBuf>("PATH").help("The source file to compile and run");
     let args = positional::<String>("ARGS")
         .help("What the program is run with; after `--`, even what looks like an option")
         .many();
     construct!(Command::Run {
-        target,
+        compiler,
         source,
         args
     })
@@ -124,16 +125,16 @@ fn run() -> impl Parser<Command> {
 }
 
 fn test() -> impl Parser<Command> {
-    let target = target();
+    let compiler = compiler();
     let source = positional::<PathBuf>("PATH").help("The source file whose package to test");
-    construct!(Command::Test { target, source })
+    construct!(Command::Test { compiler, source })
         .to_options()
         .descr("Run every `expect` in a Faun package on the selected machine")
         .command("test")
 }
 
 fn emit() -> impl Parser<Command> {
-    let target = target();
+    let compiler = compiler();
     let stage = positional::<String>("STAGE")
         .help("The stage to print: barb, machine or target")
         .parse(|stage| match stage.as_str() {
@@ -144,13 +145,22 @@ fn emit() -> impl Parser<Command> {
         });
     let source = positional::<PathBuf>("PATH").help("The source file to compile");
     construct!(Command::Emit {
-        target,
+        compiler,
         stage,
         source,
     })
     .to_options()
     .descr("Print an intermediate stage of a Faun program")
     .command("emit")
+}
+
+fn compiler() -> impl Parser<Compiler> {
+    let target = target();
+    let backend = long("backend")
+        .help("Code generator: stock or x86-lab")
+        .argument::<String>("BACKEND")
+        .fallback(String::from("stock"));
+    construct!(target, backend).parse(|(target, backend)| Compiler::choose(target, &backend))
 }
 
 /// `--target`, defaulting to [`NATIVE`] and required where there is none.

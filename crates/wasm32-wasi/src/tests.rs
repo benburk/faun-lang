@@ -5,6 +5,10 @@ use faun_core::targets::Target;
 use crate::Wasm32Wasi;
 use shared::{EXIT_ZERO, bytes, execute, narrow, read, status, wide};
 
+use faun_core as backend_core;
+#[path = "../../core/tests/support/faun.rs"]
+mod faun;
+
 #[path = "../../core/tests/support/backend.rs"]
 mod shared;
 

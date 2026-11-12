@@ -1,0 +1,18 @@
+[package]
+name = "faun-x86-lab"
+version.workspace = true
+edition.workspace = true
+description = "Experimental lowering from Barb to x86-64 Linux"
+
+[dependencies]
+faun-core.workspace = true
+num-bigint = "0.4.8"
+num-traits = "0.2"
+
+[dev-dependencies]
+faun.workspace = true
+faun-core = { workspace = true, features = ["backend-tests"] }
+faun-x86-64-linux.workspace = true
+
+[lints]
+workspace = true

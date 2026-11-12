@@ -11,6 +11,10 @@ mod float_tests;
 #[path = "abi_tests.rs"]
 mod abi_tests;
 
+use faun_core as backend_core;
+#[path = "../../core/tests/support/faun.rs"]
+mod faun;
+
 #[path = "../../core/tests/support/backend.rs"]
 mod shared;
 

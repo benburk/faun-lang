@@ -72,7 +72,7 @@ pub fn type_shape(program: &Program, id: TypeId) -> TypeShape {
 
 /// The sole constructor and field of a one-field product.
 #[must_use]
-pub(crate) fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, TypeId)> {
+pub fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, TypeId)> {
     match type_shape(program, id) {
         TypeShape::Wrapper { constructor, field } => Some((constructor, field)),
         _ => None,
@@ -80,11 +80,11 @@ pub(crate) fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, Typ
 }
 
 /// Peel nested one-field products from an already validated constant.
+///
+/// # Panics
+/// If the constant does not have the validated encoding for its type.
 #[must_use]
-pub(crate) fn single_field_constant<'a>(
-    program: &'a Program,
-    mut value: Constant<'a>,
-) -> Constant<'a> {
+pub fn single_field_constant<'a>(program: &'a Program, mut value: Constant<'a>) -> Constant<'a> {
     let mut budget = Budget::new(super::FoldLimits {
         work: u64::MAX,
         work_per_function: u64::MAX,

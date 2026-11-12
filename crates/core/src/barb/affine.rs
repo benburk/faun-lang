@@ -11,9 +11,9 @@ use super::{Atom, ConstantView, Expr, ExprId, FnId, Local, Operation, Program};
 const TERM_LIMIT: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Affine {
-    pub(crate) constant: u64,
-    pub(crate) terms: Vec<(Atom, u64)>,
+pub struct Affine {
+    pub constant: u64,
+    pub terms: Vec<(Atom, u64)>,
 }
 
 impl Affine {
