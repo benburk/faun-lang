@@ -4,6 +4,8 @@
 //! neither publish it nor return any descendant. Its last use can therefore
 //! release all the storage without walking the nodes.
 
+mod nullable;
+
 use std::collections::{HashMap, HashSet};
 
 use super::natural::{Helper, Library};
@@ -30,6 +32,7 @@ pub(super) const fn node_bytes(packed: &Packed) -> u64 {
 pub(super) struct Plan {
     pub(super) constructors: HashSet<FunctionId>,
     pub(super) roots: HashSet<ValueId>,
+    pub(super) nullable: nullable::Layout,
 }
 
 fn returns_cell(p: &Program, id: FunctionId) -> bool {
@@ -232,7 +235,7 @@ impl Plan {
             return Self::default();
         }
         let readers: HashSet<_> = p.functions.ids().filter(|&id| reader(p, id)).collect();
-        let roots = caller_roots(p, &constructors);
+        let mut roots = caller_roots(p, &constructors);
         for r in p.regions.ids() {
             let uses = p.ops(r).iter().filter(
                 |op| !matches!(op, Op::Call { function, .. } if readers.contains(function)),
@@ -247,14 +250,12 @@ impl Plan {
             }
         }
         constructors.retain(|id| roots.values().any(|f| f == id));
-        let roots = roots
-            .into_iter()
-            .filter(|(_, f)| constructors.contains(f))
-            .map(|(v, _)| v)
-            .collect();
+        roots.retain(|_, f| constructors.contains(f));
+        let nullable = nullable::Layout::of(p, &roots);
         Self {
             constructors,
-            roots,
+            roots: roots.into_keys().collect(),
+            nullable,
         }
     }
 }
@@ -267,14 +268,22 @@ pub(super) struct Chunks {
     head: DataId,
     pub(super) allocate: FunctionId,
     pub(super) release: FunctionId,
+    /// Distance from a returned pointer to the beginning of its reservation.
+    /// Ordinary region cells use a virtual base to match heap field offsets.
+    pub(super) payload_offset: u64,
 }
 
 impl Chunks {
-    pub(super) fn append(p: &mut Program, library: &Library) -> Self {
+    pub(super) fn append(p: &mut Program, library: &Library, plan: &Plan) -> Self {
         let head = p.global(&[0; 8]);
         let allocate = p.declare("region.bump", &[W], &[A]);
         let release = p.declare("region.release", &[W], &[]);
-        define_allocate(p, allocate, head, library);
+        let payload_offset = if plan.nullable.builders.len() == plan.constructors.len() {
+            0
+        } else {
+            PREFIX
+        };
+        define_allocate(p, allocate, head, library, payload_offset);
         p.define(release, |b, args| {
             b.loop_(args, &[], |b, state| {
                 b.if_(state[0], &[], |b| b.yield_(&[]), |b| b.ret(&[]));
@@ -290,6 +299,7 @@ impl Chunks {
             head,
             allocate,
             release,
+            payload_offset,
         }
     }
 
@@ -302,7 +312,13 @@ impl Chunks {
     }
 }
 
-fn define_allocate(p: &mut Program, allocate: FunctionId, head: DataId, library: &Library) {
+fn define_allocate(
+    p: &mut Program,
+    allocate: FunctionId,
+    head: DataId,
+    library: &Library,
+    payload_offset: u64,
+) {
     p.define(allocate, |b, args| {
         let head_at = b.address_of(head);
         let head = b.load(Width::Word, head_at, Offset::Words(0));
@@ -331,16 +347,15 @@ fn define_allocate(p: &mut Program, allocate: FunctionId, head: DataId, library:
             },
             |b| b.yield_(&[current, room]),
         );
-        bump(b, chunk[0], chunk[1], args[0]);
+        bump(b, chunk[0], chunk[1], args[0], payload_offset);
     });
 }
 
-fn bump(b: &mut Builder, block: ValueId, room: ValueId, bytes: ValueId) {
+fn bump(b: &mut Builder, block: ValueId, room: ValueId, bytes: ValueId, payload_offset: u64) {
     let left = b.binary(Binary::Sub, room, bytes);
     b.store(Width::Word, block, Offset::Words(2), left);
-    // Actual payload starts four words into the chunk. The ordinary cell
-    // reader addresses its tag two words past the pointer we hand it.
-    let prefix = b.constant(W, PREFIX);
+    // The first reservation begins after the four chunk header words.
+    let prefix = b.constant(W, 4 * WORD - payload_offset);
     let offset = b.binary(Binary::Add, prefix, left);
     let result = super::cell::byte_offset(b, block, offset);
     b.ret(&[result]);

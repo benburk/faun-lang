@@ -103,12 +103,13 @@ fn prepare_pass<'a>(
     let unique = super::uniqueness::unique(source, &owned, &|shape| {
         shapes.packed(shape).managed().next().is_none()
     });
-    let chunks = (!plan.constructors.is_empty()).then(|| Chunks::append(output, &library));
+    let chunks = (!plan.constructors.is_empty()).then(|| Chunks::append(output, &library, &plan));
     Ok(Pass {
         fixed_claims: remaining.is_some(),
         plan,
         chunks,
         constructing: Cell::new(false),
+        nullable_builder: Cell::new(false),
         root_heads: RefCell::default(),
         source,
         library,
@@ -591,6 +592,7 @@ struct Pass<'a> {
     plan: Plan,
     chunks: Option<Chunks>,
     constructing: Cell<bool>,
+    nullable_builder: Cell<bool>,
     root_heads: RefCell<BTreeMap<ValueId, ValueId>>,
     source: &'a Program,
     library: Library,
@@ -640,6 +642,8 @@ impl Pass<'_> {
             let Some(body) = function.body() else {
                 continue;
             };
+            self.nullable_builder
+                .set(self.plan.nullable.builders.contains(&id));
             self.constructing.set(self.plan.constructors.contains(&id));
             let held = self.owned_parameters(id, body);
             output.define(id, |b, params| {
@@ -723,6 +727,9 @@ impl Pass<'_> {
         shape: ShapeId,
         claimed: &[ValueId],
     ) -> ValueId {
+        if self.nullable_builder.get() {
+            return self.nullable_cell(b, shape, claimed);
+        }
         // Without fields every one is the same, and none is allocated.
         if claimed.is_empty() {
             return b.address_of(self.shapes.bare[&tag]);
@@ -749,6 +756,20 @@ impl Pass<'_> {
         }
         let fields = self.fields_at();
         Self::store_leaves(b, (object, fields), packed, claimed);
+        object
+    }
+
+    fn nullable_cell(&self, b: &mut Builder, shape: ShapeId, fields: &[ValueId]) -> ValueId {
+        if fields.is_empty() {
+            return b.constant(Class::Address, 0);
+        }
+        let packed = self.shapes.packed(shape);
+        // Even fields requiring zero bits must yield a non-null pointer.
+        let size = packed.size.max(1).next_multiple_of(self.word_bytes);
+        let bytes = b.constant(Class::Word, size);
+        let chunks = self.chunks.expect("region constructor");
+        let object = b.call_one(chunks.allocate, &[bytes]);
+        Self::store_leaves(b, (object, chunks.payload_offset), packed, fields);
         object
     }
 
@@ -926,7 +947,11 @@ impl Pass<'_> {
         (shape, index): (ShapeId, u32),
     ) -> ValueId {
         let packed = self.shapes.packed(shape);
-        let fields = self.fields_at();
+        let fields = if self.plan.nullable.cells.contains_key(&cell) {
+            self.chunks.expect("region reader").payload_offset
+        } else {
+            self.fields_at()
+        };
         self.load_leaf(b, old_result, (self.value(cell), fields), (packed, index))
     }
 
@@ -1096,7 +1121,10 @@ impl Pass<'_> {
                     .collect();
                 self.construct_cell(b, tag, shape, &claimed)
             }
-            Op::CellTag { cell } => b.load(Width::Word, v(cell), Offset::Words(cell::TAG)),
+            Op::CellTag { cell } => match self.plan.nullable.cells.get(&cell) {
+                Some(tags) => tags.read(b, v(cell)),
+                None => b.load(Width::Word, v(cell), Offset::Words(cell::TAG)),
+            },
             Op::CellField { cell, index, shape } => {
                 self.cell_field(b, results[0], cell, (shape, index))
             }

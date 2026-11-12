@@ -78,6 +78,13 @@ impl Program {
                     "# {} builds in a caller-owned region on the growing 64-bit heap: every subtree joins the result and every root use borrows it",
                     self.name(f.name)
                 );
+                if plan.nullable.builders.contains(&id) {
+                    let _ = writeln!(
+                        out,
+                        "# {} encodes empty as null and stores only payload fields in region nodes",
+                        self.name(f.name)
+                    );
+                }
             }
         }
     }
