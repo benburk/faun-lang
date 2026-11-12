@@ -56,8 +56,17 @@ impl Program {
                 self.name(function.name)
             );
         }
-        self.render_regions(&mut out);
+        self.render_regions(&mut out, &self.cell_borrows());
         out
+    }
+
+    fn cell_borrows(&self) -> Vec<bool> {
+        if self.ops.iter().any(|op| matches!(op, Op::CellField { .. })) {
+            let owned = super::ownership::owned_parameters(self);
+            super::ownership::borrowed_cells(self, &owned)
+        } else {
+            Vec::new()
+        }
     }
 
     /// Each shape an object or an element is stored as, by the leaves it
@@ -82,7 +91,7 @@ impl Program {
             .join(", ")
     }
 
-    fn render_regions(&self, out: &mut String) {
+    fn render_regions(&self, out: &mut String, borrowed: &[bool]) {
         for id in self.regions.ids() {
             let region = self.region(id);
             let _ = writeln!(
@@ -96,7 +105,15 @@ impl Program {
                 if !results.is_empty() {
                     let _ = write!(out, "{} = ", self.bindings(results));
                 }
-                let _ = writeln!(out, "{}", self.render_op(*op, results));
+                let _ = write!(out, "{}", self.render_op(*op, results));
+                if matches!(op, Op::CellField { .. }) && self.class(results[0]) == Class::Cell {
+                    out.push_str(if borrowed[results[0].index()] {
+                        "  # borrowed from caller through immutable cells"
+                    } else {
+                        "  # retain child independently of parent"
+                    });
+                }
+                out.push('\n');
             }
             if let Some(term) = region.terminator {
                 let _ = writeln!(

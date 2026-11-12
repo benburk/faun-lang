@@ -125,6 +125,34 @@ pub(super) fn owned_parameters(source: &Program) -> Vec<Vec<bool>> {
     }
 }
 
+/// Cells kept alive by the caller for the entire activation. An immutable
+/// cell owns its child, so projecting another cell from a borrowed one
+/// extends the same borrow, including inside a branch or loop. Joins,
+/// carried state and call results already receive claims on transfer.
+pub(super) fn borrowed_cells(source: &Program, owned: &[Vec<bool>]) -> Vec<bool> {
+    let mut borrowed = vec![false; source.values_count()];
+    for (id, function) in source.functions.iter_enumerated() {
+        let Some(body) = function.body() else {
+            continue;
+        };
+        for (&param, &owns) in source
+            .values(source.region(body).params)
+            .iter()
+            .zip(taken(owned, id))
+        {
+            borrowed[param.index()] = source.class(param) == Class::Cell && !owns;
+        }
+        for (op, results) in source.walk_within(body) {
+            if let Op::CellField { cell, .. } = *op
+                && source.class(results[0]) == Class::Cell
+            {
+                borrowed[results[0].index()] = borrowed[cell.index()];
+            }
+        }
+    }
+    borrowed
+}
+
 /// What an instruction building a sequence from `operands` takes a claim
 /// to. A push takes its buffer and its fields, past the start and length,
 /// and a replacement past its index too; and a prepend or a join both

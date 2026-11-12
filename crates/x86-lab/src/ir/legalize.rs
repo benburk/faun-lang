@@ -82,6 +82,7 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         divisors,
         values: vec![Cell::new(None); source.values_count()],
         unique,
+        borrowed_cells: ownership::borrowed_cells(source, &owned),
         owned,
     };
     pass.define_bodies(&mut output);
@@ -600,6 +601,9 @@ struct Pass<'a> {
     values: Vec<Cell<Option<ValueId>>>,
     /// Which parameters of each function own a claim.
     owned: Vec<Vec<bool>>,
+    /// A field borrowed from a caller-owned root needs a claim only when
+    /// an operation takes it or it leaves the activation.
+    borrowed_cells: Vec<bool>,
     /// Which replacements write a buffer nothing else holds, and which
     /// loops make theirs one on entry.
     unique: super::uniqueness::Unique,
@@ -738,7 +742,7 @@ impl Pass<'_> {
     }
 
     /// Load leaf `index` of `packed`, the first `at` bytes past `object`,
-    /// as `old_result` is read, holding a claim to it.
+    /// as `old_result` is read. A caller-rooted cell field may be borrowed.
     fn load_leaf(
         &self,
         b: &mut Builder,
@@ -760,7 +764,11 @@ impl Pass<'_> {
         } else {
             b.convert(represented, value)
         };
-        self.retained(b, class, value)
+        if self.borrowed_cells[old_result.index()] {
+            value
+        } else {
+            self.retained(b, class, value)
+        }
     }
 
     /// Push one element, whose leaves' claims it takes, onto a sequence
@@ -911,7 +919,7 @@ impl Pass<'_> {
             let fresh = self.op(b, *op, results, scopes, &live, at);
             for (&old, new) in results.iter().zip(fresh) {
                 self.mapped(old, new);
-                if managed(self.source.class(old)) {
+                if managed(self.source.class(old)) && !self.borrowed_cells[old.index()] {
                     top(scopes).held.push(old);
                 }
             }

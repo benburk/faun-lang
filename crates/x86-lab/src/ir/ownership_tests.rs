@@ -11,6 +11,78 @@ struct Observer {
     calls: Vec<String>,
 }
 
+/// A projection crosses a branch and a loop, then escapes twice. Both
+/// returned aliases must survive reclamation of the original parent.
+fn escaping_children(p: &mut Program, link: ShapeId) -> FunctionId {
+    let select = p.declare("select", &[Class::Cell, Class::Word], &[Class::Cell; 2]);
+    p.define(select, |b, args| {
+        let child = b.cell_field((Class::Cell, link), args[0], 0);
+        let leaf = b.cell_field((Class::Cell, link), child, 0);
+        let joined = b.if_(
+            args[1],
+            &[Class::Cell],
+            |b| b.yield_(&[leaf]),
+            |b| b.ret(&[leaf, leaf]),
+        );
+        let one = b.constant(Class::Word, 1);
+        let result = b.loop_(&[joined[0], one], &[Class::Cell], |b, state| {
+            b.if_(
+                state[1],
+                &[],
+                |b| {
+                    let zero = b.constant(Class::Word, 0);
+                    b.continue_(&[leaf, zero]);
+                },
+                |b| b.break_(&[state[0]]),
+            );
+        });
+        b.ret(&[result[0], leaf]);
+    });
+    select
+}
+
+#[test]
+fn projected_children_acquire_claims_when_they_escape_a_borrowed_root() {
+    for choice in [0, 1] {
+        let (mut p, main) = Program::new("main");
+        let link = p.shape(&[Class::Cell]);
+        let payload = p.shape(&[Class::Word]);
+        let select = escaping_children(&mut p, link);
+        p.define(main, |b, _| {
+            let old = b.constant(Class::Word, 21);
+            let leaf = b.cell(0, payload, &[old]);
+            let inner = b.cell(0, link, &[leaf]);
+            let root = b.cell(0, link, &[inner]);
+            let choice = b.constant(Class::Word, choice);
+            let aliases = b.call(select, &[root, choice]);
+            // Reuse freed space before observing the old value.
+            let new = b.constant(Class::Word, 99);
+            let fresh = b.cell(0, payload, &[new]);
+            let values: Vec<_> = [aliases[0], aliases[1], fresh]
+                .into_iter()
+                .map(|cell| b.cell_field((Class::Word, payload), cell, 0))
+                .collect();
+            let sum = b.binary(Binary::Add, values[0], values[1]);
+            let sum = b.binary(Binary::Add, sum, values[2]);
+            b.ret(&[sum]);
+        });
+        let config = natural::Config {
+            word_bits: 64,
+            heap_bytes: 512,
+            grows: false,
+            inline_small: true,
+            inline_counts: false,
+            join_routines: false,
+        };
+        assert_eq!(p.render().matches("# borrowed from caller").count(), 2);
+        let scalar = legalize(&p, config).unwrap();
+        let (after, _) = run(&scalar, 64, &[]);
+        assert_eq!(after.returned().unwrap(), [BigUint::from(141u8)]);
+        assert_eq!(after.outcome, run(&p, 64, &[]).0.outcome);
+        no_live_objects(&scalar, &after, config);
+    }
+}
+
 impl Host for Observer {
     fn call(
         &mut self,
