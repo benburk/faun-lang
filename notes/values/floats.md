@@ -146,7 +146,11 @@ defines a total order, so none was invented. The same reasoning makes
 The cost is that `-0.0 == 0.0` is false, and that `<` is the total order's,
 so `1.0 < F64.nan` is true where the hardware says false. Code that wants
 the hardware's answers names them: `numeric_equals`, `partial_cmp`,
-`is_nan`.
+`is_nan`. It costs little time: an `F64`'s place in the order is its
+pattern with the bits of a negative one flipped and the sign bit of any
+other set, a word, so a comparison is one of two words. Worked out as a
+natural, as the core's `rank` gives it, a positive pattern's place lies
+past a word, and mandelbrot's escape test ran eight times slower.
 
 ### Why one NaN?
 
