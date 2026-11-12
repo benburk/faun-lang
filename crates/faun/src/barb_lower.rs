@@ -405,6 +405,15 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.output.declare_type(&name)
             };
+            if let Type::Named(symbol, args) = ty {
+                let byte = Type::Named(self.prelude.u8_, Vec::new());
+                if *symbol == self.prelude.str_ && args.is_empty() {
+                    self.output.mark_byte_sequence(id, barb::ByteSequence::Text);
+                } else if *symbol == self.prelude.list && args.as_slice() == [byte] {
+                    self.output
+                        .mark_byte_sequence(id, barb::ByteSequence::Bytes);
+                }
+            }
             self.type_ids.insert(ty.clone(), id);
         }
     }
@@ -1557,6 +1566,15 @@ mod tests {
             let entry = named(&checked, suffix);
             let program = program(&checked, entry).unwrap();
             barb::validate(&program).unwrap();
+            if suffix == "$$text" {
+                let text = program.function(program.entry().unwrap()).result;
+                assert_eq!(program.byte_sequence(text), Some(barb::ByteSequence::Text));
+                let (_, bytes) = barb::single_field(&program, text).unwrap();
+                assert_eq!(
+                    program.byte_sequence(bytes),
+                    Some(barb::ByteSequence::Bytes)
+                );
+            }
         }
     }
 

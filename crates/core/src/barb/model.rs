@@ -55,8 +55,17 @@ pub struct Arm {
     pub body: Body,
 }
 
+/// The canonical byte sequence types identified by the frontend's literal contract.
+/// Layout and inline capacity belong to the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ByteSequence {
+    Bytes,
+    Text,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Type {
+    pub(super) byte_sequence: Option<ByteSequence>,
     pub name: Symbol,
     /// Whether diagnostic rendering writes this type at each use rather than
     /// as a separate declaration.

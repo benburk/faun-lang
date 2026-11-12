@@ -344,8 +344,20 @@ impl Program {
         self.types.push(Type {
             name,
             inline,
+            byte_sequence: None,
             definition: TypeDefinition::Declared,
         })
+    }
+
+    /// Record the source identity supplied by the frontend. A structurally identical
+    /// declaration in another module need not carry the same byte or text contract.
+    pub fn mark_byte_sequence(&mut self, ty: TypeId, kind: super::ByteSequence) {
+        self.types[ty].byte_sequence = Some(kind);
+    }
+
+    #[must_use]
+    pub fn byte_sequence(&self, ty: TypeId) -> Option<super::ByteSequence> {
+        self.types[ty].byte_sequence
     }
 
     /// Give a reserved type its constructors, once, in tag order.

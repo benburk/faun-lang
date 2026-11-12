@@ -138,8 +138,8 @@ pub use facts::{Facts, Operation, SequenceOperation};
 
 pub use inline::InlineLimits;
 pub use model::{
-    Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,
-    Range, Symbol, Type, TypeId,
+    Arm, Atom, Body, ByteSequence, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId,
+    Function, Local, Range, Symbol, Type, TypeId,
 };
 #[cfg(test)]
 pub(crate) use normalize::fold;
