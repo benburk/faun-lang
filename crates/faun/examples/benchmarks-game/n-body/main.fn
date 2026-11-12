@@ -138,5 +138,9 @@ expect energy(system).to_fixed(9) == "-0.169075164"
 expect energy(steps(system, 1)).to_fixed(9) == "-0.169074954"
 expect energy(steps(system, 10)).to_fixed(9) == "-0.169073022"
 
+# The game's output, or an empty line where the argument is no size.
 main! : Host -> []
-main!(host) -> host.run!(app)
+main!(host) -> (
+  printed = host.print_lines!([app({args: host.args}).ok_or("")])
+  host.exit!(0)
+)

@@ -64,5 +64,9 @@ expect norm(1).to_fixed(9) == "1.000000000"
 expect norm(10).to_fixed(9) == "1.271844019"
 expect norm(100).to_fixed(9) == "1.274219991"
 
+# The game's output, or an empty line where the argument is no size.
 main! : Host -> []
-main!(host) -> host.run!(app)
+main!(host) -> (
+  printed = host.print_lines!([app({args: host.args}).ok_or("")])
+  host.exit!(0)
+)

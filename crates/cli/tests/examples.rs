@@ -570,7 +570,7 @@ fn the_syntax_examples_hold() {
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[test]
 fn the_nbody_examples_hold() {
-    for path in ["nbody/main.fn", "nbody-untyped/main.fn"] {
+    for path in ["benchmarks-game/n-body/main.fn", "nbody-untyped/main.fn"] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
             .arg("test")
             .arg(example(path))
@@ -590,12 +590,55 @@ fn the_nbody_examples_hold() {
 fn the_spectralnorm_example_holds() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
         .arg("test")
-        .arg(example("spectralnorm/main.fn"))
+        .arg(example("benchmarks-game/spectral-norm/main.fn"))
         .output()
         .unwrap();
     let said = String::from_utf8(output.stdout).unwrap();
     assert!(output.status.success(), "{said}");
     assert_eq!(said, "3 expectations hold\n");
+}
+
+/// Each benchmarks-game program, built and run at the size the game checks
+/// it at, writes the game's own output; k-nucleotide reads what fasta writes.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn the_benchmarks_game_programs_write_the_games_output() {
+    let game = example("benchmarks-game");
+    let built = std::env::temp_dir().join(format!("faun-game-{}", std::process::id()));
+    std::fs::create_dir_all(&built).unwrap();
+    for (name, size) in [
+        ("binary-trees", "10"),
+        ("fannkuch-redux", "7"),
+        ("fasta", "1000"),
+        ("k-nucleotide", "1000"),
+        ("mandelbrot", "200"),
+        ("n-body", "1000"),
+        ("pidigits", "27"),
+        ("spectral-norm", "100"),
+    ] {
+        let image = built.join(name);
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+            .arg("build")
+            .arg(format!("--output={}", image.display()))
+            .arg(game.join(name).join("main.fn"))
+            .status()
+            .unwrap();
+        assert!(status.success(), "{name} builds");
+        let mut run = std::process::Command::new(&image);
+        if name == "k-nucleotide" {
+            let fasta = std::fs::File::open(game.join("fasta/1000.out")).unwrap();
+            run.stdin(fasta);
+        } else {
+            run.arg(size);
+        }
+        let output = run.output().unwrap();
+        let expected = std::fs::read(game.join(name).join(format!("{size}.out"))).unwrap();
+        assert!(
+            output.stdout == expected,
+            "{name} at {size} writes the game's output"
+        );
+    }
+    std::fs::remove_dir_all(&built).unwrap();
 }
 
 /// Ori's Newton's method, ported: its expectations hold, and running it

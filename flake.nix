@@ -69,6 +69,8 @@
               # which tree-sitter evaluates with node.
               tree-sitter
               nodejs
+              # The benchmarks game's C pidigits does its arithmetic with GMP.
+              gmp
             ];
           };
         }

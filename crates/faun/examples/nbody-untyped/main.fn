@@ -11,7 +11,7 @@
 # system's energy before and after stepping, to nine decimal places; the game
 # accepts an answer within 1.0e-8 of its reference.
 #
-# `nbody/main.fn` with every signature taken away, each type inferred.
+# `benchmarks-game/n-body/main.fn` with every signature taken away, each type inferred.
 
 import std.host {Host}
 

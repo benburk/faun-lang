@@ -33,8 +33,13 @@ BENCHMARKS = [
     ("json-decode", EXAMPLES / "libraries/json/bench/decode.fn", [], "users.json"),
     ("grep", HERE / "grep.fn", [".*(error|warn).*timeout.*"], "log.txt"),
     ("sat", HERE / "sat.fn", ["7"], None),
-    ("nbody", EXAMPLES / "nbody/main.fn", ["5000000"], None),
-    ("spectralnorm", EXAMPLES / "spectralnorm/main.fn", ["2000"], None),
+    ("nbody", EXAMPLES / "benchmarks-game/n-body/main.fn", ["5000000"], None),
+    (
+        "spectralnorm",
+        EXAMPLES / "benchmarks-game/spectral-norm/main.fn",
+        ["2000"],
+        None,
+    ),
 ]
 
 

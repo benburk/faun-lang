@@ -65,6 +65,11 @@ helix:
     ln -sfn ../tree-sitter-faun/parser "$runtime/grammars/faun.so"
     ln -sfn ../tree-sitter-faun/queries "$runtime/queries/faun"
 
+# Score the benchmarks-game programs against the game's C programs; `--game` measures at its sizes
+benchmarks-game *args:
+    cargo build --release -q -p faun-cli
+    python3 crates/faun/examples/benchmarks-game/run.py {{ args }}
+
 # Time the benchmark programs pinned to `cpu`; `--faun LABEL=PATH` compares compilers
 bench cpu *args:
     cargo build --release -q -p faun-cli

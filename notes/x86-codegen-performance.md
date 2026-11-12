@@ -131,6 +131,19 @@ it would save about 1% more here, and it wants a branch of many ways that
 every pass and target lacks, where the search is written with the tests
 there already.
 
+## Benchmarks game
+
+[`examples/benchmarks-game`](../crates/faun/examples/benchmarks-game)
+scores eight of the game's programs against its C ones, by time, memory and
+compressed source. The programs are written plainly rather than tuned, so
+each slow one says what the compiler has yet to learn; its README lists
+them. Writing them found `F64.cmp` working out each place in the total
+order as a natural past a word ([floats](values/floats.md)): a draft of
+mandelbrot that kept its sizes in words ran 18.4 seconds at 4,000, and 2.1
+once the place was a word. Comparing the two places still calls
+`Nat.cmp`, which boxes a word past 2^63, and that is most of what the
+plain mandelbrot's 11.4 seconds there is spent on.
+
 ## Size
 
 The size ratchets in `crates/core/tests/support/backend.rs` measure the

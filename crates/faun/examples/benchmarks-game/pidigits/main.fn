@@ -1,0 +1,63 @@
+# Pidigits, after the benchmarks-game program of the same name: the first
+# `n` digits of pi, by the unbounded spigot, ten to a line.
+#
+# This is the benchmark of numbers past any machine word. The spigot keeps
+# three integers that grow by a few digits for every digit it gives, so it
+# measures `Int`'s arithmetic on many-digit numbers: multiplying and
+# dividing by small numbers, and dividing one large number by another. The
+# accumulator goes below nought where a digit is taken off, so they are
+# integers rather than naturals.
+#
+# The first argument is `n`. What is printed is the game's own output.
+
+import std.host {Host}
+
+# The spigot's state: a fraction's numerator, accumulator and denominator.
+Spigot = {num: Int, acc: Int, den: Int}
+
+# The next term, the `k`th, folded into the fraction.
+term : (Spigot, Int) -> Spigot
+term({num, acc, den}, k) -> (
+  k2 = 2 * k + 1
+  {num: num * k, acc: (acc + 2 * num) * k2, den: den * k2}
+)
+
+# The digit the fraction holds, where `nth` is 3 and 4 alike.
+digit : (Spigot, Int) -> Int
+digit({num, acc, den}, nth) -> (num * nth + acc) / den
+
+# The fraction with the digit `d` taken off the front.
+eliminated : (Spigot, Int) -> Spigot
+eliminated({num, acc, den}, d) -> {num: num * 10, acc: (acc - den * d) * 10, den}
+
+# The `n` digits left after `spigot`, the `k`th term the last folded in.
+digits : (Spigot, Int, Nat) -> List(Int)
+digits(_, _, 0) -> []
+digits(spigot, k, n) -> (
+  spigot = term(spigot, k + 1)
+  if spigot.num > spigot.acc return digits(spigot, k + 1, n)
+  d = digit(spigot, 3)
+  if d != digit(spigot, 4) return digits(spigot, k + 1, n)
+  [d, *digits(eliminated(spigot, d), k + 1, n - 1)]
+)
+
+# Ten digits to a line, each line ending with a tab, a colon and how many
+# digits so far; the last line filled out with spaces.
+lines : List(Int) -> List(Str)
+lines(all) -> (
+  blocks = all.blocks(10)
+  rows = if blocks.remainder.is_empty() then blocks.complete else blocks.complete.append(blocks.remainder)
+  rows.enumerate().map(|(at, row)| "${row.map(|d| "${d}").join("").pad_end(10)}\t:${at * 10 + row.len()}")
+)
+
+pi : Nat -> List(Str)
+pi(n) -> lines(digits({num: 1, acc: 0, den: 1}, 0, n))
+
+expect pi(27) == ["3141592653\t:10", "5897932384\t:20", "6264338   \t:27"]
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("27")).ok_or(27)
+  printed = host.print_lines!(pi(n))
+  host.exit!(0)
+)

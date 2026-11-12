@@ -1,6 +1,6 @@
 # Spectral-norm performance
 
-[`main.fn`](../crates/faun/examples/spectralnorm/main.fn) ports the benchmarks
+[`main.fn`](../crates/faun/examples/benchmarks-game/spectral-norm/main.fn) ports the benchmarks
 game's [spectral-norm](https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/spectralnorm.html):
 ten rounds of the power method on the leading `n` by `n` corner of the
 matrix whose entry at row `i` and column `j`, from nought, is
@@ -136,18 +136,18 @@ For integer programs like the first version, which are common:
 ```sh
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -fno-tree-vectorize -Wall -Wextra -Werror \
-  crates/faun/examples/spectralnorm/reference.c -lm -o /tmp/spectralnorm-c-scalar
+  crates/faun/examples/benchmarks-game/spectral-norm/reference.c -lm -o /tmp/spectralnorm-c-scalar
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -Wall -Wextra -Werror \
-  crates/faun/examples/spectralnorm/reference.c -lm -o /tmp/spectralnorm-c-auto
+  crates/faun/examples/benchmarks-game/spectral-norm/reference.c -lm -o /tmp/spectralnorm-c-auto
 nix develop --command cargo build --release
-target/release/faun build crates/faun/examples/spectralnorm/main.fn -o /tmp/spectralnorm-faun
+target/release/faun build crates/faun/examples/benchmarks-game/spectral-norm/main.fn -o /tmp/spectralnorm-faun
 python3 crates/faun/examples/compare.py --cpu 10 --argument 5500 \
   --check 1,2,3,7,10,100,500,1000,2000 --runs 5 \
   /tmp/spectralnorm-faun /tmp/spectralnorm-c-scalar /tmp/spectralnorm-c-auto
 ```
 
-[`reference.c`](../crates/faun/examples/spectralnorm/reference.c) keeps
+[`reference.c`](../crates/faun/examples/benchmarks-game/spectral-norm/reference.c) keeps
 Faun's order of operations: the indices as doubles, the column counted in
 them, each row summed left to right from nought, and the two final sums in
 one pass. At `n = 0` Faun prints `NaN` and C `-nan`, so the comparison

@@ -1,0 +1,58 @@
+# Binary trees, after the benchmarks-game program of the same name: build
+# perfect binary trees of each depth and count their nodes, many times
+# over, while one long-lived tree stays alive the whole while.
+#
+# This is the benchmark of making and dropping small values. Every node is
+# a cell made and freed, so it measures the allocator, the counts that say
+# when a node's last claim goes, and freeing a tree a node at a time.
+#
+# The first argument is the deepest tree's depth. What is printed is the
+# game's own output.
+
+import std.host {Host}
+
+Tree : [Leaf, Node(Tree, Tree)]
+
+# A perfect tree `depth` levels below its root.
+made : Nat -> Tree
+made(0) -> Leaf
+made(depth) -> Node(made(depth - 1), made(depth - 1))
+
+# How many nodes `tree` holds, its leaves among them.
+checked : Tree -> Nat
+checked(Leaf) -> 1
+checked(Node(left, right)) -> 1 + checked(left) + checked(right)
+
+least : Nat
+least = 4
+
+# The lines for each depth from `depth` to `most` by twos: as many trees
+# of the depth as the deepest, made and counted one at a time.
+rounds : (Nat, Nat) -> List(Str)
+rounds(depth, most) if depth > most -> []
+rounds(depth, most) -> (
+  count = 2.pow(most - depth + least)
+  sum = count.times(0, |sum| sum + checked(made(depth)))
+  ["${count}\t trees of depth ${depth}\t check: ${sum}", *rounds(depth + 2, most)]
+)
+
+lines : Nat -> List(Str)
+lines(n) -> (
+  most = n.max(least + 2)
+  stretch = most + 1
+  # The stretch tree is made and dropped before the long-lived one is made.
+  stretched = "stretch tree of depth ${stretch}\t check: ${checked(made(stretch))}"
+  long_lived = made(most)
+  [stretched, *rounds(least, most)].append("long lived tree of depth ${most}\t check: ${checked(long_lived)}")
+)
+
+expect lines(4).len() == 4
+expect checked(made(10)) == 2047
+
+main! : Host -> []
+main!(host) -> (
+  n = host.args.get(1).ok_or("10")
+  depth = Nat.from_str(n).ok_or(10)
+  printed = host.print_lines!(lines(depth))
+  host.exit!(0)
+)

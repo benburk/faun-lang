@@ -193,7 +193,7 @@ signature moves the error back to the definition.
 ### Why are signatures optional, and why `_`?
 
 A signature should be written for a reader, not for the compiler. The
-n-body benchmark is in the repository twice: `examples/nbody` with 20
+n-body benchmark is in the repository twice: `examples/benchmarks-game/n-body` with 20
 signatures and `examples/nbody-untyped` with none. Both compile to
 identical x86-64 code.
 

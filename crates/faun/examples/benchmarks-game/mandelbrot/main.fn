@@ -1,0 +1,61 @@
+# Mandelbrot, after the benchmarks-game program of the same name: the
+# Mandelbrot set on an `n` by `n` grid, as a PBM bitmap, a pixel set where
+# its point stays within two of nought for fifty steps.
+#
+# This is the benchmark of floating-point arithmetic in a tight walk: each
+# pixel is up to fifty steps of a few multiplications and additions, then
+# the pixels are packed eight to a byte.
+#
+# The first argument is `n`. What is written is the game's own output.
+
+import std.host {Host, WriteError}
+
+Complex = {re: F64, im: F64}
+
+# Whether `c` stays within two of nought for `left` more steps of `z² + c`,
+# from `z`.
+stays : (Complex, Complex, Nat) -> Bool
+stays(_, {re, im}, _) if re * re + im * im > 4.0 -> False
+stays(_, _, 0) -> True
+stays(c, {re, im}, left) -> stays(c, {re: re * re - im * im + c.re, im: 2.0 * re * im + c.im}, left - 1)
+
+# Where on the grid, from `low` to two past it, place `at` of `n` lies.
+coordinate : (Nat, Nat, F64) -> F64
+coordinate(at, n, low) -> 2.0 * F64.of_nat(at) / F64.of_nat(n) - low
+
+bit : Bool -> Nat
+bit(True) -> 1
+bit(False) -> 0
+
+# Up to eight pixels as a byte, the first the highest bit, a short last one
+# filled out with unset bits.
+packed : List(Bool) -> U8
+packed(pixels) -> U8.of_nat(pixels.fold(0, |byte, set| byte * 2 + bit(set)) * 2.pow(8 - pixels.len()))
+
+# Row `y` of the bitmap, packed.
+row : (Nat, Nat) -> List(U8)
+row(y, n) -> (
+  im = coordinate(y, n, 1.0)
+  pixels = List.range(n).map(|x| stays({re: coordinate(x, n, 1.5), im}, {re: 0.0, im: 0.0}, 50))
+  blocks = pixels.blocks(8)
+  blocks.complete.append(blocks.remainder).filter(|block| !block.is_empty()).map(packed)
+)
+
+expect row(0, 8) == [U8.of_nat(0)]
+expect stays({re: -0.5, im: 0.0}, {re: 0.0, im: 0.0}, 50) & !stays({re: 1.0, im: 1.0}, {re: 0.0, im: 0.0}, 50)
+
+# Rows `y` to `n - 1`, written a row at a time.
+drawn! : (Host, Nat, Nat) -> Result({}, WriteError)
+drawn!(_, y, n) if y == n -> Ok({})
+drawn!(host, y, n) -> (
+  host.stdout.write_all!(row(y, n))?
+  drawn!(host, y + 1, n)
+)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("200")).ok_or(200)
+  header = host.print!("P4\n${n} ${n}\n")
+  drawn = drawn!(host, 0, n)
+  host.exit!(0)
+)

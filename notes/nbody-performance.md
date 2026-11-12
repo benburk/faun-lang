@@ -60,7 +60,7 @@ entering `kick`, and writes every element without asking, at 309 cycles.
 
 ## Comparison with C
 
-[`reference.c`](../crates/faun/examples/nbody/reference.c) uses a five-element
+[`reference.c`](../crates/faun/examples/benchmarks-game/n-body/reference.c) uses a five-element
 array and ordinary nested loops. It preserves Faun's pair order, expression
 grouping, momentum offset and right-associated energy sum. It has no hand-written
 SIMD, approximate reciprocal square root, FMA or reassociation. It updates the
@@ -361,13 +361,13 @@ Build the C controls and inspect the scalar compiler's assembly:
 ```sh
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -fno-tree-vectorize -Wall -Wextra -Werror \
-  crates/faun/examples/nbody/reference.c -lm -o /tmp/nbody-c-scalar
+  crates/faun/examples/benchmarks-game/n-body/reference.c -lm -o /tmp/nbody-c-scalar
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -Wall -Wextra -Werror \
-  crates/faun/examples/nbody/reference.c -lm -o /tmp/nbody-c-auto
+  crates/faun/examples/benchmarks-game/n-body/reference.c -lm -o /tmp/nbody-c-auto
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -fno-tree-vectorize -S -masm=intel -fverbose-asm \
-  crates/faun/examples/nbody/reference.c -o /tmp/nbody-c.s
+  crates/faun/examples/benchmarks-game/n-body/reference.c -o /tmp/nbody-c.s
 ```
 
 Build once in each revision, preserving binaries under distinct names. For
@@ -375,8 +375,8 @@ the changed revision:
 
 ```sh
 nix develop --command cargo build --release
-target/release/faun build crates/faun/examples/nbody/main.fn -o /tmp/nbody-after
-target/release/faun emit machine crates/faun/examples/nbody/main.fn > /tmp/nbody.ir
+target/release/faun build crates/faun/examples/benchmarks-game/n-body/main.fn -o /tmp/nbody-after
+target/release/faun emit machine crates/faun/examples/benchmarks-game/n-body/main.fn > /tmp/nbody.ir
 objdump -D -b binary -m i386:x86-64 -M intel /tmp/nbody-after > /tmp/nbody.asm
 ```
 

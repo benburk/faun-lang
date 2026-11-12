@@ -1,0 +1,66 @@
+# Fannkuch-redux, after the benchmarks-game program of the same name: for
+# every permutation of `0` to `n - 1`, in the game's order, count how many
+# times its front must be turned over until `0` is first, turning over as
+# many as the first says. Print a checksum of the counts and the most.
+#
+# This is the benchmark of short lists rebuilt in a tight walk: each flip
+# takes a list apart and builds it again, and each next permutation turns
+# a prefix round. It measures building and dropping small lists, and the
+# walks over them.
+#
+# The first argument is `n`. What is printed is the game's own output.
+
+import std.host {Host}
+
+# How many flips put `0` first, `done` already made.
+flips : (List(Nat), Nat) -> Nat
+flips([0, *_], done) -> done
+flips(p is [first, *_], done) -> flips(p.take(first + 1).reverse().concat(p.drop(first + 1)), done + 1)
+flips([], done) -> done
+
+# `perm` with its first `r + 1` turned left by one.
+turned : (List(Nat), Nat) -> List(Nat)
+turned(perm, r) -> perm.take(r + 1) is (
+  [first, *rest] then rest.append(first).concat(perm.drop(r + 1))
+  [] then perm
+)
+
+# The next permutation in the game's order: the prefix `r + 1` long turned,
+# and where its turns have run out the next longer one; none past the last.
+following : (List(Nat), List(Nat), Nat) -> Result((List(Nat), List(Nat), Nat), [Done])
+following(perm, _, r) if r == perm.len() -> Err(Done)
+following(perm, count, r) -> (
+  perm = turned(perm, r)
+  left = count.get_or(r, 1) - 1
+  count = count.put(r, left)
+  if left > 0 then Ok((perm, count, r)) else following(perm, count, r + 1)
+)
+
+# Every permutation from `perm` on, `seen` before it: the checksum, adding
+# the flips of each even one and taking those of each odd one, and the
+# most flips. `count` says how many turns each prefix has left, and those
+# below `r` start again.
+walk : (List(Nat), List(Nat), Nat, Nat, Int, Nat) -> (Int, Nat)
+walk(perm, count, r, seen, checksum, most) -> (
+  count = List.range(r).map(|i| i + 1).concat(count.drop(r))
+  flipped = flips(perm, 0)
+  checksum = if seen % 2 == 0 then checksum + Int.of_nat(flipped) else checksum - Int.of_nat(flipped)
+  most = most.max(flipped)
+  following(perm, count, 1) is (
+    Ok((perm, count, r)) then walk(perm, count, r, seen + 1, checksum, most)
+    Err(_) then (checksum, most)
+  )
+)
+
+fannkuch : Nat -> (Int, Nat)
+fannkuch(n) -> walk(List.range(n), List.repeat(0, n), n, 0, 0, 0)
+
+expect fannkuch(7) == (228, 16)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("7")).ok_or(7)
+  (checksum, most) = fannkuch(n)
+  printed = host.print_lines!(["${checksum}", "Pfannkuchen(${n}) = ${most}"])
+  host.exit!(0)
+)

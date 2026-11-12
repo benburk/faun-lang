@@ -1,0 +1,51 @@
+# K-nucleotide, after the benchmarks-game program of the same name: read
+# the third sequence of a FASTA file, as `fasta` writes it, and count how
+# often each run of `k` bases occurs in it. Print the share of each single
+# base and each pair, most frequent first, then how often five given runs
+# occur.
+#
+# This is the benchmark of a hash map under load: every place in the
+# sequence adds one to some run's count, for seven lengths of run.
+#
+# What is read is standard input. What is printed is the game's own output.
+
+import std.host {Host}
+
+# The bases of the sequence named `>THREE`, in capitals.
+third : List(Str) -> List(U8)
+third(lines) -> lines.drop_while(|line| !line.starts_with(">THREE")).drop(1)
+  .flat_map(|line| line.to_utf8().map(|base| base.to_ascii_upper()))
+
+# How often each run of `k` bases occurs in `bases`.
+runs : (List(U8), Nat) -> Map(Str, Nat)
+runs(bases, k) -> Map.counted(bases.windows(k).map(|run| Str.from_ascii(run).ok_or("")))
+
+# Each run of `k` bases by its share of all of them, the most frequent
+# first and runs as frequent in order.
+shares : (List(U8), Nat) -> List(Str)
+shares(bases, k) -> (
+  total = bases.len() - k + 1
+  runs(bases, k).to_list()
+    .sort_on(|(run, count)| (total - count, run))
+    .map(|(run, count)| "${run} ${(100.0 * F64.of_nat(count) / F64.of_nat(total)).to_fixed(3)}")
+)
+
+# How often `run` occurs in `bases`.
+occurrences : (List(U8), Str) -> Str
+occurrences(bases, run) -> "${runs(bases, run.len()).get_or(run, 0)}\t${run}"
+
+counted : List(Str) -> List(Str)
+counted(lines) -> (
+  bases = third(lines)
+  given = ["GGT", "GGTA", "GGTATT", "GGTATTTTAATT", "GGTATTTTAATTTATAGT"]
+  shares(bases, 1).append("").concat(shares(bases, 2)).append("").concat(given.map(|run| occurrences(bases, run)))
+)
+
+expect counted([">THREE", "acgt", "ggta"]).take(5) == ["G 37.500", "A 25.000", "T 25.000", "C 12.500", ""]
+
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.lines!()
+  printed = host.print_lines!(counted(read.ok_or([])))
+  host.exit!(0)
+)
