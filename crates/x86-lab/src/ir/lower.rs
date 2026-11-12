@@ -60,6 +60,8 @@ use super::program::Program;
 use super::validate::validate;
 use crate::platform::{Built, Returns, Routine, Routines, Takes, reads, takes as takes_sentence};
 
+mod inline_bytes;
+
 #[cfg(test)]
 mod tests;
 
@@ -140,6 +142,7 @@ fn lowered(
     let bytes = argument_bytes(program, facts, entry, &demand.carries);
 
     let lowering = Lowering {
+        native_inline_bytes: routines.word() == Some(64),
         barb: program,
         facts,
         carries: demand.carries,
@@ -2104,6 +2107,7 @@ fn returned(
 }
 
 struct Lowering<'a> {
+    native_inline_bytes: bool,
     barb: &'a barb::Program,
     facts: &'a barb::Facts,
     /// Whether a value of each barb type takes a place, by type.
@@ -2785,6 +2789,9 @@ impl Lowering<'_> {
             .elements(&mut budget)
             .expect("validated constants can be revisited");
         let shape = self.element_shape(b, push, usize::from(recursive == 0));
+        if let Some(sequence) = self.inline_rows(b, &elements, shape, push, recursive) {
+            return sequence;
+        }
         let built: Vec<Vec<ValueId>> = elements
             .iter()
             .map(|fields| self.static_element(b, fields, (push, recursive)))

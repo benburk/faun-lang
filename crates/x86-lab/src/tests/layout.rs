@@ -43,3 +43,34 @@ fn checked_native_compilation_rejects_foreign_runtime_layouts() {
     .unwrap();
     assert!(!X86_64Linux.compile_machine_ir(&native).unwrap().is_empty());
 }
+
+#[test]
+fn short_table_rows_survive_projection_slicing_and_growth() {
+    let source = r#"
+import std.host {Host}
+
+texts : List(Str)
+texts = ["", "éééééééééééé", "abcdefghijklmnopqrstuvw"]
+
+raw : List(List(U8))
+raw = [[255, 192], [0, 216], [128]]
+
+main! : Host -> []
+main!(host) -> (
+  at = host.args.len()
+  text = texts.get_or(at, "")
+  bytes = raw.get_or(at - 1, [])
+  tail = text.to_utf8().drop(22)
+  grown = bytes.append(42)
+  result = [text, Str.hex(tail), Str.hex(bytes), Str.hex(grown)].join("|")
+  host.print!(result)
+  host.exit!(0)
+)
+"#;
+    let machine = super::faun::lower(source, &super::TARGET).unwrap();
+    let prepared = super::TARGET.prepare(&machine).unwrap();
+    assert_eq!(
+        super::shared::execute(&prepared),
+        (0, "éééééééééééé|c3a9|ffc0|ffc02a".into())
+    );
+}
