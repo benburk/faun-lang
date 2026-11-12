@@ -142,6 +142,18 @@ fn empty(packed: &Packed, word_bits: u16) -> Vec<u8> {
     known(packed, (&[], 1), word_bits)
 }
 
+/// A cell with no fields laid out before the program runs: immortal, so
+/// nothing frees it or counts claims to it, and one stands for every value
+/// made with its constructor. Its descriptor is nought, as it holds nothing.
+fn bare(tag: u32, word_bits: u16) -> Vec<u8> {
+    let word = usize::from(word_bits / 8);
+    let immortal = u64::MAX >> (64 - word_bits);
+    [0, immortal, u64::from(tag), 0]
+        .iter()
+        .flat_map(|value: &u64| value.to_le_bytes()[..word].to_vec())
+        .collect()
+}
+
 /// A buffer laid out before the program runs, holding one element per byte
 /// of `elements`, each that value in the element's one leaf: immortal, so
 /// nothing writes it or frees it, as [`sequence`] lays out any buffer.
@@ -274,6 +286,9 @@ struct Shapes {
     empties: Vec<Option<DataId>>,
     /// Each known buffer the program makes, of each shape, laid out.
     knowns: Knowns,
+    /// The one cell of each constructor the program makes with no fields,
+    /// by its tag, laid out.
+    bare: BTreeMap<u32, DataId>,
 }
 
 impl Shapes {
@@ -300,11 +315,19 @@ impl Shapes {
             })
             .collect();
         let (empties, knowns) = laid_out(source, output, &packed, word_bits);
+        let bare = shapes_of(source, |op| match op {
+            Op::Cell { tag, fields, .. } if fields.is_empty() => Some(tag),
+            _ => None,
+        })
+        .into_iter()
+        .map(|tag| (tag, output.intern(&bare(tag, word_bits))))
+        .collect();
         Ok(Self {
             packed,
             descriptors,
             empties,
             knowns,
+            bare,
         })
     }
 
@@ -669,6 +692,10 @@ impl Pass<'_> {
         shape: ShapeId,
         claimed: &[ValueId],
     ) -> ValueId {
+        // Without fields every one is the same, and none is allocated.
+        if claimed.is_empty() {
+            return b.address_of(self.shapes.bare[&tag]);
+        }
         let packed = self.shapes.packed(shape);
         let library = self.cells.expect("cell helpers were requested");
         // The descriptor's word, then the fields.

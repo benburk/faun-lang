@@ -96,6 +96,22 @@ stack. A retain-only and a release-only build were measured: the regression
 comes with retains, and releasing alone saves less than half as much
 elsewhere, so both are kept.
 
+## Cells with no fields
+
+A constructor with no fields, of a sum whose other constructors have them,
+was a cell allocated each time one was made: the `Continue` a processor's
+step answers in [assemulator-fn](https://github.com/benburk/assemulator-fn),
+26 million of them made and freed in 26 million steps, a third of the time.
+Each such constructor is now one immortal cell laid out in the image, so
+making one allocates nothing. The emulator ran 26% fewer instructions,
+16.97 billion down to 12.51, and 25% fewer cycles. Of the benchmarks,
+grep ran 25% fewer and the JSON ones 1% fewer, and none ran more.
+
+Keeping and dropping one still calls, since counting in place sends an
+immortal's count to the call. Asking for it before the call saved the
+emulator another 2.5%, but grep and SAT ran more instructions with the
+comparison at every count, and every image grew 3–9%, so it was not kept.
+
 ## Size
 
 The size ratchets in `crates/core/tests/support/backend.rs` measure the

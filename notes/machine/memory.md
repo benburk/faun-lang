@@ -24,7 +24,10 @@ Everything else counts nothing: words, numbers known to fit a width, a
 type whose constructors have no fields, held as its tag, and a
 one-constructor wrapper, which is held as what it wraps. Data known before
 the program runs, such as a string literal, is laid out in the image with
-a count that marks it static, and is never written or freed.
+a count that marks it static, and is never written or freed. So is a
+cell with no fields, a constructor such as `Continue` of a sum whose other
+constructors have them: every one is the same, so each constructor's is
+one static cell, and making one allocates nothing.
 
 ## Where counts are placed
 

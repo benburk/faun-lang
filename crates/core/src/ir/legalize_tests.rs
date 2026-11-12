@@ -73,6 +73,64 @@ fn a_cell_holding_a_natural_retains_and_releases_that_field() {
     no_live_objects(&legalized, &evaluation, config);
 }
 
+/// A cell with no fields is the same whatever makes it, so each of a
+/// constructor's is one immortal object laid out before the program runs:
+/// nothing allocates one, counts claims to it, or frees it.
+#[test]
+#[expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "the builder method is not lifetime-general enough as a direct callback"
+)]
+fn a_cell_with_no_fields_is_never_allocated() {
+    let (mut source, main) = Program::new("main");
+    let identity = source.declare("identity", &[Class::Cell], &[Class::Cell]);
+    source.define(identity, |b, params| b.ret(params));
+    source.define(main, |b, _| {
+        let none = b.shape(&[]);
+        let first = b.cell(1, none, &[]);
+        let again = b.cell(1, none, &[]);
+        let other = b.cell(2, none, &[]);
+        let passed = b.call_one(identity, &[again]);
+        let tags: Vec<_> = [first, passed, other]
+            .iter()
+            .map(|&cell| b.cell_tag(cell))
+            .collect();
+        let sum = b.binary(Binary::Add, tags[0], tags[1]);
+        let sum = b.binary(Binary::Add, sum, tags[2]);
+        b.ret(&[sum]);
+    });
+    for inline_counts in [false, true] {
+        let config = Config {
+            word_bits: 64,
+            heap_bytes: 512,
+            grows: false,
+            inline_small: true,
+            inline_counts,
+            join_routines: false,
+        };
+        let legalized = legalize(&source, config).unwrap();
+        let allocations = allocations_in(&legalized, &[main, identity]);
+        assert_eq!(allocations, 0, "inline counts: {inline_counts}");
+        let evaluation = run(&legalized, main, &[], 64);
+        assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(4u8)]);
+        no_live_objects(&legalized, &evaluation, config);
+    }
+}
+
+/// How many times the bodies of `functions` call the allocator: what the
+/// program itself does, past the runtime it is given.
+fn allocations_in(program: &Program, functions: &[FunctionId]) -> usize {
+    functions
+        .iter()
+        .filter_map(|f| program.functions()[f.index()].body())
+        .flat_map(|body| program.walk_within(body))
+        .filter(|(op, _)| {
+            matches!(op, Op::Call { function, .. }
+                if program.name(program.functions()[function.index()].name) == "nat.allocate")
+        })
+        .count()
+}
+
 #[derive(Default)]
 struct TestHost {
     calls: Vec<String>,
