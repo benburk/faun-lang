@@ -203,7 +203,20 @@ impl rewrite::Pass for Simplify {
                 op: Binary::Mod,
                 left,
                 right,
-            } => self.remainder(rebuild, b, left, right, results[0]),
+            } => self
+                .kept(rebuild.source(), right)
+                .is_some_and(|bits| Self::remainder(rebuild, b, left, bits, results[0])),
+            Op::Binary {
+                op: Binary::And,
+                left,
+                right,
+            } => {
+                self.masked(rebuild.source(), right)
+                    .is_some_and(|bits| Self::remainder(rebuild, b, left, bits, results[0]))
+                    || self
+                        .masked(rebuild.source(), left)
+                        .is_some_and(|bits| Self::remainder(rebuild, b, right, bits, results[0]))
+            }
             Op::If {
                 condition,
                 then_region,
@@ -482,7 +495,9 @@ impl Simplify {
     }
 
     /// A remainder by a power of two is the bits below it, which is what
-    /// reading a value at that width already means.
+    /// reading a value at that width already means; and so is the value
+    /// masked by one less than the power, `x & 7` being `x % 8`, since a
+    /// value here is never negative.
     ///
     /// This is how a language whose only number counts without a last step
     /// says a machine word. Left as a remainder it is a division: on a
@@ -493,16 +508,12 @@ impl Simplify {
     /// natural is then a machine number, read as a natural again for
     /// whatever reads the remainder as one.
     fn remainder(
-        &self,
         rebuild: &rewrite::Rebuild<'_>,
         b: &mut Builder,
         left: ValueId,
-        right: ValueId,
+        bits: u64,
         result: ValueId,
     ) -> bool {
-        let Some(bits) = self.kept(rebuild.source(), right) else {
-            return false;
-        };
         let Some(bits) = u16::try_from(bits).ok().filter(|&bits| bits <= 64) else {
             return false;
         };
@@ -719,6 +730,13 @@ impl Simplify {
     /// two known before the program runs: the power.
     fn kept(&self, source: &Program, modulus: ValueId) -> Option<u64> {
         let number = self.known(source, modulus)?;
+        (number.count_ones() == 1).then(|| number.bits() - 1)
+    }
+
+    /// How many bits a mask keeps, where it is one less than a power of
+    /// two known before the program runs, every bit below that power set.
+    fn masked(&self, source: &Program, mask: ValueId) -> Option<u64> {
+        let number = self.known(source, mask)? + 1u32;
         (number.count_ones() == 1).then(|| number.bits() - 1)
     }
 

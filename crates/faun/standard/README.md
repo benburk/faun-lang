@@ -313,7 +313,9 @@ bitwise on `Nat` and the words, and looser than a comparison, so
 `rotate_right`, each by a `Nat` count of bits; a shift by the width or more
 is nought. `Nat` has `shift_left` and `shift_right` too, which lose no bits
 going up, so `inst.shift_right(10) & 7` takes a field out of an encoded
-instruction. `Int` has no bitwise operations.
+instruction. Where the number fits a machine word, a shift by a known count
+is one shift instruction, and a mask of low bits, `& 7`, is read as the
+width it keeps, as `% 8` is, which costs nothing where the value is no wider. `Int` has no bitwise operations.
 
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
 defining one `cmp : (T, T) -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of

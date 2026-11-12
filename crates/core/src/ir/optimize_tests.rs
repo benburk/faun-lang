@@ -626,6 +626,58 @@ fn a_remainder_by_anything_else_is_left_as_it_stands() {
     assert_eq!(returns(&held), BigUint::from(0u8), "300 mod 10");
 }
 
+/// A value masked by one less than a power of two is its bits below the
+/// power, as its remainder by the power is: `x & 7` is `x % 8`, on either
+/// side of the `&`.
+#[test]
+fn a_mask_of_the_low_bits_is_a_width() {
+    for (mask, bits) in [(255u64, 8), (7, 3), (1, 1)] {
+        for mask_first in [false, true] {
+            let held = settled(&masked(mask, 300, mask_first));
+            let ands = count(&held, |op| {
+                matches!(
+                    *op,
+                    Op::Binary {
+                        op: Binary::And,
+                        ..
+                    }
+                )
+            });
+            assert_eq!(ands, 0, "& {mask}");
+            assert_eq!(
+                returns(&held),
+                BigUint::from(0b1_0010_1100 & mask),
+                "300 & {mask}"
+            );
+            assert!(
+                count_at(&held, |_, class| class == Class::fixed(bits)) > 0,
+                "& {mask}: read at {bits} bits"
+            );
+        }
+    }
+}
+
+/// A mask with a gap in it keeps bits no width does, and stays a mask.
+#[test]
+fn a_mask_with_a_gap_is_left_as_it_stands() {
+    let held = settled(&masked(5, 300, false));
+    let ands = count(&held, |op| {
+        matches!(
+            *op,
+            Op::Binary {
+                op: Binary::And,
+                ..
+            }
+        )
+    });
+    assert_eq!(ands, 1);
+    assert_eq!(
+        returns(&held),
+        BigUint::from(0b1_0010_1100_u64 & 0b101),
+        "300 & 5"
+    );
+}
+
 /// A difference that stops at nought, asked whether it is nought, is asking
 /// whether one number is no more than the other: one comparison, and no
 /// subtraction left, answering what the two did.
@@ -805,6 +857,25 @@ fn natural_remainder(bits: u16, value: &BigUint, as_natural: bool) -> Program {
             return;
         }
         let answer = b.convert(Class::fixed(bits), low);
+        let answer = b.convert(Class::Word, answer);
+        b.ret(&[answer]);
+    });
+    p
+}
+
+/// `value & mask`, or `mask & value`, answered as a word.
+fn masked(mask: u64, value: u64, mask_first: bool) -> Program {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let class = Class::fixed(9);
+        let held = unknown(b, class, value);
+        let mask = b.constant(class, mask);
+        let (left, right) = if mask_first {
+            (mask, held)
+        } else {
+            (held, mask)
+        };
+        let answer = b.binary_at(class, Binary::And, left, right);
         let answer = b.convert(Class::Word, answer);
         b.ret(&[answer]);
     });
