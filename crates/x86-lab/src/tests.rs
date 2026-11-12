@@ -60,17 +60,17 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("two and two", 131),
     ("hello world", 179),
     ("a call", 143),
-    ("recursion", 311),
+    ("recursion", 308),
     ("values across a call", 252),
-    ("the heap", 178),
-    ("a byte", 208),
-    ("a global", 244),
-    ("writing the heap", 217),
-    ("a computed length", 221),
+    ("the heap", 168),
+    ("a byte", 194),
+    ("a global", 232),
+    ("writing the heap", 207),
+    ("a computed length", 211),
     ("eight bits", 133),
     ("less", 140),
     ("two worked out", 151),
-    ("a flag", 216),
+    ("a flag", 212),
     ("a countdown", 187),
     ("a carried total", 156),
     ("a step first", 205),
@@ -132,6 +132,35 @@ fn it_holds_what_a_program_holds() {
     assert!(TARGET.accepts(&wide(70_000)).is_ok());
     assert!(TARGET.accepts(&wide(4)).is_ok());
     assert!(TARGET.accepts(&narrow(32)).is_ok());
+}
+
+#[test]
+fn signed_byte_displacements_reach_the_same_bytes_from_two_bases() {
+    use crate::ir::{Binary, Class, Offset, Program, Relation, Width};
+
+    let (mut program, main) = Program::new("main");
+    let data = program.global(&[0; 258]);
+    program.define(main, |b, _| {
+        let start = b.address_of(data);
+        let address = b.convert(Class::Word, start);
+        let offset = b.constant(Class::Word, 129);
+        let middle = b.binary(Binary::Add, address, offset);
+        let middle = b.convert(Class::Address, middle);
+        let cases = [(-129, 1), (-128, 2), (0, 3), (127, 4), (128, 5)];
+        for (disp, value) in cases {
+            let value = b.constant(Class::Word, value);
+            b.store(Width::Byte, middle, Offset::Bytes(disp), value);
+        }
+        let mut passed = b.constant(Class::Word, 0);
+        for (disp, expected) in cases {
+            let read = b.load(Width::Byte, start, Offset::Bytes(129 + disp));
+            let expected = b.constant(Class::Word, expected);
+            let equal = b.compare(Relation::Equal, read, expected);
+            passed = b.binary(Binary::Add, passed, equal);
+        }
+        b.ret(&[passed]);
+    });
+    assert_eq!(shared::status(&program), 5);
 }
 
 #[test]

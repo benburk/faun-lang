@@ -424,9 +424,7 @@ impl RawEncoder {
         self.emit(&value.to_le_bytes());
     }
 
-    /// `dst = [base + disp]` and its mirror, in whole words. A `ModRM` mod
-    /// of 10 takes a 32-bit displacement; rsp and rbp are not addressable
-    /// this way, and nothing here asks to be.
+    /// `dst = [base + disp]` and its mirror, in whole words.
     fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.step();
         if dst.is_xmm() {
@@ -505,13 +503,24 @@ impl RawEncoder {
 
     fn addressed(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
         self.emit(opcode);
-        self.emit(&[0x80 | (reg.low() << 3) | base.low()]);
-        // A base whose low bits are those of `rsp` -- `r12` -- is said
-        // through a scale-index byte naming no index.
-        if base.low() == 4 {
-            self.emit(&[0x24]);
+        // rsp and r12 require a SIB even without an index.
+        let sib = (base.low() == 4).then_some(0x24);
+        self.memory_operand(reg, base, disp, sib);
+    }
+
+    fn memory_operand(&mut self, reg: Reg, base: Reg, disp: i32, sib: Option<u8>) {
+        // rbp and r13 need an explicit displacement even at offset zero.
+        let (mode, bytes) = match i8::try_from(disp) {
+            Ok(0) if base.low() != 5 => (0x00, 0),
+            Ok(_) => (0x40, 1),
+            Err(_) => (0x80, 4),
+        };
+        let rm = if sib.is_some() { 4 } else { base.low() };
+        self.emit(&[mode | (reg.low() << 3) | rm]);
+        if let Some(sib) = sib {
+            self.emit(&[sib]);
         }
-        self.emit(&disp.to_le_bytes());
+        self.emit(&disp.to_le_bytes()[..bytes]);
     }
 
     /// `dst` explicitly taken modulo two to the `bits`, including odd widths.
@@ -633,15 +642,9 @@ impl RawEncoder {
         if rex != 0 {
             self.emit(&[0x40 | rex]);
         }
-        // A base of `rbp` or `r13` has no form without a displacement.
-        let (mode, displacement) = match i8::try_from(plus) {
-            Ok(0) if src.low() != 5 => (0b00, Vec::new()),
-            Ok(small) => (0b01, vec![small.cast_unsigned()]),
-            Err(_) => (0b10, plus.to_le_bytes().to_vec()),
-        };
         let sib = (factor << 6) | (src.low() << 3) | src.low();
-        self.emit(&[0x8D, (mode << 6) | (dst.low() << 3) | 0b100, sib]);
-        self.emit(&displacement);
+        self.emit(&[0x8D]);
+        self.memory_operand(dst, src, plus, Some(sib));
     }
 
     /// Compute a scalar result in its allocated XMM register. Every value
@@ -958,6 +961,21 @@ mod tests {
         #[rustfmt::skip]
         assert_eq!(encoded(|a| a.mov_imm64(Reg::Rdx, 0x7FFF_FFFF_FFFF_FFFF)),
             [0x48, 0xBA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]);
+    }
+
+    #[test]
+    fn base_relative_loads_use_the_shortest_displacement() {
+        let load = |base, disp| encoded(|a| a.load(MemoryWidth::Word, Reg::Rax, base, disp));
+        assert_eq!(load(Reg::Rdi, 0), [0x48, 0x8B, 0x07]);
+        assert_eq!(load(Reg::R13, 0), [0x49, 0x8B, 0x45, 0]);
+        assert_eq!(load(Reg::R12, 0), [0x49, 0x8B, 0x04, 0x24]);
+        assert_eq!(load(Reg::Rdi, -128), [0x48, 0x8B, 0x47, 0x80]);
+        assert_eq!(load(Reg::Rdi, 127), [0x48, 0x8B, 0x47, 0x7F]);
+        assert_eq!(
+            load(Reg::Rdi, -129),
+            [0x48, 0x8B, 0x87, 0x7F, 0xFF, 0xFF, 0xFF]
+        );
+        assert_eq!(load(Reg::Rdi, 128), [0x48, 0x8B, 0x87, 0x80, 0, 0, 0]);
     }
 
     #[test]
