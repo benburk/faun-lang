@@ -82,9 +82,9 @@ struct Lowerer<'a> {
     /// uninhabited `[]`, so the tier below knows it never comes back.
     unreachables: BTreeSet<Type>,
     unreachable_ids: HashMap<Type, FnId>,
-    /// Whether two naturals are equal, written once where a numeral is
-    /// matched, in the shape Barb recognizes as that comparison.
-    numeral_equals: Option<FnId>,
+    /// The comparisons of naturals a numeral's test is written with,
+    /// written once where a numeral is matched.
+    numerals: Option<Numerals>,
     output: barb::Program,
 }
 
@@ -110,7 +110,7 @@ impl<'a> Lowerer<'a> {
             widen_ids: HashMap::new(),
             unreachables: BTreeSet::new(),
             unreachable_ids: HashMap::new(),
-            numeral_equals: None,
+            numerals: None,
             output: barb::Program::default(),
         };
         lowerer.discover()?;
@@ -588,7 +588,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 unreachable_ids: &self.unreachable_ids,
                 prelude: self.prelude,
-                numeral_equals: self.numeral_equals,
+                numerals: self.numerals,
                 answer: &to,
             };
             self.output.define(id, |builder, parameters| {
@@ -634,8 +634,8 @@ impl<'a> Lowerer<'a> {
             let p::Definition::Body(decision) = function.definition else {
                 continue;
             };
-            if decision.tests_numerals() && self.numeral_equals.is_none() {
-                self.numeral_equals = Some(self.define_numeral_equals());
+            if decision.tests_numerals() && self.numerals.is_none() {
+                self.numerals = Some(self.define_numerals());
             }
             let function_id = self.function_ids[&function.key];
             let answer = &function.key.signature.result;
@@ -648,7 +648,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 unreachable_ids: &self.unreachable_ids,
                 prelude: self.prelude,
-                numeral_equals: self.numeral_equals,
+                numerals: self.numerals,
                 answer,
             };
             self.output.define(function_id, |builder, parameters| {
@@ -664,28 +664,68 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Declare and write whether two naturals are equal: nought is nought,
-    /// a successor is one if what they succeed is.
-    fn define_numeral_equals(&mut self) -> FnId {
+    /// Declare and write the comparisons a numeral's test is written with,
+    /// each in the shape Barb recognizes as that comparison.
+    fn define_numerals(&mut self) -> Numerals {
         let nat_ty = Type::Named(self.prelude.nat, Vec::new());
         let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
         let (nat, bool_) = (self.type_ids[&nat_ty], self.type_ids[&bool_ty]);
         let yes = self.constructor_ids[&(self.prelude.bool_true, bool_ty.clone())];
         let no = self.constructor_ids[&(self.prelude.bool_false, bool_ty)];
-        let id = self.output.declare("numeral.equals", &[nat, nat], bool_);
-        self.output.define(id, |b, args| {
+        // Nought is nought, and a successor is one if what they succeed is.
+        let equals = self.output.declare("numeral.equals", &[nat, nat], bool_);
+        self.output.define(equals, |b, args| {
             let other = args[1];
             b.match_(args[0], nat, |b, _, fields| {
                 let first = fields.first().copied();
                 b.match_(other, nat, |b, _, rest| match (first, rest.first()) {
                     (None, None) => b.con(yes, &[]),
-                    (Some(a), Some(&c)) => b.call(id, &[a, c]),
+                    (Some(a), Some(&c)) => b.call(equals, &[a, c]),
                     _ => b.con(no, &[]),
                 })
             })
         });
-        id
+        // Nothing is below nought, nought is below a successor, and a
+        // successor is below one if what it succeeds is.
+        let less = self.output.declare("numeral.less", &[nat, nat], bool_);
+        self.output.define(less, |b, args| {
+            let first = args[0];
+            b.match_(args[1], nat, |b, _, rest| match rest.first().copied() {
+                None => b.con(no, &[]),
+                Some(c) => b.match_(first, nat, |b, _, fields| match fields.first() {
+                    None => b.con(yes, &[]),
+                    Some(&a) => b.call(less, &[a, c]),
+                }),
+            })
+        });
+        // At least the second and below the third.
+        let within = self
+            .output
+            .declare("numeral.within", &[nat, nat, nat], bool_);
+        self.output.define(within, |b, args| {
+            let below = b.call(less, &[args[0], args[1]]);
+            b.match_(below, bool_, |b, constructor, _| {
+                if constructor == yes {
+                    b.con(no, &[])
+                } else {
+                    b.call(less, &[args[0], args[2]])
+                }
+            })
+        });
+        Numerals {
+            equals,
+            less,
+            within,
+        }
     }
+}
+
+/// The comparisons of naturals a numeral's test is written with.
+#[derive(Clone, Copy)]
+struct Numerals {
+    equals: FnId,
+    less: FnId,
+    within: FnId,
 }
 
 struct EmitContext<'a> {
@@ -697,7 +737,7 @@ struct EmitContext<'a> {
     widen_ids: &'a HashMap<(Type, Type), FnId>,
     unreachable_ids: &'a HashMap<Type, FnId>,
     prelude: &'a PreludeIds,
-    numeral_equals: Option<FnId>,
+    numerals: Option<Numerals>,
     /// What the function or lambda being emitted answers, which a `?` in
     /// it answers an `Err` early as.
     answer: &'a Type,
@@ -837,28 +877,23 @@ fn emit_decision(
             equal,
             otherwise,
         } => {
-            let nat_ty = Type::Named(context.prelude.nat, Vec::new());
-            let known = builder
-                .natural(context.type_ids[&nat_ty], number)
-                .expect("Nat has a natural's shape");
-            let known = builder.known(known);
+            if let Some((run, others, rest)) = dense_run(decision) {
+                return emit_dense(
+                    context,
+                    builder,
+                    *subject,
+                    (&run, &others, rest),
+                    values,
+                    outer,
+                );
+            }
             let equals = context
-                .numeral_equals
-                .expect("a numeral's test is written before it is read");
+                .numerals
+                .expect("a numeral's test is written before it is read")
+                .equals;
+            let known = numeral(context, builder, number);
             let test = builder.call(equals, &[values[subject], known]);
-            let bool_ty = Type::Named(context.prelude.bool_, Vec::new());
-            let true_id = context.constructor_ids[&(context.prelude.bool_true, bool_ty.clone())];
-            builder.match_(
-                test,
-                context.type_ids[&bool_ty],
-                |builder, constructor, _| {
-                    if constructor == true_id {
-                        emit_decision(context, builder, equal, values, outer)
-                    } else {
-                        emit_decision(context, builder, otherwise, values, outer)
-                    }
-                },
-            )
+            emit_if(context, builder, test, (equal, otherwise), values, outer)
         }
         Decision::Split {
             subject,
@@ -895,6 +930,211 @@ fn emit_decision(
             builder.call(context.unreachable_ids[ty], &[values[subject]])
         }
     }
+}
+
+/// The fewest numerals in a row a search is written for, below which a test
+/// of each is as quick.
+const SEARCHED: usize = 4;
+
+/// Numeral tests of one value, each number with the arm it is taken for.
+type Numbered<'d> = Vec<(&'d num_bigint::BigUint, &'d Decision)>;
+
+/// The same, borrowed.
+type Asked<'d> = [(&'d num_bigint::BigUint, &'d Decision)];
+
+/// Where a run of numeral tests of one value asks for every number from
+/// one to another, at least [`SEARCHED`] of them: those numbers in order,
+/// to be searched rather than asked one at a time, the chain's other
+/// numbers, and what is left where none is. A number asked again is taken
+/// by its first arm, as a test of each in turn would.
+fn dense_run(decision: &Decision) -> Option<(Numbered<'_>, Numbered<'_>, &Decision)> {
+    let Decision::Numeral { subject, .. } = decision else {
+        return None;
+    };
+    let mut asked: Numbered<'_> = Vec::new();
+    let mut at = decision;
+    while let Decision::Numeral {
+        subject: tested,
+        number,
+        equal,
+        otherwise,
+    } = at
+    {
+        if tested != subject {
+            break;
+        }
+        if !asked.iter().any(|(seen, _)| *seen == number) {
+            asked.push((number, equal));
+        }
+        at = otherwise;
+    }
+    let mut sorted = asked.clone();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    // The longest stretch of numbers each one more than the last.
+    let (mut best, mut from) = (0..0, 0);
+    for end in 1..=sorted.len() {
+        if end == sorted.len() || *sorted[end].0 != sorted[end - 1].0 + 1u32 {
+            if end - from > best.len() {
+                best = from..end;
+            }
+            from = end;
+        }
+    }
+    if best.len() < SEARCHED {
+        return None;
+    }
+    let run = sorted[best].to_vec();
+    let (low, high) = (run[0].0, run[run.len() - 1].0);
+    let others = asked
+        .into_iter()
+        .filter(|(number, _)| *number < low || *number > high)
+        .collect();
+    Some((run, others, at))
+}
+
+/// A run from `dense_run`: one test that the value lies within the run,
+/// and then halving it, so that a run of sixteen asks five times where a
+/// test of each asked up to sixteen. Each half ends at one number, which
+/// needs no asking: nothing else is left for the value to be. Outside the
+/// run, the chain's other numbers are asked in turn.
+fn emit_dense(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    subject: Value,
+    (run, others, rest): (&Asked<'_>, &Asked<'_>, &Decision),
+    values: &HashMap<Value, Atom>,
+    outer: &HashMap<LocalId, Atom>,
+) -> Atom {
+    let numerals = context
+        .numerals
+        .expect("a numeral's test is written before it is read");
+    let first = numeral(context, builder, run[0].0);
+    let end = numeral(context, builder, &(run[run.len() - 1].0 + 1u32));
+    let within = builder.call(numerals.within, &[values[&subject], first, end]);
+    branch(context, builder, within, |builder, holds| {
+        if holds {
+            emit_search(
+                context,
+                builder,
+                (subject, numerals.less),
+                run,
+                values,
+                outer,
+            )
+        } else {
+            emit_each(
+                context,
+                builder,
+                (subject, numerals.equals),
+                (others, rest),
+                values,
+                outer,
+            )
+        }
+    })
+}
+
+/// Ask whether the value is each of `numbered` in turn, and where it is
+/// none of them, `rest`.
+fn emit_each(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    (subject, equals): (Value, FnId),
+    (numbered, rest): (&Asked<'_>, &Decision),
+    values: &HashMap<Value, Atom>,
+    outer: &HashMap<LocalId, Atom>,
+) -> Atom {
+    let Some(((number, equal), later)) = numbered.split_first() else {
+        return emit_decision(context, builder, rest, values, outer);
+    };
+    let known = numeral(context, builder, number);
+    let test = builder.call(equals, &[values[&subject], known]);
+    branch(context, builder, test, |builder, holds| {
+        if holds {
+            emit_decision(context, builder, equal, values, outer)
+        } else {
+            emit_each(
+                context,
+                builder,
+                (subject, equals),
+                (later, rest),
+                values,
+                outer,
+            )
+        }
+    })
+}
+
+/// Halve `run`, which the value is known to lie within, until one number
+/// is left.
+fn emit_search(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    (subject, less): (Value, FnId),
+    run: &Asked<'_>,
+    values: &HashMap<Value, Atom>,
+    outer: &HashMap<LocalId, Atom>,
+) -> Atom {
+    if let [(_, only)] = run {
+        return emit_decision(context, builder, only, values, outer);
+    }
+    let (low, high) = run.split_at(run.len() / 2);
+    let pivot = numeral(context, builder, high[0].0);
+    let below = builder.call(less, &[values[&subject], pivot]);
+    branch(context, builder, below, |builder, holds| {
+        let half = if holds { low } else { high };
+        emit_search(context, builder, (subject, less), half, values, outer)
+    })
+}
+
+/// `number` as a natural known before the program runs.
+fn numeral(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    number: &num_bigint::BigUint,
+) -> Atom {
+    let nat_ty = Type::Named(context.prelude.nat, Vec::new());
+    let known = builder
+        .natural(context.type_ids[&nat_ty], number)
+        .expect("Nat has a natural's shape");
+    builder.known(known)
+}
+
+/// `yes` where `test` holds, and `no` where it does not.
+fn emit_if(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    test: Atom,
+    (yes, no): (&Decision, &Decision),
+    values: &HashMap<Value, Atom>,
+    outer: &HashMap<LocalId, Atom>,
+) -> Atom {
+    branch(context, builder, test, |builder, holds| {
+        emit_decision(
+            context,
+            builder,
+            if holds { yes } else { no },
+            values,
+            outer,
+        )
+    })
+}
+
+/// A match on the `Bool` `test`, each way written by `arm`, told whether
+/// the test holds there.
+fn branch(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    test: Atom,
+    mut arm: impl FnMut(&mut Builder<'_>, bool) -> Atom,
+) -> Atom {
+    let bool_ty = Type::Named(context.prelude.bool_, Vec::new());
+    let true_id = context.constructor_ids[&(context.prelude.bool_true, bool_ty.clone())];
+    builder.match_(
+        test,
+        context.type_ids[&bool_ty],
+        |builder, constructor, _| arm(builder, constructor == true_id),
+    )
 }
 
 fn emit_body(

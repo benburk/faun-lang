@@ -227,3 +227,20 @@ left([*steps, Leave(node)]) -> [node, *left(steps)]
 left([*steps, Enter(_)]) -> left(steps)
 
 expect left([Enter(1), Leave(1), Enter(2), Leave(2)]) == [2, 1]
+
+# Numbers matched in a row are told apart as if asked in turn, the first
+# arm for a number taking it, and a guard that fails passing it on. A run of
+# four or more, as 13 to 16 here, is searched: halved until one is left.
+group : Nat -> Str
+group(n) -> n is (
+  13 then "thirteen"
+  14 if n > 90 then "never"
+  14 then "fourteen"
+  70 then "seventy"
+  15 then "fifteen"
+  13 then "thirteen again"
+  16 then "sixteen"
+  _ then "other"
+)
+
+expect [0, 12, 13, 14, 15, 16, 17, 70, 100].map(group) == ["other", "other", "thirteen", "fourteen", "fifteen", "sixteen", "other", "seventy", "other"]

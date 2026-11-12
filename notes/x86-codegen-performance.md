@@ -112,6 +112,25 @@ immortal's count to the call. Asking for it before the call saved the
 emulator another 2.5%, but grep and SAT ran more instructions with the
 comparison at every count, and every image grew 3–9%, so it was not kept.
 
+## Numerals matched in a run
+
+A natural matched against numerals above eight is tested against each in
+turn, one test nested in the last one's `otherwise`, so the sixteenth arm
+of a processor's `group is (16 then … 31 then …, _ then …)` was reached
+after fifteen tests, each about seven instructions. Where the numbers
+tested of one value hold a run of four or more, each one more than the
+last, the run is searched instead: one test that the value lies within
+it, then halving, so any of sixteen is five tests. A number outside the
+run is still tested in turn, where the value is not within it, and a
+number asked twice is taken by its first arm, as before.
+
+The emulator ran 11% fewer instructions and 9% fewer cycles; the
+benchmarks, which match no such run, ran the same. A jump table would make
+the run one indexed jump, but estimated from moving the hottest arms first
+it would save about 1% more here, and it wants a branch of many ways that
+every pass and target lacks, where the search is written with the tests
+there already.
+
 ## Size
 
 The size ratchets in `crates/core/tests/support/backend.rs` measure the

@@ -162,7 +162,7 @@ impl Binding<'_> {
             Ty::Nat => match self.draw.weighted(&[2, 1, 3, usize::from(depth > 0) * 2]) {
                 0 => Pat::Wild,
                 1 => Pat::Bind(self.name(Ty::Nat)),
-                2 => Pat::Num([0, 1, 2, 70][self.draw.below(4)]),
+                2 => Pat::Num([0, 1, 2, 3, 70][self.draw.below(5)]),
                 _ => Pat::Succ(Box::new(self.pattern(Ty::Nat, depth - 1))),
             },
             Ty::List => self.list(),
@@ -638,9 +638,29 @@ fn holds_one(pattern: &Pat, wanted: &dyn Fn(&Pat) -> bool) -> bool {
         }
 }
 
+/// Numerals in a row out of order, one asked twice, one beside them and
+/// anything else: a run planning searches rather than asks in turn, which
+/// drawn functions, holding few clauses, seldom hold.
+fn searched(name: String, form: Form) -> Function {
+    let numbered = [2, 0, 3, 1, 2, 70].map(|number| Clause {
+        patterns: vec![Pat::Num(number)],
+        guard: None,
+    });
+    let anything = Clause {
+        patterns: vec![Pat::Wild],
+        guard: None,
+    };
+    Function {
+        name,
+        parameters: vec![Ty::Nat],
+        clauses: numbered.into_iter().chain([anything]).collect(),
+        form,
+    }
+}
+
 /// Refuse a draw missing any form, alternatives, list ends, the largest
-/// numeral or an `is` guard, so a change to the weights cannot quietly stop
-/// asking about one.
+/// numeral, a run of numerals or an `is` guard, so a change to the weights
+/// cannot quietly stop asking about one.
 fn drawn_whole(functions: &[Function]) {
     let clauses = || functions.iter().flat_map(|function| &function.clauses);
     let drawn = |wanted: &dyn Fn(&Pat) -> bool| {
@@ -655,6 +675,19 @@ fn drawn_whole(functions: &[Function]) {
     assert!(drawn(&|p| matches!(p, Pat::Or(_))), "no `|` drawn");
     assert!(drawn(&|p| matches!(p, Pat::LastTwo(..))), "no end drawn");
     assert!(drawn(&|p| matches!(p, Pat::Num(70))), "no 70 drawn");
+    // Four numerals in a row, matched in one place, are searched rather
+    // than asked in turn.
+    let searched = functions.iter().any(|function| {
+        (0..function.parameters.len()).any(|at| {
+            (0..4).all(|number| {
+                function
+                    .clauses
+                    .iter()
+                    .any(|clause| matches!(clause.patterns[at], Pat::Num(n) if n == number))
+            })
+        })
+    });
+    assert!(searched, "no run of four numerals drawn");
     let asked = clauses().any(|clause| matches!(clause.guard, Some(Guard::Holding(..))));
     assert!(asked, "no `is` guard drawn");
 }
@@ -747,9 +780,15 @@ fn clauses_cover_and_answer_as_their_patterns_say() {
         .and_then(|cases| cases.parse().ok())
         .unwrap_or(CASES);
     let mut draw = Draw(0x9e37_79b9_7f4a_7c15);
-    let functions: Vec<Function> = (0..cases)
+    let mut functions: Vec<Function> = (0..cases)
         .map(|at| function(&mut draw, format!("f{at}")))
         .collect();
+    functions.extend(
+        [Form::Clauses, Form::Arms, Form::Chain]
+            .into_iter()
+            .enumerate()
+            .map(|(at, form)| searched(format!("s{at}"), form)),
+    );
     drawn_whole(&functions);
     let mut wrong = Vec::new();
     let mut covering = Vec::new();
