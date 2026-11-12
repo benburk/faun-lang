@@ -189,6 +189,13 @@ stay and run wherever nothing faster does, on a target without float
 instructions such as the 6502, and
 `examples/floats/` is run both with and without the claims to check them.
 
+## Open questions
+
+A planned experimental x86-64 backend takes optimized Barb and owns its
+machine IR, including representation and placement. The existing targets
+continue to use the shared IR. The [experiment contract](../../crates/faun/examples/benchmarks-game/LAB.md)
+describes the boundary, the first milestones and how to compare results.
+
 ## Related
 
 - [Memory](memory.md): reference counting and reuse in the machine tier

@@ -4,7 +4,7 @@ the game scores them: elapsed time, peak memory and compressed source size.
 Each Faun program is first held to the game's own output at a small size,
 and at the measured size its output must be the C program's, byte for byte.
 Each program is then run `--runs` times, alternating with the other, and
-scored by its lowest elapsed time and its highest peak resident memory. A
+scored by its lowest elapsed time and peak resident memory in a separate run. A
 source is scored as the game scores it: comments removed, runs of white
 space made one space, and the rest compressed by gzip at its lowest level.
 
@@ -21,9 +21,7 @@ import argparse
 import gzip
 import os
 import re
-import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -58,8 +56,40 @@ def stripped(source, language):
         source = re.sub(r"/\*.*?\*/", " ", source, flags=re.S)
         source = re.sub(r"//[^\n]*", " ", source)
     else:
-        # A `#` begins a comment outside a string; no string here holds one.
-        source = re.sub(r"#[^\n]*", " ", source)
+        # Rewrites may use '#' as data. Skip comments only in code, including
+        # code inside an interpolated string. Braces there can nest.
+        kept, contexts = [], ["code"]
+        at = 0
+        while at < len(source):
+            char = source[at]
+            if contexts[-1] in ("'", '"'):
+                if char == "\\":
+                    kept.append(source[at : at + 2])
+                    at += 2
+                    continue
+                if contexts[-1] == '"' and source.startswith("${", at):
+                    contexts.append("splice")
+                    kept.append("${")
+                    at += 2
+                    continue
+                if char == contexts[-1]:
+                    contexts.pop()
+            elif char == "#":
+                at = source.find("\n", at)
+                kept.append(" ")
+                if at < 0:
+                    break
+                continue
+            elif char in ("'", '"'):
+                contexts.append(char)
+            elif contexts[-1] == "splice":
+                if char == "{":
+                    contexts.append("splice")
+                elif char == "}":
+                    contexts.pop()
+            kept.append(char)
+            at += 1
+        source = "".join(kept)
     return re.sub(r"\s+", " ", source).strip()
 
 
@@ -69,36 +99,12 @@ def gz_size(path, language):
     )
 
 
-# A program run is charged the peak of the process it replaced, so peaks
-# are read by this small one rather than by Python, as GNU `time` reads
-# them: it runs the program on what it is given and prints its peak.
-PEAK_C = r"""
-#include <stdio.h>
-#include <sys/resource.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-int main(int argc, char **argv) {
-    pid_t child = fork();
-    if (child == 0) {
-        execv(argv[1], argv + 1);
-        return 127;
-    }
-    int status;
-    struct rusage usage;
-    wait4(child, &status, 0, &usage);
-    fprintf(stderr, "%ld\n", usage.ru_maxrss);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-}
-"""
-
-
 def peak(probe, command, stdin_path):
     """Peak resident memory in kilobytes, of a run of its own."""
     stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
     try:
         done = subprocess.run(
-            [str(probe)] + command,
+            [str(probe), "0", "-"] + command,
             stdin=stdin,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -141,13 +147,14 @@ def main():
     if args.cpu is not None:
         os.sched_setaffinity(0, {args.cpu})
     chosen = [b for b in BENCHMARKS if args.only in b[0]]
+    if not chosen or args.runs < 1:
+        parser.error("select at least one benchmark and a positive run count")
     rows = []
     with tempfile.TemporaryDirectory(prefix="faun-game-") as directory:
         work = Path(directory)
         probe = work / "peak"
-        (work / "peak.c").write_text(PEAK_C)
         subprocess.run(
-            [args.cc, "-O2", str(work / "peak.c"), "-o", str(probe)], check=True
+            [args.cc, "-O2", str(HERE / "measure.c"), "-o", str(probe)], check=True
         )
         built = {}
         for name, *_ in BENCHMARKS:
@@ -190,7 +197,7 @@ def main():
                 raise SystemExit(
                     f"{name}: Faun's output at {checked} is not the game's"
                 )
-            outputs = {}
+            expected = None
             times = {"faun": [], "c": []}
             for trial in range(args.runs):
                 order = [("faun", faun), ("c", c)]
@@ -198,10 +205,11 @@ def main():
                     output, seconds = timed(
                         [str(image)] + arguments(size), stdin_for(size)
                     )
-                    outputs.setdefault(language, output)
+                    if expected is None:
+                        expected = output
+                    elif output != expected:
+                        raise SystemExit(f"{name}: {language} output at {size} differs")
                     times[language].append(seconds)
-            if outputs["faun"] != outputs["c"]:
-                raise SystemExit(f"{name}: Faun's and C's outputs at {size} differ")
             for language, image in (("faun", faun), ("c", c)):
                 rows.append(
                     (

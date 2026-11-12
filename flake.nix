@@ -71,6 +71,7 @@
               nodejs
               # The benchmarks game's C pidigits does its arithmetic with GMP.
               gmp
+              python3
             ];
           };
         }

@@ -26,6 +26,9 @@ is made, leaving buffering to the host.
 Each folder holds `main.fn`, the game's C program as `main.c`, and the
 game's output at a small size, which the tests hold the Faun program to.
 
+For iterative compiler and source comparisons, see the [x86 experiment contract](LAB.md). It adds executable size and a gate against the last
+accepted Faun revision.
+
 ## Running
 
 ```console

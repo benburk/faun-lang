@@ -44,9 +44,9 @@
 //!   it takes no range for one, nor for what the entry is handed: the tier
 //!   lowering the program says what it assumes of values from outside, as
 //!   an [`Assumed`], and the analysis it asks for is its own.
-//! - **What effects those names perform.** Programs express dependencies by
-//!   threading state through calls. Optimizations also retain eager bindings:
-//!   an unused answer does not prove a call harmless or that it returns.
+//! - **What effects those names perform.** Calls reaching a bodyless name
+//!   are observable even if their answers are unused. Their order, path and
+//!   multiplicity are preserved without a world-state argument.
 //!
 //! # What a pass may do
 //!
@@ -65,7 +65,8 @@
 //!
 //! The bounded optimizer substitutes already-evaluated ANF atoms, leaves
 //! argument bindings in place when applying laws. Cleanup removes aliases and
-//! unused atoms, constants and constructors, but retains calls and matches.
+//! unused pure expressions, including calls reaching no bodyless name and
+//! matches with only pure arms. It retains calls and matches with effects.
 //! Constant evaluation refuses a whole call or match if any
 //! selected eager binding cannot be evaluated, and its budget bounds the
 //! work, so a definition that never comes back cannot hang the compiler.

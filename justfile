@@ -31,6 +31,7 @@ check:
 
 # Run the test suite: every test at once, the doc tests nextest skips, then the tree-sitter grammar's
 test:
+    python3 -B crates/faun/examples/benchmarks-game/test_lab.py
     cargo nextest run --workspace
     cargo test --workspace --doc
     just tree-sitter
@@ -69,6 +70,10 @@ helix:
 benchmarks-game *args:
     cargo build --release -q -p faun-cli
     python3 crates/faun/examples/benchmarks-game/run.py {{ args }}
+
+# Verify and compare x86 compilers and sources; run from the trusted prep tree
+codegen-lab *args:
+    python3 -B crates/faun/examples/benchmarks-game/lab.py {{ args }}
 
 # Time the benchmark programs pinned to `cpu`; `--faun LABEL=PATH` compares compilers
 bench cpu *args:
