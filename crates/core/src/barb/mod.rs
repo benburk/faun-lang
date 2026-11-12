@@ -134,7 +134,7 @@ pub use constant::{
 // question from how a value is held. Representation selection asks
 // `TypeShape`, so nothing outside this tier needs this one.
 pub(crate) use constant::Shape;
-pub use facts::{Facts, Operation, SequenceOperation};
+pub use facts::{Facts, Operation, SequenceLengths, SequenceOperation};
 
 pub use inline::InlineLimits;
 pub use model::{

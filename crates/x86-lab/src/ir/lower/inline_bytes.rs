@@ -1,25 +1,48 @@
-//! Three-word inline rows for tables of short byte sequences. The table itself
+//! Bounded inline rows for tables of short byte sequences. The table itself
 //! is one immortal byte buffer. Projecting a row produces an ordinary slice,
 //! so readers, tails and calls use the existing buffer ABI.
 
 use super::{Carried, Class, Lowering, Storage, ValueId, barb, peeled};
-use crate::ir::{Binary, Builder, Relation, ShapeId};
+use crate::ir::{Binary, Builder, ShapeId};
 
 const ROW: usize = 24;
-const LENGTH_TAG: u8 = 0xc0;
 
-fn encode(bytes: &[u8], kind: barb::ByteSequence) -> Option<[u8; ROW]> {
-    let mut row = [0; ROW];
-    if bytes.len() < ROW {
-        row[ROW - 1] = LENGTH_TAG + u8::try_from(bytes.len()).ok()?;
-    } else if bytes.len() != ROW
-        || kind != barb::ByteSequence::Text
-        || std::str::from_utf8(bytes).is_err()
-    {
-        return None;
+/// A fixed-width row needs no stored length. Variable rows carry their length
+/// after the payload. Both choices are made once for the whole table.
+#[derive(Clone, Copy)]
+struct Rows {
+    width: usize,
+    fixed: bool,
+}
+
+impl Rows {
+    fn pack(values: &[Vec<u8>], kind: barb::ByteSequence) -> Option<(Self, Vec<u8>)> {
+        let bounds = barb::SequenceLengths::of(values.iter().map(Vec::len))?;
+        let width = bounds.longest;
+        let limit = if kind == barb::ByteSequence::Text {
+            ROW
+        } else {
+            ROW - 1
+        };
+        if width > limit {
+            return None;
+        }
+        let fixed = bounds.shortest == width;
+        let layout = Self { width, fixed };
+        let mut bytes = Vec::with_capacity(values.len().checked_mul(layout.stride())?);
+        for value in values {
+            bytes.extend_from_slice(value);
+            if !fixed {
+                bytes.resize(bytes.len() + width - value.len(), 0);
+                bytes.push(u8::try_from(value.len()).ok()?);
+            }
+        }
+        Some((layout, bytes))
     }
-    row[..bytes.len()].copy_from_slice(bytes);
-    Some(row)
+
+    fn stride(self) -> usize {
+        self.width + usize::from(!self.fixed)
+    }
 }
 
 impl Lowering<'_> {
@@ -54,53 +77,42 @@ impl Lowering<'_> {
         if byte.width().is_none_or(|bits| bits == 0 || bits > 8) {
             return None;
         }
-        let mut rows = Vec::with_capacity(elements.len().checked_mul(ROW)?);
-        for fields in elements {
-            let [value] = fields[..] else { return None };
-            let value = barb::single_field_constant(self.barb, value);
-            let barb::ConstantView::Spine(spine) = value.view() else {
-                return None;
-            };
-            if spine.length() > ROW.into() {
-                return None;
-            }
-            let bytes = spine.to_bytes()?;
-            rows.extend_from_slice(&encode(&bytes, kind)?);
+        let values = elements
+            .iter()
+            .map(|fields| {
+                let [value] = fields[..] else { return None };
+                let value = barb::single_field_constant(self.barb, value);
+                let barb::ConstantView::Spine(spine) = value.view() else {
+                    return None;
+                };
+                (spine.length() <= ROW.into()).then(|| spine.to_bytes())?
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let (rows, data) = Rows::pack(&values, kind)?;
+        if data.is_empty() {
+            return None;
         }
-        // Padding and tags are bytes too, even if range analysis has seen only
+        // Padding and lengths are bytes too, even if range analysis has seen only
         // a subset of byte values in the actual elements.
         let shape = b.shape(&[Class::fixed(8)]);
-        let data = b.data(&rows);
+        let data = b.data(&data);
         let buffer = b.buffer_known(data, shape, 1);
-        Some(table_views(b, (buffer, shape), outer, elements.len(), kind))
+        Some(table_views(b, (buffer, shape), outer, elements.len(), rows))
     }
 }
 
 fn row_length(
     b: &mut Builder,
     (buffer, first, shape): (ValueId, ValueId, ShapeId),
-    stride: ValueId,
-    kind: barb::ByteSequence,
+    rows: Rows,
 ) -> ValueId {
-    let last = b.constant(Class::Word, u64::try_from(ROW).unwrap() - 1);
-    let end = b.binary(Binary::Add, first, last);
-    let tag = b.buffer_field((Class::fixed(8), shape), (buffer, end), 0);
-    let tag = b.convert(Class::Word, tag);
-    let base = b.constant(Class::Word, u64::from(LENGTH_TAG));
-    if kind == barb::ByteSequence::Text {
-        let full = b.compare(Relation::Less, tag, base);
-        b.if_(
-            full,
-            &[Class::Word],
-            |b| b.yield_(&[stride]),
-            |b| {
-                let len = b.binary(Binary::Sub, tag, base);
-                b.yield_(&[len]);
-            },
-        )[0]
-    } else {
-        b.binary(Binary::Sub, tag, base)
+    let width = b.constant(Class::Word, u64::try_from(rows.width).unwrap());
+    if rows.fixed {
+        return width;
     }
+    let at = b.binary(Binary::Add, first, width);
+    let len = b.buffer_field((Class::fixed(8), shape), (buffer, at), 0);
+    b.convert(Class::Word, len)
 }
 
 fn table_views(
@@ -108,7 +120,7 @@ fn table_views(
     (buffer, shape): (ValueId, ShapeId),
     outer: ShapeId,
     count: usize,
-    kind: barb::ByteSequence,
+    rows: Rows,
 ) -> [ValueId; 3] {
     let count = b.constant(
         Class::Word,
@@ -129,9 +141,9 @@ fn table_views(
                 |b| {
                     let one = b.constant(Class::Word, 1);
                     let index = b.binary(Binary::Sub, *left, one);
-                    let stride = b.constant(Class::Word, u64::try_from(ROW).unwrap());
+                    let stride = b.constant(Class::Word, u64::try_from(rows.stride()).unwrap());
                     let first = b.binary(Binary::Mul, index, stride);
-                    let len = row_length(b, (buffer, first, shape), stride, kind);
+                    let len = row_length(b, (buffer, first, shape), rows);
                     let filled = b.binary(Binary::Sub, count, *left);
                     let [table, start] =
                         b.buffer_push((*table, *start, filled), outer, &[buffer, first, len]);
@@ -150,18 +162,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn arbitrary_bytes_and_full_utf8_rows_have_distinct_length_encodings() {
+    fn rows_use_only_the_width_the_whole_table_needs() {
         use barb::ByteSequence::{Bytes, Text};
-        for n in 0..ROW {
-            let bytes = vec![0xff; n];
-            let row = encode(&bytes, Bytes).unwrap();
-            assert_eq!(&row[..n], bytes);
-            assert_eq!(usize::from(row[ROW - 1] - LENGTH_TAG), n);
-        }
-        let bytes = "é".repeat(12);
-        assert_eq!(encode(bytes.as_bytes(), Text).unwrap(), bytes.as_bytes());
-        assert!(encode(bytes.as_bytes(), Bytes).is_none());
-        assert!(encode(&[0xff; ROW], Text).is_none());
-        assert!(encode(&[b'a'; ROW + 1], Text).is_none());
+        let (fixed, data) = Rows::pack(&[vec![0xff; 23], vec![0xc0; 23]], Bytes).unwrap();
+        assert!(fixed.fixed);
+        assert_eq!((fixed.stride(), data.len()), (23, 46));
+        let text = "é".repeat(12).into_bytes();
+        let (mixed, data) = Rows::pack(&[text.clone(), vec![]], Text).unwrap();
+        assert_eq!((mixed.stride(), data[24], data[49]), (25, 24, 0));
+        assert!(Rows::pack(&[text], Bytes).is_none());
+        assert!(Rows::pack(&[vec![b'a'; 25]], Text).is_none());
     }
 }
