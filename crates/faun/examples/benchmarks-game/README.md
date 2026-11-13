@@ -52,18 +52,30 @@ peak RSS and executable size. From the repository root, run
 $ just bench 8 --backend x86-lab --only md5
 ```
 
-Choose an available CPU in place of 8. To check whether allocations grow
-with the number of MD5 blocks, count calls in a separate symbolized build.
-The probe requires GDB on native x86-64 Linux.
+Choose an available CPU in place of 8. To count Faun heap allocations from
+startup through hex output, run the probe on a symbolized build. The probe
+requires GDB on native x86-64 Linux.
 
 ```console
 $ target/release/faun build --backend=x86-lab --symbols crates/faun/examples/benchmarks-game/md5/main.fn -o target/md5-profile
 $ python3 crates/faun/examples/benchmarks-game/md5/allocations.py target/md5-profile
 ```
 
-Both probe inputs fit in one read and need one padding block. The probe
-checks both digests and fails if 63 additional full blocks increase the
-allocator call count. The eight game programs supply the promotion scores.
+The probe checks the digest and requires zero heap calls for each input,
+including the 55-byte tail that fits in one final block, the 56-byte tail
+that needs two, and inputs spanning several reads.
+
+The streaming C comparison uses the same 64 KiB read size and prints the
+same lowercase digest and newline. Build it with the locked shell's GCC
+and compare both digests on the same file.
+
+```console
+$ nix develop -c gcc -std=c11 -O3 -fomit-frame-pointer -s crates/faun/examples/benchmarks-game/md5/main.c -o target/md5-c
+$ target/md5-c < input.dat
+$ target/md5-profile < input.dat
+```
+
+The eight game programs supply the promotion scores.
 
 ## Scoring
 
