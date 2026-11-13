@@ -1,32 +1,12 @@
-# Fasta, after the benchmarks-game program of the same name: three DNA
-# sequences in FASTA format, sixty bases to a line. The first repeats a
-# given sequence; the other two draw bases at random by their weights,
-# from a linear congruential generator.
-#
-# This is the benchmark of producing output: two thirds of what is written
-# is drawn a base at a time, each a generator step, a division and a walk
-# down a short list of weights, and every line is written as it is made.
-#
-# The first argument is `n`: the sequences are `2n`, `3n` and `5n` long.
-# What is written is the game's own output.
+# Three FASTA records with sixty bases per line. The first repeats the ALU
+# sequence; the other two sample the given base frequencies with one
+# continuous linear congruential generator.
 
 import std.host {Host, WriteError}
-
-# Bases with their weights, which sum to one.
-Weighted = List((U8, F64))
 
 alu : List(U8)
 alu =
   "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGACCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAATACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCAGCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGGAGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCCAGCCTGGGCGACAGAGCGAGACTCCGTCTCAAAAA".to_utf8()
-
-weighted : (Str, List(F64)) -> Weighted
-weighted(bases, weights) -> bases.to_utf8().zip(weights)
-
-iub : Weighted
-iub = weighted("acgtBDHKMNRSVWY", [0.27, 0.12, 0.12, 0.27, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02])
-
-homo_sapiens : Weighted
-homo_sapiens = weighted("acgt", [0.3029549426680, 0.1979883004921, 0.1975473066391, 0.3015094502008])
 
 width : Nat
 width = 60
@@ -35,32 +15,42 @@ width = 60
 next : Nat -> Nat
 next(seed) -> (seed * 3877 + 29573) % 139968
 
-# The base whose share of the weights holds `v`, the last where none does.
-chosen : (Weighted, F64) -> U8
-chosen([(base, _)], _) -> base
-chosen([(base, weight), *rest], v) -> if v - weight < 0.0 then base else chosen(rest, v - weight)
-chosen([], _) -> U8.of_nat(0)
+# One step produces the next state and one base.
+Generator = Nat -> (Nat, U8)
 
-# `n` bases of `alu` over and over, from its `from`th on, a line at a time.
-repeated! : (Host, Nat, Nat) -> Result({}, WriteError)
-repeated!(_, _, 0) -> Ok({})
-repeated!(host, from, n) -> (
-  count = width.min(n)
-  host.stdout.write_all!(alu.concat(alu).drop(from).take(count).append(U8.of_nat(10)))?
-  repeated!(host, (from + count) % alu.len(), n - count)
+# Write at most 64 lines per block, carrying the generator across writes.
+emit! : (Host, Nat, Nat, Generator) -> Result(Nat, WriteError)
+emit!(_, 0, seed, _) -> Ok(seed)
+emit!(host, n, seed, draw) -> (
+  count = n.min(width * 64)
+  (seed, bytes) = block(count, width, seed, draw, [])
+  host.stdout.write_all!(bytes)?
+  emit!(host, n - count, seed, draw)
 )
 
-# `n` bases drawn by `weights` from `seed`, a line at a time: the seed
-# after the last.
-drawn! : (Host, Weighted, Nat, Nat) -> Result(Nat, WriteError)
-drawn!(_, _, seed, 0) -> Ok(seed)
-drawn!(host, weights, seed, n) -> (
-  (seed, line) = List.range(width.min(n)).map_accum(seed, |seed, _| (
-    seed = next(seed)
-    (seed, chosen(weights, F64.of_nat(seed) / 139968.0))
+# Append in output order. A newline ends the current line without advancing
+# the generator, including the final, possibly short line of the block.
+block : (Nat, Nat, Nat, Generator, List(U8)) -> (Nat, List(U8))
+block(0, _, seed, _, bytes) -> (seed, bytes.append(10))
+block(n, 0, seed, draw, bytes) -> block(n, width, seed, draw, bytes.append(10))
+block(Succ(n), col, seed, draw, bytes) -> (
+  (seed, byte) = draw(seed)
+  block(n, col - 1, seed, draw, bytes.append(byte))
+)
+
+# Weights are integers in a common unit. A seed belongs to the first
+# interval whose cumulative share is greater than seed / 139968.
+# Rounding each upper limit up makes the integer comparison exact.
+random! : (Host, Nat, Nat, Str, List(Nat)) -> Result(Nat, WriteError)
+random!(host, n, seed, bases, weights) -> (
+  total = weights.sum()
+  limits = weights.trail(0, |sum, w| sum + w).map(|sum| (sum * 139968 + total - 1) / total)
+  table = bases.to_utf8().zip(limits)
+  emit!(host, n, seed, |s| (
+    s = next(s)
+    (base, _) = table.find(|(_, end)| s < end).ok_or((0, 0))
+    (s, base)
   ))
-  host.stdout.write_all!(line.append(U8.of_nat(10)))?
-  drawn!(host, weights, seed, n - line.len())
 )
 
 expect next(42) == 32416
@@ -69,11 +59,12 @@ main! : Host -> []
 main!(host) -> (
   n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
   one = host.print!(">ONE Homo sapiens alu\n")
-  repeated = repeated!(host, 0, 2 * n)
+  repeated = emit!(host, 2 * n, 0, |i| ((i + 1) % alu.len(), alu.get_or(i, 0)))
   two = host.print!(">TWO IUB ambiguity codes\n")
-  drawn = drawn!(host, iub, 42, 3 * n)
+  drawn = random!(host, 3 * n, 42, "acgtBDHKMNRSVWY", [27, 12, 12, 27, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
   seed = drawn.ok_or(42)
   three = host.print!(">THREE Homo sapiens frequency\n")
-  written = drawn!(host, homo_sapiens, seed, 5 * n)
+  # The published human frequencies in units of 10^-13.
+  written = random!(host, 5 * n, seed, "acgt", [3029549426680, 1979883004921, 1975473066391, 3015094502008])
   host.exit!(0)
 )

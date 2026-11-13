@@ -598,6 +598,33 @@ fn the_spectralnorm_example_holds() {
     assert_eq!(said, "3 expectations hold\n");
 }
 
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+// At n = 1280 the second record fills exactly one 64-line block.
+// Exercise a partial final line and continuation into a second write.
+fn check_fasta_line_breaks(image: &Path) {
+    for n in [0_usize, 1279, 1280, 1281] {
+        let output = std::process::Command::new(image)
+            .arg(n.to_string())
+            .output()
+            .unwrap();
+        assert!(output.status.success() && output.stderr.is_empty());
+        let text = std::str::from_utf8(&output.stdout).unwrap();
+        assert!(text.ends_with('\n'));
+        let mut lines = text.lines();
+        for (header, length) in [
+            (">ONE Homo sapiens alu", 2 * n),
+            (">TWO IUB ambiguity codes", 3 * n),
+            (">THREE Homo sapiens frequency", 5 * n),
+        ] {
+            assert_eq!(lines.next(), Some(header));
+            for start in (0..length).step_by(60) {
+                assert_eq!(lines.next().unwrap().len(), 60.min(length - start));
+            }
+        }
+        assert_eq!(lines.next(), None);
+    }
+}
+
 /// Each benchmarks-game program, built and run at the size the game checks
 /// it at, writes the game's own output; k-nucleotide reads what fasta writes.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -624,6 +651,9 @@ fn the_benchmarks_game_programs_write_the_games_output() {
             .status()
             .unwrap();
         assert!(status.success(), "{name} builds");
+        if name == "fasta" {
+            check_fasta_line_breaks(&image);
+        }
         let mut run = std::process::Command::new(&image);
         if name == "k-nucleotide" {
             let fasta = std::fs::File::open(game.join("fasta/1000.out")).unwrap();
