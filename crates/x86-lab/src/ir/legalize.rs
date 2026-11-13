@@ -105,6 +105,7 @@ fn prepare_pass<'a>(
     Ok(Pass {
         read_room: input_storage(source, output, config, &shapes),
         fixed_claims: remaining.is_some(),
+        checked_words: super::bounds::CheckedWords::of(source, config.word_bits),
         plan,
         chunks,
         constructing: Cell::new(false),
@@ -643,6 +644,7 @@ fn magnitude(source: &Program, op: Op, class: Class) -> Option<BigUint> {
 }
 
 struct Pass<'a> {
+    checked_words: super::bounds::CheckedWords,
     read_room: Option<InputStorage>,
     fixed_claims: bool,
     plan: Plan,
@@ -1341,9 +1343,13 @@ impl Pass<'_> {
                 left,
                 right,
             } if self.source.class(left) == Class::Natural => {
-                let ordering = self.library.inline(b, Inline::Compare, v(left), v(right));
-                let wanted = b.constant(Class::Word, u64::from(relation == Relation::Equal));
-                b.compare(Relation::Equal, ordering, wanted)
+                if let Some(&limit) = self.checked_words.limits.get(&results[0]) {
+                    natural::below_power_of_two(b, v(left), limit, self.word_bits())
+                } else {
+                    let ordering = self.library.inline(b, Inline::Compare, v(left), v(right));
+                    let wanted = b.constant(Class::Word, u64::from(relation == Relation::Equal));
+                    b.compare(Relation::Equal, ordering, wanted)
+                }
             }
             Op::Compare {
                 relation,
@@ -1363,6 +1369,10 @@ impl Pass<'_> {
                     }
                     (_, Class::Natural) => {
                         b.call_one(self.library.require(Helper::FromWord), &[v(value)])
+                    }
+                    (Class::Natural, _) if self.checked_words.unbox.contains(&results[0]) => {
+                        let number = natural::unwrapped(b, v(value));
+                        b.convert(class, number)
                     }
                     (Class::Natural, _) => {
                         let word = b.call_one(self.library.require(Helper::ToWord), &[v(value)]);

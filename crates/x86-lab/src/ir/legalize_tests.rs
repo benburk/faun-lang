@@ -589,6 +589,49 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
     }
 }
 
+/// The last immediate and the first boxed word meet at the same boundary
+/// for every layout. Only the guarded arm may decode by shifting the handle.
+#[test]
+fn guarded_naturals_decode_only_within_the_immediate_range() {
+    for (bits, limit) in [16u16, 32, 64]
+        .into_iter()
+        .flat_map(|bits| [1, 256, 1u64 << (bits - 1)].map(|limit| (bits, limit)))
+    {
+        let (mut p, main) = Program::new_with_params("main", &[("n", Class::Word)]);
+        p.define(main, |b, args| {
+            let n = b.convert(Class::Natural, args[0]);
+            let bound = b.constant(Class::fixed(bits), limit);
+            let bound = b.convert(Class::Natural, bound);
+            let below = b.compare(Relation::Less, n, bound);
+            let result = b.if_(
+                below,
+                &[Class::Word],
+                |b| {
+                    let word = b.convert(Class::Word, n);
+                    b.yield_(&[word]);
+                },
+                |b| {
+                    let word = b.convert(Class::Word, n);
+                    b.yield_(&[word]);
+                },
+            );
+            b.ret(&result);
+        });
+        let config = fixed_heap(bits, 512);
+        let scalar = legalize(&p, config).unwrap();
+        for n in [0, limit - 1, limit, limit + 1, u64::MAX >> (64 - bits)] {
+            let args = [BigUint::from(n)];
+            let actual = run(&scalar, main, &args, bits);
+            assert_eq!(actual.outcome, run(&p, main, &args, bits).outcome);
+            assert_eq!(
+                actual.counts.calls_to(&scalar, "nat.to_word"),
+                u64::from(n >= limit)
+            );
+            no_live_objects(&scalar, &actual, config);
+        }
+    }
+}
+
 #[test]
 fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     let (mut p, main) = Program::new("main");
