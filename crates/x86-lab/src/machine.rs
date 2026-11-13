@@ -234,6 +234,13 @@ pub(crate) enum Inst {
         direction: ShiftDirection,
         dst: Reg,
     },
+    /// Rotate the low bits by an immediate, or by CL. For byte and halfword
+    /// rotates the input is already zero-extended to the rest of the register.
+    RotateLeft {
+        dst: Reg,
+        bits: u16,
+        by: Option<u8>,
+    },
     /// The low word of a product; signed and unsigned multiplication agree
     /// on these bits, and no instruction reads a high half.
     Multiply {
@@ -364,6 +371,7 @@ impl Inst {
             | Self::Narrow { dst, .. }
             | Self::Shift { dst, .. }
             | Self::ShiftByCount { dst, .. }
+            | Self::RotateLeft { dst, .. }
             | Self::LoadStackNarrow { dst, .. }
             | Self::AluImmediate { dst, .. }
             | Self::SetIf { dst, .. }
@@ -443,6 +451,9 @@ impl Allocated {
                 }
                 Inst::Shift { bits, .. } if bits == 0 || bits > 64 => {
                     return Err(format!("x86 instruction {at} has unsupported width {bits}"));
+                }
+                Inst::RotateLeft { bits, .. } if !matches!(bits, 8 | 16 | 32 | 64) => {
+                    return Err(format!("x86 rotate has unsupported width {bits}"));
                 }
                 Inst::LoadStackNarrow { bits, .. } if !matches!(bits, 8 | 16) => {
                     return Err(format!(
@@ -591,6 +602,10 @@ impl AllocatedBuilder {
             by,
             bits,
         });
+    }
+
+    pub(crate) fn rotate_left(&mut self, dst: Reg, bits: u16, by: Option<u8>) {
+        self.push(Inst::RotateLeft { dst, bits, by });
     }
 
     pub(crate) fn shift_by_count(&mut self, direction: ShiftDirection, dst: Reg) {

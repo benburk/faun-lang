@@ -64,6 +64,7 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 bits,
             } => asm.shift(direction, dst, by, bits),
             Inst::ShiftByCount { direction, dst } => asm.shift_by_count(direction, dst),
+            Inst::RotateLeft { dst, bits, by } => asm.rotate_left(dst, bits, by),
             Inst::Multiply { dst, src } => asm.multiply(dst, src),
             Inst::MultiplyImmediate {
                 dst,
@@ -601,6 +602,29 @@ impl RawEncoder {
         };
         self.rex(true, None, dst);
         self.emit(&[0xD3, 0xC0 | (extension << 3) | dst.low()]);
+    }
+
+    fn rotate_left(&mut self, dst: Reg, bits: u16, by: Option<u8>) {
+        self.step();
+        if bits == 16 {
+            self.emit(&[0x66]);
+        }
+        if bits == 8 {
+            self.rex_byte(None, dst);
+        } else {
+            self.rex(bits == 64, None, dst);
+        }
+        let opcode = match by {
+            Some(1) => 0xD0,
+            Some(_) => 0xC0,
+            None => 0xD2,
+        };
+        self.emit(&[opcode + u8::from(bits != 8), 0xC0 | dst.low()]);
+        if let Some(count) = by
+            && count != 1
+        {
+            self.emit(&[count]);
+        }
     }
 
     /// The low 64 bits of `dst * src`, leaving every other register alone.

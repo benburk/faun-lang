@@ -558,6 +558,7 @@ impl<'a> Lowering<'a> {
         };
         let definition = self.selected.instructions[definition];
         match definition.immediate {
+            Immediate::Rotate { bits, .. } => bits,
             Immediate::Shift { up: false, by, .. } => {
                 let moved = self.selected.operands[definition.operands.range()][0];
                 width.min(self.selected.widths[moved.index()].saturating_sub(u16::from(by)))
@@ -986,6 +987,9 @@ impl<'a> Lowering<'a> {
                     ShiftDirection::Right
                 };
                 self.asm.shift_by_count(direction, result()?);
+            }
+            (Opcode::RotateLeft, Immediate::Rotate { bits, by }) => {
+                self.asm.rotate_left(result()?, bits, by);
             }
             (Opcode::Multiply, Immediate::Bits(bits)) => {
                 let source = self.selected.operands[inst.operands.range()][1];

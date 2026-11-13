@@ -104,16 +104,7 @@ fn temporary_pushes(source: &Program) -> HashMap<ValueId, Pushed> {
     {
         return HashMap::new();
     }
-    let mut uses = vec![0u8; source.values_count()];
-    let operands = source.ops.iter().flat_map(|op| source.operands(op));
-    let exits = source
-        .regions
-        .ids()
-        .flat_map(|r| source.outgoing(r).iter().copied());
-    for value in operands.chain(exits) {
-        let count = &mut uses[value.index()];
-        *count = count.saturating_add(1);
-    }
+    let uses = source.use_counts();
     let mut pushes = HashMap::new();
     for region in source.regions.ids() {
         for (op, results) in source.walk(region) {

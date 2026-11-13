@@ -6,6 +6,7 @@
 //! [`super::machine::Allocated`].
 
 mod register_allocate;
+mod rotates;
 
 use super::machine::Reg;
 use crate::ir::{
@@ -111,6 +112,7 @@ pub(crate) enum Opcode {
     /// Moved up or down by the distance in `rcx`, below the word.
     ShiftUp,
     ShiftDown,
+    RotateLeft,
     Equal,
     Below,
     Load,
@@ -169,6 +171,7 @@ impl Opcode {
                 | Self::Xor
                 | Self::ShiftUp
                 | Self::ShiftDown
+                | Self::RotateLeft
                 | Self::Monus
                 | Self::Convert
                 | Self::Shift
@@ -269,6 +272,7 @@ impl Opcode {
             | Self::Xor
             | Self::ShiftUp
             | Self::ShiftDown
+                | Self::RotateLeft
             | Self::Shift => arithmetic,
             Self::ArgumentVector => Effects {
                 clobbers: RegSet::of(&[Reg::Rcx]),
@@ -365,6 +369,10 @@ enum Immediate {
         by: u8,
         bits: u16,
     },
+    Rotate {
+        bits: u16,
+        by: Option<u8>,
+    },
     Function(FunctionId),
     Float(faun_core::float::Float),
     /// A word slot in a call's area: overflow arguments, then overflow results.
@@ -404,7 +412,11 @@ impl Inst {
             }
             op if op.in_place() && use_at == 0 => Constraint::Tied(0),
             Opcode::Divide | Opcode::Modulo if use_at == 0 => Constraint::Fixed(Reg::Rax),
-            Opcode::ShiftUp | Opcode::ShiftDown | Opcode::Divide | Opcode::Modulo
+            Opcode::ShiftUp
+            | Opcode::ShiftDown
+            | Opcode::RotateLeft
+            | Opcode::Divide
+            | Opcode::Modulo
                 if use_at == 1 =>
             {
                 Constraint::Fixed(Reg::Rcx)
@@ -830,6 +842,10 @@ impl Selected {
             | Opcode::CloseFd
             | Opcode::StoreIncoming
             | Opcode::StoreOutgoing => 1,
+            Opcode::RotateLeft => match inst.immediate {
+                Immediate::Rotate { by, .. } => 1 + usize::from(by.is_none()),
+                _ => usize::MAX,
+            },
             Opcode::Float => match inst.immediate {
                 Immediate::Float(float) => float.operation.arity(),
                 _ => usize::MAX,
@@ -1271,6 +1287,7 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             | Opcode::Divide
             | Opcode::Modulo
             | Opcode::Shift
+            | Opcode::RotateLeft
             | Opcode::ArgumentVector => effects.flags == Access::Write,
             Opcode::DataAddress
             | Opcode::Equal
@@ -1316,6 +1333,13 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
                 Immediate::Bits(_)
             )
             | (Opcode::Load | Opcode::Store, Immediate::Memory { .. })
+            | (
+                Opcode::RotateLeft,
+                Immediate::Rotate {
+                    bits: 8 | 16 | 32 | 64,
+                    ..
+                }
+            )
             | (Opcode::Shift, Immediate::Shift { .. })
             | (Opcode::Call, Immediate::Function(_))
             | (Opcode::Float, Immediate::Float(_))
@@ -1371,6 +1395,7 @@ struct Flow {
 struct Selector<'a> {
     source: &'a Program,
     widths: Vec<u16>,
+    rotates: rotates::Plan,
     /// Conversions an enclosing comparison has already bounded.
     whole: Vec<bool>,
     operands: Vec<VReg>,
@@ -1411,6 +1436,7 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
         source,
         widths,
         whole: crate::ir::conversions_taking_nothing(source),
+        rotates: rotates::Plan::new(source),
         operands: Vec::new(),
         instructions: Pool::default(),
         blocks: Pool::default(),
@@ -1563,6 +1589,26 @@ impl Selector<'_> {
         self.blocks[block].instructions.push(id);
     }
 
+    fn emit_rotate(&mut self, block: BlockId, result: ValueId, rotate: rotates::Rotate) {
+        let bits = rotate.bits;
+        match rotate.count {
+            rotates::Count::Immediate(by) => self.emit(
+                block,
+                Opcode::RotateLeft,
+                Some(result),
+                &[rotate.value],
+                Immediate::Rotate { bits, by: Some(by) },
+            ),
+            rotates::Count::Register(count) => self.emit(
+                block,
+                Opcode::RotateLeft,
+                Some(result),
+                &[rotate.value, count],
+                Immediate::Rotate { bits, by: None },
+            ),
+        }
+    }
+
     fn terminate(&mut self, block: BlockId, terminator: Terminator) {
         let held = &mut self.blocks[block].terminator;
         assert!(held.is_none(), "an x86 block is terminated once");
@@ -1587,6 +1633,15 @@ impl Selector<'_> {
     ) -> Result<(), String> {
         let source = self.source;
         for (op, results) in source.walk(region) {
+            if let [result] = *results {
+                if self.rotates.omitted.contains(&result) {
+                    continue;
+                }
+                if let Some(&rotate) = self.rotates.roots.get(&result) {
+                    self.emit_rotate(block, result, rotate);
+                    continue;
+                }
+            }
             match *op {
                 SourceOp::NaturalConstant(_) => {
                     return Err("x86 selection received an arbitrary-precision constant".to_owned());
