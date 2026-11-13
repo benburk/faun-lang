@@ -264,7 +264,7 @@ pub(crate) enum Inst {
         plus: i32,
         bits: u16,
     },
-    Divide,
+    Divide(RegisterWidth),
     /// Scalar SSE2 over allocated XMM registers. Binary operations tie
     /// their result to the left input; sqrt has independent operands.
     Float {
@@ -389,7 +389,7 @@ impl Inst {
             | Self::OpenFrame { .. }
             | Self::CloseFrame { .. }
             | Self::PushImmediate(_)
-            | Self::Divide
+            | Self::Divide(_)
             | Self::Syscall
             | Self::Halt
             | Self::Call { .. }
@@ -647,8 +647,8 @@ impl AllocatedBuilder {
         true
     }
 
-    pub(crate) fn divide(&mut self) {
-        self.push(Inst::Divide);
+    pub(crate) fn divide(&mut self, width: RegisterWidth) {
+        self.push(Inst::Divide(width));
     }
 
     pub(crate) fn float(

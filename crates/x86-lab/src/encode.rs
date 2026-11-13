@@ -85,7 +85,7 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 left,
                 right,
             } => asm.float(float, dst, left, right),
-            Inst::Divide => asm.divide(),
+            Inst::Divide(width) => asm.divide(width),
             Inst::Syscall => asm.syscall(),
             Inst::Halt => asm.halt(),
             Inst::LoadStack { dst, displacement } => asm.load_slot(dst, displacement),
@@ -701,10 +701,13 @@ impl RawEncoder {
         self.emit(&[0x0F, opcode, modrm(dst, source)]);
     }
 
-    /// Unsigned RAX = RDX:RAX / RCX, RDX = remainder. The caller guards zero.
-    fn divide(&mut self) {
+    /// Unsigned quotient in (E)AX and remainder in (E)DX.
+    fn divide(&mut self, width: RegisterWidth) {
         self.step();
-        self.emit(&[0x48, 0xF7, 0xF1]);
+        if width == RegisterWidth::Word {
+            self.emit(&[0x48]);
+        }
+        self.emit(&[0xF7, 0xF1]);
     }
 
     fn syscall(&mut self) {
@@ -980,7 +983,11 @@ mod tests {
             encoded(|a| a.multiply(Reg::R12, Reg::R9)),
             [0x4D, 0x0F, 0xAF, 0xE1]
         );
-        assert_eq!(encoded(AllocatedBuilder::divide), [0x48, 0xF7, 0xF1]);
+        assert_eq!(
+            encoded(|a| a.divide(RegisterWidth::Word)),
+            [0x48, 0xF7, 0xF1]
+        );
+        assert_eq!(encoded(|a| a.divide(RegisterWidth::Low32)), [0xF7, 0xF1]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rax, 0)), [0x31, 0xC0]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 7)), [0x83, 0xE7, 0x7F]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 8)), [0x40, 0x0F, 0xB6, 0xFF]);

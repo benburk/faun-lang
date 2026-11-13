@@ -1013,7 +1013,8 @@ impl<'a> Lowering<'a> {
                 self.asm.float(float, result()?, reg(0)?, right);
             }
             (Opcode::Divide | Opcode::Modulo, Immediate::Bits(_)) => {
-                self.emit_division(inst.opcode == Opcode::Modulo);
+                let operands = &self.selected.operands[inst.operands.range()];
+                self.emit_division(inst.opcode == Opcode::Modulo, operands[0], operands[1]);
             }
             (Opcode::Equal | Opcode::Below, Immediate::Bits(bits)) => {
                 let source = self.selected.operands[inst.operands.range()][1];
@@ -1280,22 +1281,39 @@ impl<'a> Lowering<'a> {
         self.known.fill(None);
     }
 
-    fn emit_division(&mut self, modulo: bool) {
-        let zero = self.asm.label();
-        let end = self.asm.label();
-        self.asm.alu(Alu::Test, Reg::Rcx, Reg::Rcx, 64);
-        self.asm.jump_if(Condition::Equal, zero);
+    fn emit_division(&mut self, modulo: bool, dividend: VReg, divisor: VReg) {
+        // DIV must see the full operands even if only a narrow result is used.
+        let bits = self.held_width(dividend).max(self.held_width(divisor));
+        let width = if bits <= 32 {
+            RegisterWidth::Low32
+        } else {
+            RegisterWidth::Word
+        };
+        let nonzero = self.uses.definitions[divisor.index()].is_some_and(|id| {
+            matches!(self.selected.instructions[id].immediate, Immediate::Integer(n) if n != 0)
+        });
+        let guard = if nonzero {
+            None
+        } else {
+            let zero = self.asm.label();
+            let end = self.asm.label();
+            self.asm.alu(Alu::Test, Reg::Rcx, Reg::Rcx, bits);
+            self.asm.jump_if(Condition::Equal, zero);
+            Some((zero, end))
+        };
         self.asm.xor_self(Reg::Rdx);
-        self.asm.divide();
+        self.asm.divide(width);
         if modulo {
-            self.asm.mov_reg(Reg::Rax, Reg::Rdx, RegisterWidth::Word);
+            self.asm.mov_reg(Reg::Rax, Reg::Rdx, width);
         }
-        self.asm.jump(end);
-        self.asm.bind(zero);
-        if !modulo {
-            self.asm.xor_self(Reg::Rax);
+        if let Some((zero, end)) = guard {
+            self.asm.jump(end);
+            self.asm.bind(zero);
+            if !modulo {
+                self.asm.xor_self(Reg::Rax);
+            }
+            self.asm.bind(end);
         }
-        self.asm.bind(end);
         self.forget(Reg::Rax);
         self.forget(Reg::Rdx);
     }

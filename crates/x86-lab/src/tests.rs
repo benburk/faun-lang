@@ -88,7 +88,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("expressions", 162),
     ("hello", 226),
 ];
-const ARITHMETIC_SIZES: [usize; 3] = [165, 199, 198];
+const ARITHMETIC_SIZES: [usize; 3] = [165, 197, 195];
 
 #[test]
 fn ladder_code_size_ratchets() {
@@ -132,6 +132,80 @@ fn it_holds_what_a_program_holds() {
     assert!(TARGET.accepts(&wide(70_000)).is_ok());
     assert!(TARGET.accepts(&wide(4)).is_ok());
     assert!(TARGET.accepts(&narrow(32)).is_ok());
+}
+
+fn division_case(
+    dividend_bits: u16,
+    divisor_bits: u16,
+    numerator: u64,
+    denominator: u64,
+    constant_divisor: bool,
+) -> crate::ir::Program {
+    use crate::ir::{Binary, Class, Program, Relation};
+    let (mut program, main) = Program::new("main");
+    let left = Class::fixed(dividend_bits);
+    let right = Class::fixed(divisor_bits);
+    let divide = program.declare("divide", &[left, right], &[Class::Word, Class::Word]);
+    program.define(divide, |builder, args| {
+        let divisor = if constant_divisor {
+            builder.constant(right, denominator)
+        } else {
+            args[1]
+        };
+        let quotient = builder.binary_at(Class::Word, Binary::Div, args[0], divisor);
+        let remainder = builder.binary_at(Class::Word, Binary::Mod, args[0], divisor);
+        builder.ret(&[quotient, remainder]);
+    });
+    program.define(main, |builder, _| {
+        let dividend = builder.constant(left, numerator);
+        let divisor = builder.constant(right, denominator);
+        let pair = builder.call(divide, &[dividend, divisor]);
+        let quotient =
+            builder.constant(Class::Word, numerator.checked_div(denominator).unwrap_or(0));
+        let remainder = builder.constant(
+            Class::Word,
+            numerator.checked_rem(denominator).unwrap_or(numerator),
+        );
+        let first = builder.compare(Relation::Equal, pair[0], quotient);
+        let second = builder.compare(Relation::Equal, pair[1], remainder);
+        let both = builder.binary(Binary::And, first, second);
+        builder.ret(&[both]);
+    });
+    program
+}
+
+#[test]
+fn unsigned_division_chooses_width_from_both_inputs_and_handles_zero() {
+    use crate::machine::{Inst, RegisterWidth};
+
+    for (dividend_bits, divisor_bits, numerator, denominator) in [
+        (32, 32, u64::from(u32::MAX), 7_u64),
+        (32, 32, u64::from(u32::MAX), 0),
+        (64, 32, (1 << 42) + 3, 7),
+        (32, 64, 9, 1 << 32),
+        (64, 64, u64::MAX, 0),
+    ] {
+        for constant_divisor in [false, true] {
+            let program = division_case(
+                dividend_bits,
+                divisor_bits,
+                numerator,
+                denominator,
+                constant_divisor,
+            );
+            let prepared = TARGET.prepare(&program).unwrap();
+            if !constant_divisor {
+                let expected = if dividend_bits <= 32 && divisor_bits <= 32 {
+                    RegisterWidth::Low32
+                } else {
+                    RegisterWidth::Word
+                };
+                let code = crate::selected::select_and_allocate(&prepared).unwrap();
+                assert!(code.instructions().contains(&Inst::Divide(expected)));
+            }
+            assert_eq!(shared::status(&prepared), 1);
+        }
+    }
 }
 
 #[test]
