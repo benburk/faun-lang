@@ -128,8 +128,10 @@ pub enum Binary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Relation {
     Equal,
-    /// Unsigned, like every comparison on a word.
+    /// Unsigned, comparing the two bit patterns.
     Less,
+    /// True for an unordered pair or when the first IEEE value is less than or equal to the second.
+    FloatNotAbove(crate::float::Format),
 }
 
 /// Which way a shift moves the bits it keeps.

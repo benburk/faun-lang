@@ -146,6 +146,7 @@ pub(crate) enum Opcode {
     ReadByte,
     /// IEEE 754 arithmetic on scalar patterns allocated to XMM registers.
     Float,
+    FloatNotAbove,
 }
 
 impl Opcode {
@@ -262,6 +263,7 @@ impl Opcode {
             | Self::Equal
             | Self::Below
             // SSE arithmetic leaves the flags as they were.
+            | Self::FloatNotAbove
             | Self::Float => Effects::PURE,
             Self::Add
             | Self::Multiply
@@ -333,6 +335,7 @@ impl Opcode {
             | Self::Grow
             | Self::ReadByte
             | Self::ArgumentVector
+            | Self::FloatNotAbove
             | Self::Float => Expansion::Sequence,
             _ => Expansion::Single,
         };
@@ -437,6 +440,7 @@ impl Inst {
 
     fn allowed(self, result: bool, use_at: usize) -> faun_core::codegen::RegSet {
         match self.opcode {
+            Opcode::FloatNotAbove if !result => XMMS,
             Opcode::Float => XMMS,
             // Every scalar already fits a word: this conversion emits no
             // instruction and must not force an otherwise floating chain
@@ -863,6 +867,7 @@ impl Selected {
             | Opcode::Modulo
             | Opcode::Equal
             | Opcode::Below
+            | Opcode::FloatNotAbove
             | Opcode::Store
             | Opcode::Write => 2,
             Opcode::WriteFd | Opcode::ReadFd => 3,
@@ -1294,6 +1299,7 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             | Opcode::Below
             | Opcode::Convert
             | Opcode::ArgumentCount
+            | Opcode::FloatNotAbove
             | Opcode::Float => effects == Effects::PURE,
         };
     if valid {
@@ -1342,6 +1348,7 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             )
             | (Opcode::Shift, Immediate::Shift { .. })
             | (Opcode::Call, Immediate::Function(_))
+            | (Opcode::FloatNotAbove, Immediate::Bits(32 | 64))
             | (Opcode::Float, Immediate::Float(_))
             | (
                 Opcode::LoadIncoming
@@ -1721,16 +1728,17 @@ impl Selector<'_> {
                     left,
                     right,
                 } => {
-                    let opcode = match relation {
-                        Relation::Equal => Opcode::Equal,
-                        Relation::Less => Opcode::Below,
+                    let (opcode, bits) = match relation {
+                        Relation::FloatNotAbove(format) => (Opcode::FloatNotAbove, format.bits()),
+                        Relation::Equal => (Opcode::Equal, source.class(left).bits(WORD_BITS)),
+                        Relation::Less => (Opcode::Below, source.class(left).bits(WORD_BITS)),
                     };
                     self.emit(
                         block,
                         opcode,
                         results.first().copied(),
                         &[left, right],
-                        Immediate::Bits(source.class(left).bits(WORD_BITS)),
+                        Immediate::Bits(bits),
                     );
                 }
                 SourceOp::Load {

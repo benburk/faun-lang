@@ -605,3 +605,103 @@ fn allocated_instructions_reject_wrong_banks_before_encoding() {
     );
     assert!(b.finish().unwrap_err().contains("register banks"));
 }
+
+/// An input bit pattern keeps every operand live through the frontend. A
+/// runtime loop puts the standard sign observation beside its subtraction.
+fn difference_program(format: Format, expression: &str) -> Program {
+    use crate::targets::Target;
+    let bits = format.bits();
+    let bytes = if bits == 32 {
+        "a,b,c,d"
+    } else {
+        "a,b,c,d,e,f,g,h"
+    };
+    let source = format!(
+        r"
+import std.host {{Host}}
+orbit : (F{bits}, Nat) -> Bool
+orbit(x, n) -> (
+  if ({expression}).sign_bit() return False
+  n is Succ(left) else return True
+  orbit(x + 1.0, left)
+)
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.read!({})
+  read is Ok(Data([{bytes}])) else return host.exit!(255)
+  x = F{bits}.of_bits(U{bits}.of_le_bytes({bytes}))
+  host.exit!(orbit(x, host.args.len() - 1).select(0, 1))
+)
+",
+        bits / 8
+    );
+    let target = crate::X86_64Linux;
+    target
+        .prepare(&super::faun::lower(&source, &target).unwrap())
+        .unwrap()
+}
+
+fn checked_difference_program(format: Format, expression: &str, direct: bool) -> Program {
+    let bits = format.bits();
+    let p = difference_program(format, expression);
+    let code = crate::selected::select_and_allocate(&p).unwrap();
+    assert_eq!(
+        code.instructions()
+            .iter()
+            .any(|i| matches!(i, Inst::FloatCompare { bits: w, .. } if *w == bits)),
+        direct,
+        "{format:?} {expression}"
+    );
+    p
+}
+
+fn difference_sign(format: Format, left: u64, right: u64) -> i32 {
+    let sub = Float {
+        format,
+        operation: Operation::Sub,
+    };
+    let diff = sub.calculate(&[left, right]);
+    let nan = match format {
+        Format::Binary32 => f32::from_bits(u32::try_from(diff).unwrap()).is_nan(),
+        Format::Binary64 => f64::from_bits(diff).is_nan(),
+    };
+    i32::from(!nan && diff >> (format.bits() - 1) != 0)
+}
+
+#[test]
+fn observed_difference_compares_directly_only_when_negative_zero_is_excluded() {
+    for format in [Format::Binary32, Format::Binary64] {
+        let bits = format.bits();
+        let four = if bits == 32 {
+            u64::from(4.0_f32.to_bits())
+        } else {
+            4.0_f64.to_bits()
+        };
+        let sign = 1 << (bits - 1);
+        let neg_zero = format!("F{bits}.of_bits(U{bits}.of_nat({sign}))");
+        for (expression, left, right, direct) in [
+            ("4.0 - x".to_owned(), Some(four), None, true),
+            ("0.0 - x".to_owned(), Some(0), None, true),
+            (format!("x - {neg_zero}"), None, Some(sign), true),
+            (format!("{neg_zero} - x"), Some(sign), None, false),
+            ("x - 0.0".to_owned(), None, Some(0), false),
+        ] {
+            let p = checked_difference_program(format, &expression, direct);
+            for x in scalar_patterns(format).iter().copied().chain([
+                four - 1,
+                four,
+                four + 1,
+                sign | 1,
+                sign | scalar_patterns(format)[10],
+            ]) {
+                let expected = difference_sign(format, left.unwrap_or(x), right.unwrap_or(x));
+                let input = x.to_le_bytes();
+                assert_eq!(
+                    super::shared::execute_with_input(&p, &input[..usize::from(bits / 8)]).0,
+                    expected,
+                    "{expression} at {x:#x}"
+                );
+            }
+        }
+    }
+}

@@ -454,6 +454,7 @@ impl Split {
         for (&x, &y) in x.iter().zip(&y) {
             let same = b.compare(Relation::Equal, x, y);
             answer = match relation {
+                Relation::FloatNotAbove(_) => unreachable!("float operands fit a native word"),
                 // Equal where every word is.
                 Relation::Equal => b.binary(Binary::Mul, answer, same),
                 // Less where this word is, or where it is the same and what

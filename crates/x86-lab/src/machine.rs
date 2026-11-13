@@ -128,6 +128,8 @@ pub(crate) enum Condition {
     NotBelow,
     Sign,
     NotSign,
+    Above,
+    NotAbove,
 }
 
 impl Condition {
@@ -139,6 +141,8 @@ impl Condition {
             Self::NotBelow => Self::Below,
             Self::Sign => Self::NotSign,
             Self::NotSign => Self::Sign,
+            Self::Above => Self::NotAbove,
+            Self::NotAbove => Self::Above,
         }
     }
 }
@@ -282,6 +286,11 @@ pub(crate) enum Inst {
     Divide(RegisterWidth),
     /// Scalar SSE2 over allocated XMM registers. Binary operations tie
     /// their result to the left input; sqrt has independent operands.
+    FloatCompare {
+        left: Reg,
+        right: Reg,
+        bits: u16,
+    },
     Float {
         float: faun_core::float::Float,
         dst: Reg,
@@ -354,6 +363,9 @@ impl Inst {
     )]
     fn valid_banks(self) -> bool {
         match self {
+            Self::FloatCompare { left, right, bits } => {
+                left.is_xmm() && right.is_xmm() && matches!(bits, 32 | 64)
+            }
             Self::Float {
                 float,
                 dst,
@@ -664,6 +676,10 @@ impl AllocatedBuilder {
 
     pub(crate) fn divide(&mut self, width: RegisterWidth) {
         self.push(Inst::Divide(width));
+    }
+
+    pub(crate) fn float_compare(&mut self, left: Reg, right: Reg, bits: u16) {
+        self.push(Inst::FloatCompare { left, right, bits });
     }
 
     pub(crate) fn float(

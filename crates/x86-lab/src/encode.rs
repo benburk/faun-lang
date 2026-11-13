@@ -79,6 +79,14 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 plus,
                 bits,
             } => asm.scale(dst, src, times, plus, bits),
+            Inst::FloatCompare { left, right, bits } => {
+                asm.step();
+                if bits == 64 {
+                    asm.emit(&[0x66]);
+                }
+                asm.rex(false, Some(left), right);
+                asm.emit(&[0x0f, 0x2e, modrm(left, right)]);
+            }
             Inst::Float {
                 float,
                 dst,
@@ -176,6 +184,8 @@ const fn condition_code(condition: Condition) -> u8 {
         Condition::NotBelow => 0x3,
         Condition::Sign => 0x8,
         Condition::NotSign => 0x9,
+        Condition::Above => 0x7,
+        Condition::NotAbove => 0x6,
     }
 }
 

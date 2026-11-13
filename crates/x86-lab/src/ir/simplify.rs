@@ -45,6 +45,8 @@
 //! requirement is worked out exactly, and left alone where the answer would
 //! not fit it.
 
+mod float_sign;
+
 use std::collections::HashMap;
 
 use num_bigint::BigUint;
@@ -292,6 +294,25 @@ impl rewrite::Pass for Simplify {
                 then_region,
                 else_region,
             } => self.branching(rebuild, b, condition, [then_region, else_region], results),
+            Op::Compare {
+                relation: Relation::Less,
+                left,
+                right,
+            } => {
+                let Some((format, a, c)) =
+                    self.wrote
+                        .nonnegative_difference(rebuild.source(), left, right)
+                else {
+                    return false;
+                };
+                let held = b.compare(
+                    Relation::FloatNotAbove(format),
+                    rebuild.value(c),
+                    rebuild.value(a),
+                );
+                rebuild.stands_for(results[0], held);
+                true
+            }
             Op::Compare {
                 relation: Relation::Equal,
                 left,

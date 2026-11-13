@@ -1045,10 +1045,14 @@ impl<'a> Lowering<'a> {
                 let operands = &self.selected.operands[inst.operands.range()];
                 self.emit_division(inst.opcode == Opcode::Modulo, operands[0], operands[1]);
             }
-            (Opcode::Equal | Opcode::Below, Immediate::Bits(bits)) => {
-                let source = self.selected.operands[inst.operands.range()][1];
-                let source_reg = reg(1)?;
-                let condition = self.compare(inst.opcode, reg(0)?, source, source_reg, bits);
+            (Opcode::Equal | Opcode::Below | Opcode::FloatNotAbove, Immediate::Bits(bits)) => {
+                let condition = if inst.opcode == Opcode::FloatNotAbove {
+                    self.asm.float_compare(reg(0)?, reg(1)?, bits);
+                    Condition::NotAbove
+                } else {
+                    let source = self.selected.operands[inst.operands.range()][1];
+                    self.compare(inst.opcode, reg(0)?, source, reg(1)?, bits)
+                };
                 let result = result()?;
                 if self.is_branch_only_result(points, inst.result.expect("a compared result")) {
                     self.pending_condition =
