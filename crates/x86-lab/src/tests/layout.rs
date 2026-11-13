@@ -143,3 +143,33 @@ main!(host) -> (
         (0, "6d6e6f7065666768696a6b6c626364".into())
     );
 }
+
+#[test]
+fn input_room_covers_every_count_accepted_at_a_parameter() {
+    use crate::ir::{Offset, Width};
+    let (mut p, main) = Program::new("main");
+    let byte = Class::fixed(8);
+    let narrow = Class::Held(crate::facts::Facts::at(128));
+    let reserve = p.declare("reserve", &[narrow], &[Class::Buffer]);
+    p.define(reserve, |b, args| {
+        let shape = b.shape(&[byte]);
+        let buf = b.buffer_room(args[0], shape);
+        b.ret(&[buf]);
+    });
+    p.define(main, |b, _| {
+        // A 255 literal fits the parameter's eight-bit calling convention.
+        let count = b.constant(byte, 255);
+        let buf = b.call_one(reserve, &[count]);
+        let shape = b.shape(&[byte]);
+        let last = b.constant(Class::Word, 254);
+        let at = b.buffer_at((buf, last), shape);
+        let mark = b.constant(Class::Word, 42);
+        b.store(Width::Byte, at, Offset::Bytes(0), mark);
+        let back = b.load(Width::Byte, at, Offset::Bytes(0));
+        b.keep(buf);
+        b.ret(&[back]);
+    });
+    let prepared = super::TARGET.prepare(&p).unwrap();
+    assert!(prepared.globals().len() >= 7 * 8 + 255);
+    assert_eq!(super::shared::status(&prepared), 42);
+}

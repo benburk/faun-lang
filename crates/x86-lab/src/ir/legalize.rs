@@ -125,32 +125,54 @@ fn prepare_pass<'a>(
     })
 }
 
-/// Append the workspace after other globals, leaving its zeroed tail out of the ELF.
+/// Counts whose reservations fit the shared buffer. Keep the data last so
+/// its unused payload is supplied by the loader.
+struct InputStorage {
+    data: DataId,
+    bounds: BTreeMap<ValueId, u64>,
+}
+
 fn input_storage(
     source: &Program,
     output: &mut Program,
     config: Config,
     shapes: &Shapes,
-) -> Option<DataId> {
+) -> Option<InputStorage> {
     if !config.grows || config.word_bits != 64 {
         return None;
     }
-    source
-        .ops
-        .iter()
-        .filter_map(|op| match *op {
-            Op::BufferRoom { count, shape } => read_bound(source, shapes, count, shape),
-            _ => None,
-        })
-        .max()
-        .map(|capacity| sequence::input_storage(output, capacity))
-}
-
-/// Cap the writable memory reserved for all byte reads in one executable.
-fn read_bound(source: &Program, shapes: &Shapes, count: ValueId, shape: ShapeId) -> Option<u64> {
-    const MAX_READ_ROOM: u64 = 64 * 1024;
-    let high = source.class(count).facts()?.high?;
-    (shapes.packed(shape).size == 1 && (1..=MAX_READ_ROOM).contains(&high)).then_some(high)
+    let mut bounds = BTreeMap::new();
+    for op in &source.ops {
+        if let Op::BufferRoom { count, shape } = *op
+            && shapes.packed(shape).size == 1
+        {
+            // Machine IR can pass values between classes of the same width.
+            // Reserve for that entire width unless the producer is a literal.
+            let bits = source.class(count).width().unwrap_or(64);
+            bounds.insert(
+                count,
+                u64::MAX.checked_shr(u32::from(64 - bits)).unwrap_or(0),
+            );
+        }
+    }
+    if bounds.is_empty() {
+        return None;
+    }
+    for body in source.functions().iter().filter_map(super::Function::body) {
+        for (op, results) in source.walk_within(body) {
+            if let Op::Constant { value } = *op
+                && let Some(bound) = bounds.get_mut(&results[0])
+            {
+                *bound = value;
+            }
+        }
+    }
+    bounds.retain(|_, size| (1..=65536).contains(size));
+    let capacity = *bounds.values().max()?;
+    Some(InputStorage {
+        data: sequence::input_storage(output, capacity),
+        bounds,
+    })
 }
 
 /// The cell and sequence routines a program needs, beside its naturals'.
@@ -619,7 +641,7 @@ fn magnitude(source: &Program, op: Op, class: Class) -> Option<BigUint> {
 }
 
 struct Pass<'a> {
-    read_room: Option<DataId>,
+    read_room: Option<InputStorage>,
     fixed_claims: bool,
     plan: Plan,
     chunks: Option<Chunks>,
@@ -1166,17 +1188,19 @@ impl Pass<'_> {
             } => self.shapes.known(b, elements, shape),
             Op::BufferRoom { count, shape } => {
                 let allocate = self.cells.expect("cell helpers were requested").allocate;
+                let size = self.shapes.packed(shape).size;
                 let storage = self
                     .read_room
-                    .filter(|_| read_bound(self.source, &self.shapes, count, shape).is_some());
+                    .as_ref()
+                    .filter(|room| size == 1 && room.bounds.contains_key(&count));
                 let count = word(b, v(count));
-                let stride = b.constant(Class::Word, self.shapes.packed(shape).size);
+                let stride = b.constant(Class::Word, size);
                 let none = b.constant(Class::Word, 0);
                 let fresh = |b: &mut Builder| {
                     sequence::allocate(b, allocate, (stride, none), count, self.word_bytes)
                 };
                 if let Some(storage) = storage {
-                    sequence::acquire_input(b, storage, fresh)
+                    sequence::acquire_input(b, storage.data, fresh)
                 } else {
                     fresh(b)
                 }
