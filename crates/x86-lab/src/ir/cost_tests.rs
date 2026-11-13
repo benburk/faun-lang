@@ -220,7 +220,7 @@ fn a_list_round_trip_costs_what_is_recorded() {
             allocations: 5,
             retains: 0,
             releases: 7,
-            stored_bytes: 918,
+            stored_bytes: 758,
         }
     );
 }

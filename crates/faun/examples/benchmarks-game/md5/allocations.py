@@ -1,8 +1,7 @@
-"""Check allocation growth across MD5 blocks and full input reads.
+"""Verify the complete x86-lab MD5 program makes zero Faun heap allocations.
 
-Build main.fn with --symbols and pass the image to this script. Each size has the same
-padding. Going from 64 bytes to 4096 adds compression blocks. Going from
-one 64 KiB read to four adds both input reads and compression blocks.
+Build main.fn with --symbols. The cases cover both sides of MD5's padding
+boundary, complete compression blocks, and multiple host reads.
 """
 
 import argparse
@@ -61,14 +60,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix="md5-calls-") as directory:
         work = Path(directory)
         image = args.image.resolve()
-        for short, long in [(64, 4096), (65536, 4 * 65536)]:
-            before = calls(image, short, work)
-            after = calls(image, long, work)
-            print(f"{short} bytes: {before} calls, {long} bytes: {after} calls")
-            if after > before:
-                raise SystemExit(
-                    f"{after - before} extra allocator calls at {long} bytes"
-                )
+        for size in (0, 55, 56, 64, 4096, 65536, 65537, 4 * 65536):
+            count = calls(image, size, work)
+            print(f"{size} bytes: {count} calls")
+            if count:
+                raise SystemExit(f"expected zero allocator calls at {size} bytes")
 
 
 if __name__ == "__main__":

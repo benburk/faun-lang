@@ -173,3 +173,32 @@ fn input_room_covers_every_count_accepted_at_a_parameter() {
     assert!(prepared.globals().len() >= 7 * 8 + 255);
     assert_eq!(super::shared::status(&prepared), 42);
 }
+
+#[test]
+fn short_scalar_buffers_keep_live_snapshots_across_growth_and_spill() {
+    let source = r"
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.read!(2)
+  read is Ok(Data(bytes)) else return host.exit!(1)
+  byte = bytes.get_or(0, 0)
+  a = List.repeat(byte, 7)
+  b = List.repeat(byte, 31)
+  c = List.repeat(byte, 47)
+  d = List.repeat(byte, 93)
+  large = List.repeat(byte, 300)
+  previous = c.drop(12)
+  changed = c.put(12, 17)
+  host.print!(Str.hex([a.get_or(6, 0), b.get_or(30, 0), previous.get_or(0, 0), changed.get_or(12, 0), d.get_or(92, 0), large.get_or(299, 0)]))
+  host.exit!(0)
+)
+";
+    let machine = super::faun::lower(source, &super::TARGET).unwrap();
+    let prepared = super::TARGET.prepare(&machine).unwrap();
+    assert_eq!(
+        super::shared::execute_with_input(&prepared, b"A"),
+        (0, "414141114141".into())
+    );
+}

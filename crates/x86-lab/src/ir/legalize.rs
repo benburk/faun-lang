@@ -128,6 +128,7 @@ fn prepare_pass<'a>(
 /// Counts whose reservations fit the shared buffer. Keep the data last so
 /// its unused payload is supplied by the loader.
 struct InputStorage {
+    capacity: u64,
     data: DataId,
     bounds: BTreeMap<ValueId, u64>,
 }
@@ -170,6 +171,7 @@ fn input_storage(
     bounds.retain(|_, size| (1..=65536).contains(size));
     let capacity = *bounds.values().max()?;
     Some(InputStorage {
+        capacity,
         data: sequence::input_storage(output, capacity),
         bounds,
     })
@@ -204,7 +206,7 @@ fn managed_runtime(
                         shapes.descriptors[shape.index()],
                     )
                 }),
-            config.word_bits,
+            config,
         )
     });
     (cells, sequences)
@@ -1200,7 +1202,7 @@ impl Pass<'_> {
                     sequence::allocate(b, allocate, (stride, none), count, self.word_bytes)
                 };
                 if let Some(storage) = storage {
-                    sequence::acquire_input(b, storage.data, fresh)
+                    sequence::acquire_input(b, storage.data, storage.capacity, fresh)
                 } else {
                     fresh(b)
                 }

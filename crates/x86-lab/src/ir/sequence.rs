@@ -8,7 +8,7 @@
 //!
 //! - word 2: its capacity, in elements;
 //! - words 3 and 4: the first element it holds claims for, and one past the
-//!   last, which every sequence of it lies between;
+//!   last, used only for elements with managed fields;
 //! - word 5: its stride, the bytes from one element to the next;
 //! - word 6: the address of its elements' descriptor, or nought where no
 //!   leaf of an element holds a claim;
@@ -594,8 +594,9 @@ pub(super) fn append(
     naturals: &NaturalLibrary,
     cells: cell::Library,
     wanted: impl IntoIterator<Item = (Growth, Packed, Option<DataId>)>,
-    word_bits: u16,
+    config: super::natural::Config,
 ) -> Library {
+    let word_bits = config.word_bits;
     let runtime = Runtime {
         claims: Claims {
             word_bits,
@@ -608,6 +609,8 @@ pub(super) fn append(
         release,
         block: naturals.release,
         allocate: naturals.require(Helper::Allocate),
+        small: (config.grows && word_bits == 64)
+            .then(|| scalar_workspace(program, naturals.require(Helper::Allocate))),
         moving: define_move(program, word_bits),
     };
     define_release(program, runtime);
@@ -721,6 +724,7 @@ struct Runtime {
     /// Gives up the block an object lies in.
     block: FunctionId,
     allocate: FunctionId,
+    small: Option<FunctionId>,
     /// `seq.move(source, dest, bytes)`.
     moving: FunctionId,
 }
@@ -730,39 +734,28 @@ impl Runtime {
         self.claims.word_bits
     }
 
-    /// Give up the claims elements `from` up to `to` of `object` hold, as
-    /// `descriptor` lists them, where it lists any.
+    /// Give up the claims in `from..to` using a nonzero element descriptor.
     fn release_elements(
         self,
         b: &mut Builder<'_>,
         (object, descriptor): (ValueId, ValueId),
         (from, to): (ValueId, ValueId),
     ) {
-        let zero = number(b, 0);
-        let none = b.compare(Relation::Equal, descriptor, zero);
-        b.if_(
-            none,
-            &[],
-            |b| b.yield_(&[]),
-            |b| {
-                let descriptor = b.convert(A, descriptor);
-                let stride = b.load(Width::Word, object, Offset::Words(STRIDE));
-                b.loop_(&[from], &[], |b, state| {
-                    let at = state[0];
-                    let more = b.compare(Relation::Less, at, to);
-                    b.if_(more, &[], |b| b.yield_(&[]), |b| b.break_(&[]));
-                    let element = element_at(b, object, (stride, at), self.word_bits());
-                    self.claims
-                        .each(b, (descriptor, element), &mut |b, kind, value| {
-                            self.claims.release_by_kind(b, kind, value);
-                        });
-                    let one = number(b, 1);
-                    let next = b.binary(Binary::Add, at, one);
-                    b.continue_(&[next]);
+        let descriptor = b.convert(A, descriptor);
+        let stride = b.load(Width::Word, object, Offset::Words(STRIDE));
+        b.loop_(&[from], &[], |b, state| {
+            let at = state[0];
+            let more = b.compare(Relation::Less, at, to);
+            b.if_(more, &[], |b| b.yield_(&[]), |b| b.break_(&[]));
+            let element = element_at(b, object, (stride, at), self.word_bits());
+            self.claims
+                .each(b, (descriptor, element), &mut |b, kind, value| {
+                    self.claims.release_by_kind(b, kind, value);
                 });
-                b.yield_(&[]);
-            },
-        );
+            let one = number(b, 1);
+            let next = b.binary(Binary::Add, at, one);
+            b.continue_(&[next]);
+        });
     }
 
     /// Count elements `from` up to `to` of `object` as holding claims from
@@ -780,6 +773,37 @@ impl Runtime {
         b.store(Width::Word, object, Offset::Words(HIGH), high);
     }
 
+    /// Reserve the destination before copying. Scalar layouts can use a fixed
+    /// slot. Larger requests and outstanding owners fall back to the heap.
+    fn destination(
+        self,
+        b: &mut Builder,
+        total: ValueId,
+        (element, description): (&Packed, Option<DataId>),
+    ) -> (ValueId, ValueId, ValueId, ValueId) {
+        let (stride, descriptor) = static_layout(b, element, description);
+        let two = number(b, 2);
+        let doubled = b.binary(Binary::Mul, total, two);
+        let least = number(b, MINIMUM_CAPACITY);
+        let capacity = greater(b, doubled, least);
+        let word_bytes = u64::from(self.word_bits() / 8);
+        let bytes = buffer_bytes(b, capacity, stride, word_bytes);
+        let (fresh, capacity) = if let Some(small) = self.small
+            && description.is_none()
+            && matches!(element.size, 1 | 2 | 4 | 8)
+        {
+            let maximum = number(b, SMALL_BYTES / element.size);
+            let result = b.call(small, &[bytes, capacity, maximum]);
+            (result[0], result[1])
+        } else {
+            (b.call_one(self.allocate, &[bytes]), capacity)
+        };
+        b.store(Width::Word, fresh, Offset::Words(CAPACITY), capacity);
+        b.store(Width::Word, fresh, Offset::Words(STRIDE), stride);
+        b.store(Width::Word, fresh, Offset::Words(DESCRIPTOR), descriptor);
+        (fresh, capacity, stride, descriptor)
+    }
+
     /// A buffer of `layout` with room for `total` elements and as many
     /// again, and at least [`MINIMUM_CAPACITY`], holding the `len` elements
     /// from `start` of `object` where `placed` says, with claims to what
@@ -789,15 +813,11 @@ impl Runtime {
         self,
         b: &mut Builder<'_>,
         (object, start, len): (ValueId, ValueId, ValueId),
-        (total, (stride, descriptor)): (ValueId, (ValueId, ValueId)),
+        total: ValueId,
+        layout: (&Packed, Option<DataId>),
         placed: Placed,
     ) -> ValueId {
-        let two = number(b, 2);
-        let doubled = b.binary(Binary::Mul, total, two);
-        let least = number(b, MINIMUM_CAPACITY);
-        let capacity = greater(b, doubled, least);
-        let word_bytes = u64::from(self.word_bits() / 8);
-        let fresh = allocate(b, self.allocate, (stride, descriptor), capacity, word_bytes);
+        let (fresh, capacity, stride, descriptor) = self.destination(b, total, layout);
         let (first, at) = match placed {
             Placed::AtEnd => {
                 let first = b.binary(Binary::Sub, capacity, total);
@@ -808,14 +828,18 @@ impl Runtime {
                 (zero, zero)
             }
         };
-        let high = b.binary(Binary::Add, first, total);
-        b.store(Width::Word, fresh, Offset::Words(LOW), first);
-        b.store(Width::Word, fresh, Offset::Words(HIGH), high);
+        if layout.1.is_some() {
+            let high = b.binary(Binary::Add, first, total);
+            b.store(Width::Word, fresh, Offset::Words(LOW), first);
+            b.store(Width::Word, fresh, Offset::Words(HIGH), high);
+        }
         let from = element_at(b, object, (stride, start), self.word_bits());
         let to = element_at(b, fresh, (stride, at), self.word_bits());
         let bytes = b.binary(Binary::Mul, len, stride);
         b.call(self.moving, &[from, to, bytes]);
-        claim_run(b, self, (to, len), (stride, descriptor));
+        if layout.1.is_some() {
+            claim_run(b, self, (to, len), (stride, descriptor));
+        }
         b.call(self.release, &[object]);
         fresh
     }
@@ -846,44 +870,113 @@ fn element_at(
     byte_offset(b, object, bytes)
 }
 
-/// One single-threaded input workspace. Its permanent claim prevents mutation
-/// through ordinary sequence operations and keeps it out of the heap free list.
-pub(super) fn input_storage(p: &mut Program, capacity: u64) -> DataId {
-    let mut data: Vec<_> = [0, 1, capacity, capacity, 0, 1, 0]
-        .into_iter()
-        .flat_map(u64::to_le_bytes)
-        .collect();
-    data.resize(
-        data.len() + usize::try_from(capacity).expect("bounded input size"),
-        0,
-    );
-    p.global(&data)
+const SMALL_BYTES: u64 = 256;
+const SCALAR_BUFFERS: u64 = 3;
+
+/// A bounded alternative to arena growth for short scalar sequences.
+/// Slots share the regular buffer header and are outside the heap arena ring. A claim of
+/// zero makes a slot available. Every other count has its normal ownership
+/// meaning, including in-place writes when only one sequence holds the slot.
+fn scalar_workspace(p: &mut Program, heap: FunctionId) -> FunctionId {
+    let slot_bytes = ELEMENTS * 8 + SMALL_BYTES;
+    let data = p.global(&vec![
+        0;
+        usize::try_from(slot_bytes * SCALAR_BUFFERS)
+            .expect("small buffer storage")
+    ]);
+    let acquire = p.declare("seq.small", &[W, W, W], &[A, W]);
+    p.define(acquire, |b, args| {
+        let (bytes, capacity, maximum) = (args[0], args[1], args[2]);
+        let large = b.compare(Relation::Less, maximum, capacity);
+        b.if_(
+            large,
+            &[],
+            |b| b.yield_(&[]),
+            |b| {
+                let base = b.address_of(data);
+                let zero = number(b, 0);
+                for slot in 0..SCALAR_BUFFERS {
+                    let offset = number(b, slot * slot_bytes);
+                    let at = byte_offset(b, base, offset);
+                    let refs = b.load(Width::Word, at, Offset::Words(1));
+                    let free = b.compare(Relation::Equal, refs, zero);
+                    b.if_(
+                        free,
+                        &[],
+                        |b| {
+                            let one = number(b, 1);
+                            b.store(Width::Word, at, Offset::Words(1), one);
+                            b.ret(&[at, maximum]);
+                        },
+                        |b| b.yield_(&[]),
+                    );
+                }
+                b.yield_(&[]);
+            },
+        );
+        let other = b.call_one(heap, &[bytes]);
+        b.ret(&[other, capacity]);
+    });
+    acquire
 }
 
-/// Earlier reads may still have live slices. Reuse the workspace only after
-/// the last such claim has been released, including on short reads and EOF.
+/// Two independent read destinations let a stream retain a tail from the
+/// preceding read. The kernel supplies their zeroed headers and payloads.
+pub(super) fn input_storage(p: &mut Program, capacity: u64) -> DataId {
+    let bytes = (ELEMENTS * 8 + capacity).next_multiple_of(8);
+    p.global(&vec![
+        0;
+        usize::try_from(2 * bytes).expect("bounded input size")
+    ])
+}
+
+/// A slot is free when its last sequence or slice has released it. Like the
+/// scalar workspace, these objects lie outside the heap's scanned arenas.
 pub(super) fn acquire_input(
     b: &mut Builder<'_>,
     storage: DataId,
+    limit: u64,
     fresh: impl FnOnce(&mut Builder) -> ValueId,
 ) -> ValueId {
-    let object = b.address_of(storage);
-    let refs = b.load(Width::Word, object, Offset::Words(1));
-    let one = number(b, 1);
-    let free = b.compare(Relation::Equal, refs, one);
+    let first = b.address_of(storage);
+    let offset = number(b, (ELEMENTS * 8 + limit).next_multiple_of(8));
+    let second = byte_offset(b, first, offset);
+    let object = |b: &mut Builder, at: ValueId| {
+        let one = number(b, 1);
+        let capacity = number(b, limit);
+        b.store(Width::Word, at, Offset::Words(1), one);
+        b.store(Width::Word, at, Offset::Words(CAPACITY), capacity);
+        b.store(Width::Word, at, Offset::Words(STRIDE), one);
+        b.yield_(&[at]);
+    };
+    let zero = number(b, 0);
+    let refs = b.load(Width::Word, first, Offset::Words(1));
+    let free = b.compare(Relation::Equal, refs, zero);
     b.if_(
         free,
         &[A],
+        |b| object(b, first),
         |b| {
-            let two = number(b, 2);
-            b.store(Width::Word, object, Offset::Words(1), two);
-            b.yield_(&[object]);
-        },
-        |b| {
-            let other = fresh(b);
+            let refs = b.load(Width::Word, second, Offset::Words(1));
+            let free = b.compare(Relation::Equal, refs, zero);
+            let other = b.if_(
+                free,
+                &[A],
+                |b| object(b, second),
+                |b| {
+                    let room = fresh(b);
+                    b.yield_(&[room]);
+                },
+            )[0];
             b.yield_(&[other]);
         },
     )[0]
+}
+
+fn buffer_bytes(b: &mut Builder, capacity: ValueId, stride: ValueId, word_bytes: u64) -> ValueId {
+    let elements = b.binary(Binary::Mul, capacity, stride);
+    let fixed = number(b, (ELEMENTS - 3) * word_bytes);
+    b.binary(Binary::Add, elements, fixed)
 }
 
 /// Allocate a buffer with room for `capacity` elements one `stride` apart,
@@ -896,9 +989,7 @@ pub(super) fn allocate(
     capacity: ValueId,
     word_bytes: u64,
 ) -> ValueId {
-    let elements = b.binary(Binary::Mul, capacity, stride);
-    let fixed = number(b, (ELEMENTS - 3) * word_bytes);
-    let bytes = b.binary(Binary::Add, elements, fixed);
+    let bytes = buffer_bytes(b, capacity, stride, word_bytes);
     let object = b.call_one(allocate, &[bytes]);
     let none = number(b, 0);
     b.store(Width::Word, object, Offset::Words(CAPACITY), capacity);
@@ -953,10 +1044,18 @@ fn define_release(program: &mut Program, runtime: Runtime) {
             last,
             &[],
             |b| {
-                let low = b.load(Width::Word, object, Offset::Words(LOW));
-                let high = b.load(Width::Word, object, Offset::Words(HIGH));
                 let descriptor = b.load(Width::Word, object, Offset::Words(DESCRIPTOR));
-                runtime.release_elements(b, (object, descriptor), (low, high));
+                b.if_(
+                    descriptor,
+                    &[],
+                    |b| {
+                        let low = b.load(Width::Word, object, Offset::Words(LOW));
+                        let high = b.load(Width::Word, object, Offset::Words(HIGH));
+                        runtime.release_elements(b, (object, descriptor), (low, high));
+                        b.yield_(&[]);
+                    },
+                    |b| b.yield_(&[]),
+                );
                 b.yield_(&[]);
             },
             |b| b.yield_(&[]),
@@ -1000,9 +1099,9 @@ fn define_reserve(
             |b| {
                 // Shared, or with no room in front: copy the sequence to the
                 // end of a buffer with as much room again in front.
-                let layout = static_layout(b, element, descriptor);
+                let layout = (element, descriptor);
                 let total = b.binary(Binary::Add, len, one);
-                let fresh = runtime.grown(b, (object, start, len), (total, layout), Placed::AtEnd);
+                let fresh = runtime.grown(b, (object, start, len), total, layout, Placed::AtEnd);
                 b.yield_(&[fresh]);
             },
         );
@@ -1071,14 +1170,16 @@ fn define_room(
             &[],
             |b| {
                 let first = b.binary(Binary::Sub, start, count);
-                runtime.claim_slots(b, target, (first, start));
+                if descriptor.is_some() {
+                    runtime.claim_slots(b, target, (first, start));
+                }
                 b.ret(&[target]);
             },
             |b| b.yield_(&[]),
         );
-        let layout = static_layout(b, element, descriptor);
+        let layout = (element, descriptor);
         let total = b.binary(Binary::Add, len, count);
-        let fresh = runtime.grown(b, (target, start, len), (total, layout), Placed::AtEnd);
+        let fresh = runtime.grown(b, (target, start, len), total, layout, Placed::AtEnd);
         b.ret(&[fresh]);
     });
 }
@@ -1114,14 +1215,16 @@ fn define_after(
             both,
             &[],
             |b| {
-                runtime.claim_slots(b, object, (end, past));
+                if descriptor.is_some() {
+                    runtime.claim_slots(b, object, (end, past));
+                }
                 b.ret(&[object]);
             },
             |b| b.yield_(&[]),
         );
-        let layout = static_layout(b, element, descriptor);
+        let layout = (element, descriptor);
         let total = b.binary(Binary::Add, len, count);
-        let fresh = runtime.grown(b, (object, start, len), (total, layout), Placed::AtStart);
+        let fresh = runtime.grown(b, (object, start, len), total, layout, Placed::AtStart);
         b.ret(&[fresh]);
     });
 }
@@ -1151,9 +1254,8 @@ fn define_own(
                 &[A, W],
                 |b| b.yield_(&[object, start]),
                 |b| {
-                    let layout = static_layout(b, element, descriptor);
-                    let fresh =
-                        runtime.grown(b, (object, start, len), (len, layout), Placed::AtEnd);
+                    let layout = (element, descriptor);
+                    let fresh = runtime.grown(b, (object, start, len), len, layout, Placed::AtEnd);
                     let capacity = b.load(Width::Word, fresh, Offset::Words(CAPACITY));
                     let first = b.binary(Binary::Sub, capacity, len);
                     b.yield_(&[fresh, first]);
