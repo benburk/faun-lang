@@ -45,14 +45,16 @@
 //! requirement is worked out exactly, and left alone where the answer would
 //! not fit it.
 
+use std::collections::HashMap;
+
 use num_bigint::BigUint;
 
 use crate::facts::Facts;
 use crate::float::{Float, Format, Operation};
 
 use super::{
-    Binary, Builder, Class, Direction, Exit, Op, Program, RegionId, Relation, ValueId, model::wrap,
-    rewrite,
+    Binary, Builder, Class, Direction, Exit, Op, Program, Range, RegionId, Relation, ShapeId,
+    ValueId, model::wrap, rewrite,
 };
 
 /// The fewest bits a machine word has on any target this compiles for.
@@ -77,6 +79,7 @@ const LOW_DEPTH: u8 = 32;
 pub(super) fn simplify(source: &Program) -> Program {
     let mut pass = Simplify {
         wrote: Wrote::of(source),
+        pushes: temporary_pushes(source),
         steps: vec![None; source.values_count()],
         folded: vec![None; source.values_count()],
         word_bits: source.layout.map(|layout| layout.word_bits),
@@ -84,8 +87,57 @@ pub(super) fn simplify(source: &Program) -> Program {
     rewrite::rebuild(source, &mut pass)
 }
 
+/// The start returned alongside a buffer, and the push that produced it.
+struct Pushed {
+    start: ValueId,
+    operands: Range,
+    shape: ShapeId,
+}
+
+/// Both results must have a single use. An escaping buffer may be read
+/// through its address; a separately used start keeps the push live.
+fn temporary_pushes(source: &Program) -> HashMap<ValueId, Pushed> {
+    if !source
+        .ops
+        .iter()
+        .any(|op| matches!(op, Op::BufferPrepend { .. }))
+    {
+        return HashMap::new();
+    }
+    let mut uses = vec![0u8; source.values_count()];
+    let operands = source.ops.iter().flat_map(|op| source.operands(op));
+    let exits = source
+        .regions
+        .ids()
+        .flat_map(|r| source.outgoing(r).iter().copied());
+    for value in operands.chain(exits) {
+        let count = &mut uses[value.index()];
+        *count = count.saturating_add(1);
+    }
+    let mut pushes = HashMap::new();
+    for region in source.regions.ids() {
+        for (op, results) in source.walk(region) {
+            if let (Op::BufferPush { operands, shape }, &[buffer, start]) = (*op, results)
+                && uses[buffer.index()] == 1
+                && uses[start.index()] == 1
+            {
+                pushes.insert(
+                    buffer,
+                    Pushed {
+                        start,
+                        operands,
+                        shape,
+                    },
+                );
+            }
+        }
+    }
+    pushes
+}
+
 struct Simplify {
     wrote: Wrote,
+    pushes: HashMap<ValueId, Pushed>,
     /// What each old value is a fixed step past, once anything has been
     /// found to be a step past anything. Written as the walk goes, since
     /// what a step is past is whatever the walk has already written.
@@ -151,6 +203,9 @@ impl rewrite::Pass for Simplify {
                 let value = rebuild.value(value);
                 rebuild.stands_for(results[0], b.float(add, &[value, value]));
                 true
+            }
+            Op::BufferPrepend { operands, shape } => {
+                self.prepend_elements(rebuild, b, operands, shape, results)
             }
             Op::CellField { cell, index, shape } => {
                 let Some((
@@ -383,6 +438,60 @@ impl Simplify {
     fn places(&self, value: ValueId) -> Option<u32> {
         let number = self.number(value)?;
         number.is_power_of_two().then(|| number.trailing_zeros())
+    }
+
+    /// A short sequence constructed only to reverse it onto another can
+    /// put its elements straight onto that destination, head first.
+    fn prepend_elements(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        operands: Range,
+        shape: ShapeId,
+        results: &[ValueId],
+    ) -> bool {
+        let source = rebuild.source();
+        let &[onto, start, len, mut from, mut first, count] = source.values(operands) else {
+            unreachable!("a prepend has two sequence views")
+        };
+        let Some(count @ 1..=4) = self.number(count) else {
+            return false;
+        };
+        // Bound the number of inlined pushes. Verify the exact view at
+        // every link before emitting anything, including its tail length.
+        let mut elements = Vec::new();
+        for tail in (0..count).rev() {
+            let Some(push) = self.pushes.get(&from) else {
+                return false;
+            };
+            if push.shape != shape || push.start != first {
+                return false;
+            }
+            let [buffer, start, len, fields @ ..] = source.values(push.operands) else {
+                unreachable!("a push takes a sequence and element fields")
+            };
+            if self.number(*len) != Some(tail) {
+                return false;
+            }
+            elements.push(fields);
+            (from, first) = (*buffer, *start);
+        }
+        let (mut buffer, mut first, mut len) = (
+            rebuild.value(onto),
+            rebuild.value(start),
+            rebuild.value(len),
+        );
+        for (at, fields) in elements.iter().enumerate() {
+            if at > 0 {
+                let one = b.constant(Class::Word, 1);
+                len = b.binary_at(Class::Word, Binary::Add, len, one);
+            }
+            let fields: Vec<_> = fields.iter().map(|&field| rebuild.value(field)).collect();
+            [buffer, first] = b.buffer_push((buffer, first, len), shape, &fields);
+        }
+        rebuild.stands_for(results[0], buffer);
+        rebuild.stands_for(results[1], first);
+        true
     }
 
     /// The number an old value is, where a constant wrote it or it was
