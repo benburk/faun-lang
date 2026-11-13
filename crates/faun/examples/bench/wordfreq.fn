@@ -1,0 +1,41 @@
+# A case-insensitive concordance. Words are runs of ASCII letters. Common
+# stop words are omitted. Print every remaining word and count in word order.
+
+import std.host {Host}
+
+stop_words : List(Str)
+stop_words = [
+  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
+  "is", "it", "of", "on", "or", "that", "the", "this", "to", "with",
+]
+
+record : (Map(Str, Nat), List(Str), List(U8)) -> Map(Str, Nat)
+record(counts, _, []) -> counts
+record(counts, stop, reversed) -> (
+  word = Str.from_ascii(reversed.reverse()).ok_or("")
+  at = stop.partition_point(|key| key < word)
+  if stop.get(at) == Ok(word) then counts else counts.update_or(word, 0, |n| n + 1)
+)
+
+scan : (List(U8), List(Str), List(U8), Map(Str, Nat)) -> Map(Str, Nat)
+scan([byte, *rest], stop, word, counts) if byte.is_ascii_letter() ->
+  scan(rest, stop, [byte.to_ascii_lower(), *word], counts)
+scan([_, *rest], stop, word, counts) -> scan(rest, stop, [], record(counts, stop, word))
+scan([], stop, word, counts) -> record(counts, stop, word)
+
+lines : List(U8) -> List(Str)
+lines(input) -> scan(input, stop_words, [], Map.empty).to_list()
+  .sort_on(|(word, _)| word)
+  .map(|(word, n)| "${word}\t${n}")
+
+expect lines("The red FOX; a fox!".to_utf8()) == ["fox\t2", "red\t1"]
+expect lines("a AND the".to_utf8()) == [] & lines([]) == []
+expect lines("antidisestablishmentarianism".to_utf8()) == ["antidisestablishmentarianism\t1"]
+
+main! : Host -> []
+main!(host) -> (
+  input = host.stdin.read_to_end!()
+  input is Ok(bytes) else return host.exit!(1)
+  printed = host.print_lines!(lines(bytes))
+  host.exit!(if printed.is_ok() then 0 else 1)
+)
