@@ -80,20 +80,20 @@ length_bytes(bits) -> (
 
 compress : (State, List(U8)) -> State
 compress(start is (a, b, c, d), block) -> (
-  (a2, b2, c2, d2) = steps.enumerate().fold(start, |state, step| round(block, state, step))
+  words = block_words(block)
+  (a2, b2, c2, d2) = steps.enumerate().fold(start, |state, step| round(words, state, step))
   (a + a2, b + b2, c + c2, d + d2)
 )
 
-word_at : (List(U8), Nat) -> U32
-word_at(block, i) -> (
-  block.drop(4 * i) is [a, b, c, d, *_] else return 0
-  U32.of_le_bytes(a, b, c, d)
-)
+block_words : List(U8) -> List(U32)
+block_words([a, b, c, d, *rest]) ->
+  [U32.of_le_bytes(a, b, c, d), *block_words(rest)]
+block_words(_) -> []
 
-round : (List(U8), State, (Nat, (U32, Nat))) -> State
-round(block, (a, b, c, d), (i, (k, s))) -> (
+round : (List(U32), State, (Nat, (U32, Nat))) -> State
+round(words, (a, b, c, d), (i, (k, s))) -> (
   (f, g) = mix(b, c, d, i)
-  (d, b + (a + f + k + word_at(block, g)).rotate_left(s), b, c)
+  (d, b + (a + f + k + words.get_or(g, 0)).rotate_left(s), b, c)
 )
 
 # Each round's function of b, c and d, and which word of the block it adds.
@@ -126,6 +126,8 @@ steps = [
   (0x6fa87e4f, 6), (0xfe2ce6e0, 10), (0xa3014314, 15), (0x4e0811a1, 21),
   (0xf7537e82, 6), (0xbd3af235, 10), (0x2ad7d2bb, 15), (0xeb86d391, 21),
 ]
+
+expect block_words([0, 1, 2, 3, 0x80, 0x90, 0xa0, 0xb0]) == [0x03020100, 0xb0a09080]
 
 # RFC 1321 vectors, including a message that crosses the 56-byte padding
 # boundary and so takes two blocks.
