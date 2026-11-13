@@ -598,6 +598,35 @@ impl<'a> Lowering<'a> {
             && self.uses.operands[value.index()] == 1
     }
 
+    fn compare(
+        &mut self,
+        op: Opcode,
+        left: Reg,
+        right: VReg,
+        right_reg: Reg,
+        bits: u16,
+    ) -> Condition {
+        let unique = self.is_unique_constant(right);
+        if unique && op == Opcode::Below && self.asm.fold_below_sign_bit(left, right_reg, bits) {
+            self.forget(right_reg);
+            return Condition::NotSign;
+        }
+        if (unique || self.is_only_nought(right))
+            && self
+                .asm
+                .fold_alu_immediate(Alu::Compare, left, right_reg, bits)
+        {
+            self.forget(right_reg);
+        } else {
+            self.asm.alu(Alu::Compare, left, right_reg, bits);
+        }
+        if op == Opcode::Equal {
+            Condition::Equal
+        } else {
+            Condition::Below
+        }
+    }
+
     fn is_branch_only_result(&self, points: &InstPoints, result: VReg) -> bool {
         let block = self.selected.blocks[self.block_at(points.late)];
         let is_last = self.selected.order[block.instructions.range()]
@@ -1019,22 +1048,7 @@ impl<'a> Lowering<'a> {
             (Opcode::Equal | Opcode::Below, Immediate::Bits(bits)) => {
                 let source = self.selected.operands[inst.operands.range()][1];
                 let source_reg = reg(1)?;
-                // Nought read here alone was just written, or the fold
-                // finds nothing to take back; the fold forgets the register.
-                if (self.is_unique_constant(source) || self.is_only_nought(source))
-                    && self
-                        .asm
-                        .fold_alu_immediate(Alu::Compare, reg(0)?, source_reg, bits)
-                {
-                    self.forget(source_reg);
-                } else {
-                    self.asm.alu(Alu::Compare, reg(0)?, source_reg, bits);
-                }
-                let condition = if inst.opcode == Opcode::Equal {
-                    Condition::Equal
-                } else {
-                    Condition::Below
-                };
+                let condition = self.compare(inst.opcode, reg(0)?, source, source_reg, bits);
                 let result = result()?;
                 if self.is_branch_only_result(points, inst.result.expect("a compared result")) {
                     self.pending_condition =
@@ -1346,7 +1360,7 @@ impl<'a> Lowering<'a> {
                     self.pending_condition.take()
                     && pending == condition
                 {
-                    (condition_code, inverse(condition_code))
+                    (condition_code, condition_code.inverse())
                 } else {
                     let condition = match self.location(layout.terminator, condition)? {
                         Location::Register(reg) => reg,
@@ -1500,15 +1514,6 @@ const fn successors(terminator: Terminator) -> [Option<BlockId>; 2] {
             ..
         } => [Some(then_target), Some(else_target)],
         Terminator::Return { .. } | Terminator::Halt => [None, None],
-    }
-}
-
-const fn inverse(condition: Condition) -> Condition {
-    match condition {
-        Condition::Equal => Condition::NotEqual,
-        Condition::NotEqual => Condition::Equal,
-        Condition::Below => Condition::NotBelow,
-        Condition::NotBelow => Condition::Below,
     }
 }
 

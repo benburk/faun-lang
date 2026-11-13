@@ -126,6 +126,21 @@ pub(crate) enum Condition {
     NotEqual,
     Below,
     NotBelow,
+    Sign,
+    NotSign,
+}
+
+impl Condition {
+    pub(crate) const fn inverse(self) -> Self {
+        match self {
+            Self::Equal => Self::NotEqual,
+            Self::NotEqual => Self::Equal,
+            Self::Below => Self::NotBelow,
+            Self::NotBelow => Self::Below,
+            Self::Sign => Self::NotSign,
+            Self::NotSign => Self::Sign,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -746,6 +761,29 @@ impl AllocatedBuilder {
         });
     }
 
+    /// Comparing an unsigned word to its high bit alone tests whether its sign bit is clear.
+    /// The caller checks the comparison is the only use of the constant.
+    /// A label on its move can enter the replacement test, but a label
+    /// between move and compare can supply a different right operand.
+    pub(crate) fn fold_below_sign_bit(&mut self, dst: Reg, src: Reg, bits: u16) -> bool {
+        let len = self.code.insts().len();
+        let Some(last) = self.code.insts().last() else {
+            return false;
+        };
+        let (mask_reg, mask) = match (*last, bits) {
+            (Inst::MoveImmediate32 { dst, value }, 32) => (dst, u64::from(value)),
+            (Inst::MoveImmediate64 { dst, value }, 64) => (dst, value),
+            _ => return false,
+        };
+        if mask_reg != src || src == dst || mask != 1 << (bits - 1) || self.code.labelled_from(len)
+        {
+            return false;
+        }
+        self.code.remove(len - 1);
+        self.alu(Alu::Test, dst, dst, bits);
+        true
+    }
+
     pub(crate) fn fold_alu_immediate(&mut self, op: Alu, dst: Reg, src: Reg, bits: u16) -> bool {
         let len = self.code.insts().len();
         // Nought compared with is a register tested against itself, which
@@ -962,6 +1000,20 @@ mod tests {
                     ..
                 },
             ]
+        ));
+    }
+
+    #[test]
+    fn sign_test_keeps_loads_needed_at_other_entry_points_or_widths() {
+        let mut builder = AllocatedBuilder::default();
+        builder.mov_imm32(Reg::Rcx, 1 << 31);
+        assert!(!builder.fold_below_sign_bit(Reg::Rax, Reg::Rcx, 64));
+        let compare = builder.label();
+        builder.bind(compare);
+        assert!(!builder.fold_below_sign_bit(Reg::Rax, Reg::Rcx, 32));
+        assert!(matches!(
+            builder.finish().unwrap().instructions(),
+            [Inst::MoveImmediate32 { .. }]
         ));
     }
 

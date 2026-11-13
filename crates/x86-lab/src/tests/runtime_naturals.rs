@@ -207,3 +207,43 @@ fn source_rotates_select_native_widths_and_wrap_the_count() {
         );
     }
 }
+
+#[test]
+fn unsigned_comparisons_at_the_sign_bit_test_the_full_operand_width() {
+    use crate::ir::Relation;
+    use crate::machine::{Condition, Inst};
+    for bits in [32, 64] {
+        let word = Class::fixed(bits);
+        let sign_bit = 1_u64 << (bits - 1);
+        let (mut p, main) = Program::new("main");
+        let below = p.declare("below", &[word], &[Class::Word]);
+        p.define(below, |b, args| {
+            let limit = b.constant(word, sign_bit);
+            let less = b.compare(Relation::Less, args[0], limit);
+            b.ret(&[less]);
+        });
+        p.define(main, |b, _| {
+            let mut result = b.constant(Class::Word, 0);
+            for value in [0, sign_bit - 1, sign_bit, sign_bit + 1] {
+                let next = b.constant(word, value);
+                let less = b.call_one(below, &[next]);
+                result = b.binary(Binary::Add, result, result);
+                result = b.binary(Binary::Add, result, less);
+            }
+            b.ret(&[result]);
+        });
+        let prepared = super::TARGET.prepare(&p).unwrap();
+        let code = crate::selected::select_and_allocate(&prepared).unwrap();
+        assert!(
+            code.instructions().iter().any(|inst| matches!(
+                inst,
+                Inst::SetIf {
+                    condition: Condition::NotSign,
+                    ..
+                }
+            )),
+            "missing {bits}-bit sign test"
+        );
+        assert_eq!(super::shared::status(&prepared), 0b1100);
+    }
+}

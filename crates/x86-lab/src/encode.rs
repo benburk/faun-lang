@@ -174,6 +174,8 @@ const fn condition_code(condition: Condition) -> u8 {
         Condition::NotEqual => 0x5,
         Condition::Below => 0x2,
         Condition::NotBelow => 0x3,
+        Condition::Sign => 0x8,
+        Condition::NotSign => 0x9,
     }
 }
 

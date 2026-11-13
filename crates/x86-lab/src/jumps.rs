@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 
-use super::machine::{Condition, Inst};
+use super::machine::Inst;
 use faun_core::targets::code::{Code, Label};
 
 /// The most instructions a jump is replaced by, beside the jump or return
@@ -200,7 +200,7 @@ fn drop_redundant(code: &mut Code<Inst>) -> bool {
                     && code.position(target) == Some(at + 2)
                 {
                     code.insts_mut()[at] = Inst::Jump {
-                        condition: Some(negated(condition)),
+                        condition: Some(condition.inverse()),
                         target: over,
                     };
                     kept[at + 1] = false;
@@ -230,19 +230,10 @@ fn landed_on(code: &Code<Inst>) -> Vec<bool> {
     labelled
 }
 
-const fn negated(condition: Condition) -> Condition {
-    match condition {
-        Condition::Equal => Condition::NotEqual,
-        Condition::NotEqual => Condition::Equal,
-        Condition::Below => Condition::NotBelow,
-        Condition::NotBelow => Condition::Below,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::Reg;
+    use crate::machine::{Condition, Reg};
 
     fn jump(condition: Option<Condition>, target: Label) -> Inst {
         Inst::Jump { condition, target }
