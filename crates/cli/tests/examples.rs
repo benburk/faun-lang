@@ -625,6 +625,41 @@ fn check_fasta_line_breaks(image: &Path) {
     }
 }
 
+// Compare the packed image with a direct 50-step orbit, including the
+// first escaping iterate and every possible width of the trailing byte.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+fn check_mandelbrot_rows(image: &Path) {
+    for n in [0_u16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 57, 101] {
+        let mut expected = format!("P4\n{n} {n}\n").into_bytes();
+        for y in 0..n {
+            let ci = 2.0 * f64::from(y) / f64::from(n) - 1.0;
+            let mut row = vec![0; usize::from(n.div_ceil(8))];
+            for x in 0..n {
+                let cr = 2.0 * f64::from(x) / f64::from(n) - 1.5;
+                let (mut re, mut im) = (0.0, 0.0);
+                let escaped = (0..50).any(|_| {
+                    let rr = re * re;
+                    let ii = im * im;
+                    let next_im = 2.0 * re * im;
+                    (re, im) = (rr - ii + cr, next_im + ci);
+                    let magnitude_squared = (re * re, im * im);
+                    magnitude_squared.0 + magnitude_squared.1 > 4.0
+                });
+                if !escaped {
+                    row[usize::from(x / 8)] |= 0x80 >> (x % 8);
+                }
+            }
+            expected.extend(row);
+        }
+        let output = std::process::Command::new(image)
+            .arg(n.to_string())
+            .output()
+            .unwrap();
+        assert!(output.status.success() && output.stderr.is_empty());
+        assert_eq!(output.stdout, expected, "Mandelbrot at width {n}");
+    }
+}
+
 /// Each benchmarks-game program, built and run at the size the game checks
 /// it at, writes the game's own output; k-nucleotide reads what fasta writes.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -651,8 +686,10 @@ fn the_benchmarks_game_programs_write_the_games_output() {
             .status()
             .unwrap();
         assert!(status.success(), "{name} builds");
-        if name == "fasta" {
-            check_fasta_line_breaks(&image);
+        match name {
+            "fasta" => check_fasta_line_breaks(&image),
+            "mandelbrot" => check_mandelbrot_rows(&image),
+            _ => {}
         }
         let mut run = std::process::Command::new(&image);
         if name == "k-nucleotide" {
@@ -663,10 +700,7 @@ fn the_benchmarks_game_programs_write_the_games_output() {
         }
         let output = run.output().unwrap();
         let expected = std::fs::read(game.join(name).join(format!("{size}.out"))).unwrap();
-        assert!(
-            output.stdout == expected,
-            "{name} at {size} writes the game's output"
-        );
+        assert!(output.stdout == expected, "{name} at {size}");
     }
     std::fs::remove_dir_all(&built).unwrap();
 }
