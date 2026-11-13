@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Time a set of Faun programs, built by one compiler or several, on fixed
-inputs: JSON parsing and decoding, grep, word frequency, hex encoding, a SAT search,
-n-body and spectral norm. Every build's answer must agree with the first
-compiler's before any is timed. Runs alternate, pinned to one CPU, and the
+inputs: JSON parsing and decoding, grep, word frequency, hex encoding, codon
+counts, a SAT search, n-body and spectral norm. Every build's answer must
+agree with the first compiler's before any is timed. Runs alternate, pinned to one CPU, and the
 median time, peak RSS, and executable size are reported. Where available,
 `perf stat` counts instructions in a separate run.
 
@@ -33,6 +33,7 @@ BENCHMARKS = [
     ("json-parse", EXAMPLES / "libraries/json/bench/parse.fn", [], "users.json"),
     ("json-decode", EXAMPLES / "libraries/json/bench/decode.fn", [], "users.json"),
     ("grep", HERE / "grep.fn", [".*(error|warn).*timeout.*"], "log.txt"),
+    ("codon-count", HERE / "codon-count.fn", [], "dna.txt"),
     ("hex-encode", HERE / "hex-encode.fn", [], "binary.dat"),
     ("wordfreq", HERE / "wordfreq.fn", [], "words.txt"),
     ("sat", HERE / "sat.fn", ["7"], None),
@@ -72,7 +73,13 @@ def inputs(directory):
     words.write_bytes((chapter + b"\n") * 16)
     binary = directory / "binary.dat"
     binary.write_bytes(random.Random(19).randbytes(256 * 1024))
+    dna = directory / "dna.txt"
+    bases = random.Random(31).choices(
+        b"ACGTacgtN", weights=[6, 5, 5, 6, 6, 5, 5, 6, 1], k=300_002
+    )
+    dna.write_bytes(bytes(bases))
     return {
+        "dna.txt": dna,
         "users.json": users,
         "log.txt": log,
         "words.txt": words,
@@ -90,8 +97,18 @@ def word_counts(path):
         for word in re.findall(rb"[a-z]+", path.read_bytes().lower())
         if word not in stop
     )
+    return count_lines(counts)
+
+
+def codon_counts(path):
+    dna = path.read_bytes().upper()
+    triplets = (dna[i : i + 3] for i in range(0, len(dna) - 2, 3))
+    return count_lines(Counter(key for key in triplets if key.isascii()))
+
+
+def count_lines(counts):
     return b"".join(
-        word + b"\t" + str(n).encode() + b"\n" for word, n in sorted(counts.items())
+        key + b"\t" + str(n).encode() + b"\n" for key, n in sorted(counts.items())
     )
 
 
@@ -184,6 +201,8 @@ def main():
             expected = None
             if name == "wordfreq":
                 expected = word_counts(stdin_path)
+            elif name == "codon-count":
+                expected = codon_counts(stdin_path)
             elif name == "hex-encode":
                 expected = stdin_path.read_bytes().hex().encode("ascii") + b"\n"
             for label, image in builds:
