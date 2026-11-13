@@ -424,9 +424,7 @@ impl RawEncoder {
         self.emit(&value.to_le_bytes());
     }
 
-    /// `dst = [base + disp]` and its mirror, in whole words. A `ModRM` mod
-    /// of 10 takes a 32-bit displacement; rsp and rbp are not addressable
-    /// this way, and nothing here asks to be.
+    /// `dst = [base + disp]` and its mirror, in whole words.
     fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.step();
         if dst.is_xmm() {
@@ -505,13 +503,22 @@ impl RawEncoder {
 
     fn addressed(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
         self.emit(opcode);
-        self.emit(&[0x80 | (reg.low() << 3) | base.low()]);
-        // A base whose low bits are those of `rsp` -- `r12` -- is said
-        // through a scale-index byte naming no index.
+        // mod=00 with low register 5 means RIP-relative. RBP and R13
+        // therefore need an explicit displacement even when it is zero.
+        let bytes = disp.to_le_bytes();
+        let (mode, displacement) = if disp == 0 && base.low() != 5 {
+            (0, &bytes[..0])
+        } else if i8::try_from(disp).is_ok() {
+            (0x40, &bytes[..1])
+        } else {
+            (0x80, &bytes[..])
+        };
+        self.emit(&[mode | (reg.low() << 3) | base.low()]);
         if base.low() == 4 {
+            // RSP and R12 require a SIB byte with no index.
             self.emit(&[0x24]);
         }
-        self.emit(&disp.to_le_bytes());
+        self.emit(displacement);
     }
 
     /// `dst` explicitly taken modulo two to the `bits`, including odd widths.
@@ -919,6 +926,21 @@ mod tests {
         let mut instructions = AllocatedBuilder::default();
         build(&mut instructions);
         encode(&instructions.finish().unwrap()).bytes
+    }
+
+    #[test]
+    fn indirect_addresses_use_the_shortest_displacement() {
+        let load = |base, disp| encoded(|a| a.load(MemoryWidth::Word, Reg::Rax, base, disp));
+        assert_eq!(load(Reg::Rdi, 0), [0x48, 0x8b, 0x07]);
+        assert_eq!(load(Reg::R13, 0), [0x49, 0x8b, 0x45, 0]);
+        assert_eq!(load(Reg::R12, 0), [0x49, 0x8b, 0x04, 0x24]);
+        assert_eq!(load(Reg::Rdi, -128), [0x48, 0x8b, 0x47, 0x80]);
+        assert_eq!(load(Reg::Rdi, 127), [0x48, 0x8b, 0x47, 0x7f]);
+        assert_eq!(load(Reg::Rdi, 128), [0x48, 0x8b, 0x87, 0x80, 0, 0, 0]);
+        assert_eq!(
+            load(Reg::Rdi, -129),
+            [0x48, 0x8b, 0x87, 0x7f, 0xff, 0xff, 0xff]
+        );
     }
 
     #[test]
