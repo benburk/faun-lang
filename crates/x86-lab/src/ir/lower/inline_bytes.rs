@@ -3,7 +3,7 @@
 //! so readers, tails and calls use the existing buffer ABI.
 
 use super::{Carried, Class, Lowering, Storage, ValueId, barb, peeled};
-use crate::ir::{Binary, Builder, ShapeId};
+use crate::ir::{Binary, Builder, Relation, ShapeId};
 
 const ROW: usize = 24;
 
@@ -133,23 +133,22 @@ fn table_views(
             let [left, table, start] = state else {
                 unreachable!()
             };
+            let done = b.compare(Relation::Equal, *left, zero);
             b.if_(
-                *left,
+                done,
                 &[],
-                |b| {
-                    let one = b.constant(Class::Word, 1);
-                    let index = b.binary(Binary::Sub, *left, one);
-                    let stride = b.constant(Class::Word, u64::try_from(rows.stride()).unwrap());
-                    let first = b.binary(Binary::Mul, index, stride);
-                    let len = row_length(b, (buffer, first, shape), rows);
-                    let filled = b.binary(Binary::Sub, count, *left);
-                    let [table, start] =
-                        b.buffer_push((*table, *start, filled), outer, &[buffer, first, len]);
-                    b.continue_(&[index, table, start]);
-                },
+                |b| b.break_(&[*table, *start]),
                 |b| b.yield_(&[]),
             );
-            b.break_(&[*table, *start]);
+            let one = b.constant(Class::Word, 1);
+            let index = b.binary(Binary::Sub, *left, one);
+            let stride = b.constant(Class::Word, u64::try_from(rows.stride()).unwrap());
+            let first = b.binary(Binary::Mul, index, stride);
+            let len = row_length(b, (buffer, first, shape), rows);
+            let filled = b.binary(Binary::Sub, count, *left);
+            let [table, start] =
+                b.buffer_push((*table, *start, filled), outer, &[buffer, first, len]);
+            b.continue_(&[index, table, start]);
         },
     );
     [result[0], result[1], count]

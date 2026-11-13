@@ -74,3 +74,44 @@ main!(host) -> (
         (0, "éééééééééééé|c3a9|ffc0|ffc02a".into())
     );
 }
+
+#[test]
+fn a_loop_builds_its_constant_lookup_table_once_and_can_return_a_row() {
+    let source = r#"
+import std.host {Host}
+
+names : List(Str)
+names = ["ash", "beech", "elm"]
+
+pick : (Nat, List(Str), Str) -> Str
+pick(n, table, last) -> (
+  next = table.get_or(n % table.len(), "")
+  if n == 0 then last.concat(next) else pick(n - 1, table, next)
+)
+
+main! : Host -> []
+main!(host) -> (
+  name = pick(host.args.len() + 4, names, "")
+  host.print!(name)
+  host.exit!(0)
+)
+"#;
+    let machine = super::faun::lower(source, &super::TARGET).unwrap();
+    let entry = machine.function(machine.entry()).body().unwrap();
+    // This program has one literal byte buffer, the backing for the rows.
+    // Its construction must dominate the loop that looks up each name.
+    assert!(
+        machine
+            .walk(entry)
+            .any(|(op, _)| matches!(op, crate::ir::Op::BufferKnown { .. }))
+    );
+    assert_eq!(
+        machine
+            .every(entry)
+            .filter(|op| matches!(op, crate::ir::Op::BufferKnown { .. }))
+            .count(),
+        1
+    );
+    let prepared = super::TARGET.prepare(&machine).unwrap();
+    assert_eq!(super::shared::execute(&prepared), (0, "beechash".into()));
+}

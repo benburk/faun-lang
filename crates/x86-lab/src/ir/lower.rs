@@ -2332,6 +2332,48 @@ impl Lowering<'_> {
         })[0]
     }
 
+    /// Materialize leading constant tables at loop entry. Their managed views
+    /// can be borrowed on every iteration and still escape through a result.
+    fn source_loop(
+        &self,
+        b: &mut super::Builder,
+        id: barb::FnId,
+        mut body: barb::Body,
+        args: &[ValueId],
+        returns: &[Class],
+        finish: impl FnOnce(&mut super::Builder, Answer<Held>),
+    ) -> Vec<ValueId> {
+        let mut prefix = Vec::new();
+        for &binding in self.barb.bindings(body.bindings) {
+            let barb::Expr::Static(literal) = self.barb.expr(binding) else {
+                break;
+            };
+            let value = self.barb.constant(literal);
+            let ty = value.owner();
+            if self.carries[ty.index()] != Storage::Seq {
+                break;
+            }
+            let barb::TypeShape::Sequence { element, .. } = barb::type_shape(self.barb, ty) else {
+                break;
+            };
+            if self.barb.byte_sequence(element).is_none() {
+                break;
+            }
+            let bounds = self.facts.held(binding);
+            let held = self.static_held(b, self.carried(ty, bounds), value);
+            prefix.push(counted(b, held, bounds));
+        }
+        let run = body.bindings.range();
+        body.bindings = barb::Range::of(run.start + prefix.len(), run.len() - prefix.len());
+        b.loop_(args, returns, |b, state| {
+            let mut locals = self.parameters(b, id, state);
+            locals.extend(prefix.into_iter().map(Some));
+            let mut statics = vec![None; locals.len()];
+            let answer = self.body(b, body, &mut locals, &mut statics);
+            finish(b, answer);
+        })
+    }
+
     /// A function calling itself in tail position, which goes round again
     /// instead: the body is a loop over the parameters, and it leaves by
     /// returning. However deep the recursion, the stack is one frame deep.
@@ -2353,10 +2395,7 @@ impl Lowering<'_> {
                 destination: destination.clone(),
             });
             let mut lowered = Ok(());
-            b.loop_(params, &[], |b, state| {
-                let mut locals = self.parameters(b, id, state);
-                let mut statics = vec![None; locals.len()];
-                let answer = self.body(b, body, &mut locals, &mut statics);
+            self.source_loop(b, id, body, params, &[], |b, answer| {
                 lowered = returned(b, answer, destination);
             });
             lowered
@@ -2424,10 +2463,7 @@ impl Lowering<'_> {
         });
         let looping = self.looping.replace(Some((id, tails)));
         let leaving = self.onward.replace(onward);
-        let next = b.loop_(args, &params, |b, state| {
-            let mut locals = self.parameters(b, id, state);
-            let mut statics = vec![None; locals.len()];
-            let answer = self.body(b, body, &mut locals, &mut statics);
+        let next = self.source_loop(b, id, body, args, &params, |b, answer| {
             if let Err(why) = returned(b, answer, &destination) {
                 self.refuse(why);
             }
@@ -2454,22 +2490,18 @@ impl Lowering<'_> {
         // The place calling it may be going round a loop of its own, which
         // it goes back to once this one is left.
         let outer = self.looping.replace(Some((id, tails)));
-        let left = b.loop_(args, returns, |b, state| {
-            let mut locals = self.parameters(b, id, state);
-            let mut statics = vec![None; locals.len()];
-            match self.body(b, body, &mut locals, &mut statics) {
-                Answer::Value(held) => {
-                    let values: Vec<_> = held
-                        .values()
-                        .iter()
-                        .zip(returns)
-                        .map(|(&value, &class)| met(b, value, class))
-                        .collect();
-                    b.break_(&values);
-                }
-                Answer::Nothing => b.break_(&[]),
-                Answer::Never => {}
+        let left = self.source_loop(b, id, body, args, returns, |b, answer| match answer {
+            Answer::Value(held) => {
+                let values: Vec<_> = held
+                    .values()
+                    .iter()
+                    .zip(returns)
+                    .map(|(&value, &class)| met(b, value, class))
+                    .collect();
+                b.break_(&values);
             }
+            Answer::Nothing => b.break_(&[]),
+            Answer::Never => {}
         });
         *self.looping.borrow_mut() = outer;
         left
