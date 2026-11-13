@@ -30,14 +30,10 @@
 //!   emitted; a call to one reads the length leaf. Nor is one recognized as
 //!   putting one sequence's elements before another's, reversed or in
 //!   order: a call to one is a single buffer operation.
-//! - a sum whose fields are all numbers is held flat too, as a tagged
-//!   union: its tag, then a run of slots each constructor lays its fields'
-//!   leaves in, numbers of a machine's width in the first slots and
-//!   arbitrary-precision ones after. A slot a constructor leaves empty holds
-//!   nought. Building one allocates nothing, and matching one tests the tag
-//!   it holds. A sum that reaches itself through its fields has no such
-//!   bound on its size, and one holding a list or a cell has nothing to put
-//!   in a slot left empty, so both are cells.
+//! - a bounded, nonrecursive sum of numbers and at most one sequence buffer
+//!   per arm is held flat: a tag, scalar slots, natural slots, then an optional
+//!   buffer slot. An unused numeric slot holds zero. An unused buffer slot
+//!   holds an immortal empty buffer, safe to retain and release like any other.
 //! - everything else with fields is a managed cell.
 //! - a cell's fields are held at the class the cell says, which is the class
 //!   a projection reads them back at. A field held flat is its leaves, laid
@@ -750,8 +746,7 @@ enum Storage {
     /// as [`SEQUENCE_LEAVES`] says.
     Seq,
     /// A sum held as its tag and its slots: a run in the leaf pool, the tag
-    /// first, then the slots for numbers a machine holds, then those for
-    /// arbitrary-precision ones.
+    /// first, then machine numbers, arbitrary-precision numbers and an optional buffer.
     Tagged(barb::Range),
 }
 
@@ -1209,7 +1204,7 @@ impl<'a> Demand<'a> {
     }
 
     /// How a sum is held once its fields are demanded: as its tag and slots
-    /// where every leaf is a number and they fit, and `None` to keep it a
+    /// for numbers and up to one buffer per arm, and `None` to keep it a
     /// cell. A wrapper around a sum is held as that sum.
     #[expect(
         clippy::too_many_lines,
@@ -1234,8 +1229,9 @@ impl<'a> Demand<'a> {
         }
         let mut scalars: Vec<Class> = Vec::new();
         let mut naturals = 0;
+        let mut buffers = 0;
         for &ctor in &ctors {
-            let (mut scalar, mut natural) = (0, 0);
+            let (mut scalar, mut natural, mut buffer) = (0, 0, 0);
             for at in 0..self.program.fields(ctor).len() {
                 let Some(carried) =
                     field_carried(self.program, self.facts, &self.carries, ctor, at)
@@ -1252,15 +1248,16 @@ impl<'a> Demand<'a> {
                             }
                             scalar += 1;
                         }
-                        // Nothing stands in a slot a constructor leaves
-                        // empty where a list or a cell would go.
-                        Class::Cell | Class::Buffer | Class::Address => return Ok(None),
+                        Class::Buffer => buffer += 1,
+                        // Neither class has a safe inactive value.
+                        Class::Cell | Class::Address => return Ok(None),
                     }
                 }
             }
             naturals = usize::max(naturals, natural);
+            buffers = usize::max(buffers, buffer);
         }
-        if 1 + scalars.len() + naturals > FLAT_LEAVES {
+        if buffers > 1 || 1 + scalars.len() + naturals + buffers > FLAT_LEAVES {
             return Ok(None);
         }
         let most = u64::try_from(ctors.len() - 1).expect("a sane constructor count");
@@ -1270,6 +1267,7 @@ impl<'a> Demand<'a> {
         })];
         leaves.extend(scalars);
         leaves.extend(std::iter::repeat_n(Class::Natural, naturals));
+        leaves.extend(std::iter::repeat_n(Class::Buffer, buffers));
         Ok(Some(Storage::Tagged(append_range(
             &mut self.leaves,
             &leaves,
@@ -3761,7 +3759,7 @@ impl Lowering<'_> {
     }
 
     /// A tagged union of `ctor`, whose fields' leaves are `fields`: its tag,
-    /// then each leaf in its slot, and nought in every slot it leaves empty.
+    /// then each leaf in its slot, with inactive slots safe to pass or discard.
     fn tagged(
         &self,
         b: &mut super::Builder,
@@ -3778,7 +3776,16 @@ impl Lowering<'_> {
         let values: Vec<_> = values
             .into_iter()
             .zip(classes)
-            .map(|(value, &class)| value.unwrap_or_else(|| b.constant(class, 0)))
+            .map(|(value, &class)| {
+                value.unwrap_or_else(|| {
+                    if class == Class::Buffer {
+                        let empty = b.shape(&[]);
+                        b.buffer_empty(empty)
+                    } else {
+                        b.constant(class, 0)
+                    }
+                })
+            })
             .collect();
         Held::Flat {
             leaves: run,
@@ -3788,18 +3795,20 @@ impl Lowering<'_> {
 
     /// Where in a tagged union's run each leaf of `ctor`'s fields is held,
     /// in order: numbers a machine holds in the slots after the tag, and
-    /// arbitrary-precision ones in the slots after those.
+    /// arbitrary-precision ones after those, and the optional buffer last.
     fn slots(&self, ctor: barb::CtorId, run: barb::Range) -> Vec<usize> {
         let classes = &self.leaves[run.range()];
         let scalars = classes[1..]
             .iter()
-            .take_while(|&&class| class != Class::Natural)
+            .take_while(|&&class| !matches!(class, Class::Natural | Class::Buffer))
             .count();
         let (mut scalar, mut natural) = (0, 0);
         let mut slots = Vec::new();
         for carried in self.fields_carried(ctor).flatten() {
             for &class in self.classes(&carried) {
-                if class == Class::Natural {
+                if class == Class::Buffer {
+                    slots.push(classes.len() - 1);
+                } else if class == Class::Natural {
                     slots.push(1 + scalars + natural);
                     natural += 1;
                 } else {
