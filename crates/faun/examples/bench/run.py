@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Time a set of Faun programs, built by one compiler or several, on fixed
-inputs: JSON parsing and decoding, grep, word frequency, a SAT search,
+inputs: JSON parsing and decoding, grep, word frequency, hex encoding, a SAT search,
 n-body and spectral norm. Every build's answer must agree with the first
 compiler's before any is timed. Runs alternate, pinned to one CPU, and the
 median time, peak RSS, and executable size are reported. Where available,
@@ -33,6 +33,7 @@ BENCHMARKS = [
     ("json-parse", EXAMPLES / "libraries/json/bench/parse.fn", [], "users.json"),
     ("json-decode", EXAMPLES / "libraries/json/bench/decode.fn", [], "users.json"),
     ("grep", HERE / "grep.fn", [".*(error|warn).*timeout.*"], "log.txt"),
+    ("hex-encode", HERE / "hex-encode.fn", [], "binary.dat"),
     ("wordfreq", HERE / "wordfreq.fn", [], "words.txt"),
     ("sat", HERE / "sat.fn", ["7"], None),
     ("nbody", EXAMPLES / "benchmarks-game/n-body/main.fn", ["5000000"], None),
@@ -69,7 +70,14 @@ def inputs(directory):
     words = directory / "words.txt"
     chapter = (REPOSITORY / "crates/faun/standard/README.md").read_bytes()
     words.write_bytes((chapter + b"\n") * 16)
-    return {"users.json": users, "log.txt": log, "words.txt": words}
+    binary = directory / "binary.dat"
+    binary.write_bytes(random.Random(19).randbytes(256 * 1024))
+    return {
+        "users.json": users,
+        "log.txt": log,
+        "words.txt": words,
+        "binary.dat": binary,
+    }
 
 
 def word_counts(path):
@@ -173,7 +181,11 @@ def main():
                     stdout=subprocess.DEVNULL,
                 )
                 builds.append((label, image))
-            expected = word_counts(stdin_path) if name == "wordfreq" else None
+            expected = None
+            if name == "wordfreq":
+                expected = word_counts(stdin_path)
+            elif name == "hex-encode":
+                expected = stdin_path.read_bytes().hex().encode("ascii") + b"\n"
             for label, image in builds:
                 answer = execute([image, *arguments], stdin_path).stdout
                 if expected is None:
