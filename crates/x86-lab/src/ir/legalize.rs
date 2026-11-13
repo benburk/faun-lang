@@ -100,11 +100,10 @@ fn prepare_pass<'a>(
     );
     let constants = constants(source, output, config)?;
     let owned = ownership::owned_parameters(source);
-    let unique = super::uniqueness::unique(source, &owned, &|shape| {
-        shapes.packed(shape).managed().next().is_none()
-    });
     let chunks = (!plan.constructors.is_empty()).then(|| Chunks::append(output, &library, &plan));
+    let unique = super::uniqueness::unique(source, &owned, &|shape| shapes.plain(shape));
     Ok(Pass {
+        read_room: input_storage(source, output, config, &shapes),
         fixed_claims: remaining.is_some(),
         plan,
         chunks,
@@ -124,6 +123,34 @@ fn prepare_pass<'a>(
         borrowed_cells: ownership::borrowed_cells(source, &owned),
         owned,
     })
+}
+
+/// Append the workspace after other globals, leaving its zeroed tail out of the ELF.
+fn input_storage(
+    source: &Program,
+    output: &mut Program,
+    config: Config,
+    shapes: &Shapes,
+) -> Option<DataId> {
+    if !config.grows || config.word_bits != 64 {
+        return None;
+    }
+    source
+        .ops
+        .iter()
+        .filter_map(|op| match *op {
+            Op::BufferRoom { count, shape } => read_bound(source, shapes, count, shape),
+            _ => None,
+        })
+        .max()
+        .map(|capacity| sequence::input_storage(output, capacity))
+}
+
+/// Cap the writable memory reserved for all byte reads in one executable.
+fn read_bound(source: &Program, shapes: &Shapes, count: ValueId, shape: ShapeId) -> Option<u64> {
+    const MAX_READ_ROOM: u64 = 64 * 1024;
+    let high = source.class(count).facts()?.high?;
+    (shapes.packed(shape).size == 1 && (1..=MAX_READ_ROOM).contains(&high)).then_some(high)
 }
 
 /// The cell and sequence routines a program needs, beside its naturals'.
@@ -381,6 +408,10 @@ impl Shapes {
         b.address_of(data)
     }
 
+    fn plain(&self, shape: ShapeId) -> bool {
+        self.packed(shape).managed().next().is_none()
+    }
+
     fn packed(&self, shape: ShapeId) -> &Packed {
         &self.packed[shape.index()]
     }
@@ -588,6 +619,7 @@ fn magnitude(source: &Program, op: Op, class: Class) -> Option<BigUint> {
 }
 
 struct Pass<'a> {
+    read_room: Option<DataId>,
     fixed_claims: bool,
     plan: Plan,
     chunks: Option<Chunks>,
@@ -1133,11 +1165,21 @@ impl Pass<'_> {
                 elements, shape, ..
             } => self.shapes.known(b, elements, shape),
             Op::BufferRoom { count, shape } => {
-                let library = self.cells.expect("cell helpers were requested");
+                let allocate = self.cells.expect("cell helpers were requested").allocate;
+                let storage = self
+                    .read_room
+                    .filter(|_| read_bound(self.source, &self.shapes, count, shape).is_some());
+                let count = word(b, v(count));
                 let stride = b.constant(Class::Word, self.shapes.packed(shape).size);
                 let none = b.constant(Class::Word, 0);
-                let count = word(b, v(count));
-                sequence::allocate(b, library.allocate, (stride, none), count, self.word_bytes)
+                let fresh = |b: &mut Builder| {
+                    sequence::allocate(b, allocate, (stride, none), count, self.word_bytes)
+                };
+                if let Some(storage) = storage {
+                    sequence::acquire_input(b, storage, fresh)
+                } else {
+                    fresh(b)
+                }
             }
             Op::BufferAt {
                 buffer,

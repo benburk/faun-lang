@@ -72,7 +72,7 @@ fn execute_counts(program: &Program, counts: &[u16]) -> Vec<(i32, String)> {
     execute_cases(program, &cases)
 }
 
-fn execute_with_input(program: &Program, input: &[u8]) -> (i32, String) {
+pub(super) fn execute_with_input(program: &Program, input: &[u8]) -> (i32, String) {
     execute_cases(program, &[(1, input)]).remove(0)
 }
 

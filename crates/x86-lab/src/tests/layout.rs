@@ -115,3 +115,31 @@ main!(host) -> (
     let prepared = super::TARGET.prepare(&machine).unwrap();
     assert_eq!(super::shared::execute(&prepared), (0, "beechash".into()));
 }
+
+#[test]
+fn live_slices_survive_overlapping_reads_and_eof() {
+    let source = r"
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  first = host.stdin.read!(4)
+  first is Ok(Data(a)) else return host.exit!(1)
+  kept = a.drop(1)
+  second = host.stdin.read!(8)
+  second is Ok(Data(b)) else return host.exit!(2)
+  third = host.stdin.read!(4)
+  third is Ok(Data(c)) else return host.exit!(3)
+  last = host.stdin.read!(8)
+  last is Ok(End) else return host.exit!(4)
+  host.print!(Str.hex(c).concat(Str.hex(b)).concat(Str.hex(kept)))
+  host.exit!(0)
+)
+";
+    let machine = super::faun::lower(source, &super::TARGET).unwrap();
+    let prepared = super::TARGET.prepare(&machine).unwrap();
+    assert_eq!(
+        super::shared::execute_with_input(&prepared, b"abcdefghijklmnop"),
+        (0, "6d6e6f7065666768696a6b6c626364".into())
+    );
+}

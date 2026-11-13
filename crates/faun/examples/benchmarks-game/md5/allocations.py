@@ -1,8 +1,8 @@
-"""Count MD5's x86-lab allocator calls with the same I/O at two input sizes.
+"""Check allocation growth across MD5 blocks and full input reads.
 
-Build main.fn with --symbols and pass the image to this script. Both inputs
-fit in one read and have the same padding. Extra calls at the larger size
-would expose an allocation cost in processing the additional full blocks.
+Build main.fn with --symbols and pass the image to this script. Each size has the same
+padding. Going from 64 bytes to 4096 adds compression blocks. Going from
+one 64 KiB read to four adds both input reads and compression blocks.
 """
 
 import argparse
@@ -61,13 +61,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="md5-calls-") as directory:
         work = Path(directory)
         image = args.image.resolve()
-        short = calls(image, 64, work)
-        long = calls(image, 4096, work)
-    print(f"64 bytes: {short} calls, 4096 bytes: {long} calls")
-    if long > short:
-        raise SystemExit(
-            f"{long - short} extra allocator calls over 63 additional blocks"
-        )
+        for short, long in [(64, 4096), (65536, 4 * 65536)]:
+            before = calls(image, short, work)
+            after = calls(image, long, work)
+            print(f"{short} bytes: {before} calls, {long} bytes: {after} calls")
+            if after > before:
+                raise SystemExit(
+                    f"{after - before} extra allocator calls at {long} bytes"
+                )
 
 
 if __name__ == "__main__":

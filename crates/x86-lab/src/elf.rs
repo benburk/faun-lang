@@ -58,7 +58,8 @@ const EXECUTE: u32 = 1;
 struct Segment {
     flags: u32,
     start: u32,
-    len: u32,
+    file_len: u32,
+    memory_len: u32,
     /// Where it is mapped, which for everything but the writable region is
     /// its own file offset.
     vaddr: u32,
@@ -66,7 +67,7 @@ struct Segment {
 
 pub(crate) fn image(code: &Code, program: &Program, symbols: SymbolTable) -> Vec<u8> {
     let layout = Layout::new(code, program);
-    let end = layout.globals + program.globals().len();
+    let end = layout.globals + layout.initialized;
     let sections = match symbols {
         SymbolTable::Omitted => None,
         SymbolTable::Written => Some(Sections::new(code, program, (layout.text, end))),
@@ -84,7 +85,7 @@ pub(crate) fn image(code: &Code, program: &Program, symbols: SymbolTable) -> Vec
         0;
         layout.globals - layout.data - program.data().len()
     ]);
-    out.bytes(program.globals());
+    out.bytes(&program.globals()[..layout.initialized]);
     if let Some(sections) = &sections {
         sections.write(&mut out, code.bytes.len());
     }
@@ -245,10 +246,19 @@ struct Layout {
     data: usize,
     /// File offset of the globals.
     globals: usize,
+    /// Initialized prefix of the writable segment. The kernel zeros its tail.
+    initialized: usize,
     /// Where the globals are *mapped*, which is not where they sit in the
     /// file: they need a page of their own to be writable in.
     globals_at: usize,
     segments: Vec<Segment>,
+}
+
+/// The kernel supplies every trailing zero in a writable load segment.
+fn initialized_bytes(data: &[u8]) -> usize {
+    data.iter()
+        .rposition(|&byte| byte != 0)
+        .map_or(0, |at| at + 1)
 }
 
 impl Layout {
@@ -275,17 +285,20 @@ impl Layout {
         // allows so long as an address matches its offset modulo a page.
         let globals_at = globals + PAGE;
 
+        let initialized = initialized_bytes(program.globals());
         let mut segments = vec![Segment {
             flags: READ | EXECUTE,
             start: 0,
-            len: len32(globals),
+            file_len: len32(globals),
+            memory_len: len32(globals),
             vaddr: 0,
         }];
         if writable {
             segments.push(Segment {
                 flags: READ | WRITE,
                 start: len32(globals),
-                len: len32(program.globals().len()),
+                file_len: len32(initialized),
+                memory_len: len32(program.globals().len()),
                 vaddr: len32(globals_at),
             });
         }
@@ -295,6 +308,7 @@ impl Layout {
             text,
             data,
             globals,
+            initialized,
             globals_at,
             segments,
         }
@@ -359,8 +373,8 @@ fn program_header(out: &mut Bytes, segment: &Segment) {
     out.le64(u64::from(segment.start)); // p_offset
     out.le64(u64::from(segment.vaddr)); // p_vaddr
     out.le64(u64::from(segment.vaddr)); // p_paddr
-    out.le64(u64::from(segment.len)); // p_filesz
-    out.le64(u64::from(segment.len)); // p_memsz
+    out.le64(u64::from(segment.file_len)); // p_filesz
+    out.le64(u64::from(segment.memory_len)); // p_memsz
     out.le64(PAGE_SIZE); // p_align
 }
 

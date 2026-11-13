@@ -846,6 +846,46 @@ fn element_at(
     byte_offset(b, object, bytes)
 }
 
+/// One single-threaded input workspace. Its permanent claim prevents mutation
+/// through ordinary sequence operations and keeps it out of the heap free list.
+pub(super) fn input_storage(p: &mut Program, capacity: u64) -> DataId {
+    let mut data: Vec<_> = [0, 1, capacity, capacity, 0, 1, 0]
+        .into_iter()
+        .flat_map(u64::to_le_bytes)
+        .collect();
+    data.resize(
+        data.len() + usize::try_from(capacity).expect("bounded input size"),
+        0,
+    );
+    p.global(&data)
+}
+
+/// Earlier reads may still have live slices. Reuse the workspace only after
+/// the last such claim has been released, including on short reads and EOF.
+pub(super) fn acquire_input(
+    b: &mut Builder<'_>,
+    storage: DataId,
+    fresh: impl FnOnce(&mut Builder) -> ValueId,
+) -> ValueId {
+    let object = b.address_of(storage);
+    let refs = b.load(Width::Word, object, Offset::Words(1));
+    let one = number(b, 1);
+    let free = b.compare(Relation::Equal, refs, one);
+    b.if_(
+        free,
+        &[A],
+        |b| {
+            let two = number(b, 2);
+            b.store(Width::Word, object, Offset::Words(1), two);
+            b.yield_(&[object]);
+        },
+        |b| {
+            let other = fresh(b);
+            b.yield_(&[other]);
+        },
+    )[0]
+}
+
 /// Allocate a buffer with room for `capacity` elements one `stride` apart,
 /// described by `descriptor`, holding none of them yet and claims for none.
 /// `allocate` takes the bytes after the header's third word.
