@@ -6,11 +6,10 @@
 //! low-word bit patterns across banks. `encode` alone lays that sequence out
 //! as bytes. Data addresses remain `Reloc`s until `elf` chooses
 //! the image layout and fills them in.
-
 //!
-//! The lab takes the same optimized Barb as the stock backend. Its machine
-//! IR, ownership and lowering passes, selected instructions and ELF emitter
-//! are independent copies, initially producing the same executable bytes.
+//! The lab takes the same optimized Barb as the stock backend. It shares portable
+//! lowering and representation passes with the other lab targets and keeps
+//! its own machine IR, instruction selection, register allocator and ELF emitter.
 
 mod barb;
 pub use faun_core::{facts, float, index};

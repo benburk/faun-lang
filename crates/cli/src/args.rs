@@ -157,7 +157,7 @@ fn emit() -> impl Parser<Command> {
 fn compiler() -> impl Parser<Compiler> {
     let target = target();
     let backend = long("backend")
-        .help("Code generator: stock or x86-lab")
+        .help("Code generator: stock or lab (x86-lab selects lab on x86-64 Linux)")
         .argument::<String>("BACKEND")
         .fallback(String::from("stock"));
     construct!(target, backend).parse(|(target, backend)| Compiler::choose(target, &backend))

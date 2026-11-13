@@ -4,6 +4,7 @@
 //! neither publish it nor return any descendant. Its last use can therefore
 //! release all the storage without walking the nodes.
 
+#[path = "region/nullable.rs"]
 mod nullable;
 
 use std::collections::{HashMap, HashSet};

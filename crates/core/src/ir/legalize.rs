@@ -173,7 +173,7 @@ fn known(packed: &Packed, (elements, leaf_bytes): (&[u8], u8), word_bits: u16) -
         let mut laid = vec![0; stride];
         for (leaf, &value) in packed.leaves.iter().zip(element) {
             // A natural small enough to be held in place is twice itself.
-            let value = if leaf.kind == cell::NATURAL {
+            let value = if leaf.kind == super::packing::NATURAL {
                 value * 2
             } else {
                 value

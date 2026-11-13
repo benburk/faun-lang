@@ -2,35 +2,36 @@
 
 use faun::diagnostic::Diagnostic;
 use faun_core::barb;
-use faun_core::targets::{Favour, SymbolTable, Target};
+use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
 use faun_x86_64_linux::X86_64Linux;
 
 use crate::args::Stage;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Compiler {
-    Stock(&'static dyn Target),
+    Target(&'static dyn Target, Pipeline),
     X86Lab,
 }
 
 impl Compiler {
     pub(crate) fn choose(target: &'static dyn Target, backend: &str) -> Result<Self, String> {
         match backend {
-            "stock" => Ok(Self::Stock(target)),
-            "x86-lab" if target.name() == X86_64Linux.name() => Ok(Self::X86Lab),
+            "stock" => Ok(Self::Target(target, Pipeline::Stock)),
+            "lab" | "x86-lab" if target.name() == X86_64Linux.name() => Ok(Self::X86Lab),
+            "lab" => Ok(Self::Target(target, Pipeline::Lab)),
             "x86-lab" => Err(format!(
                 "the x86-lab backend cannot compile for {}",
                 target.name()
             )),
             _ => Err(format!(
-                "unknown backend `{backend}`, expected stock or x86-lab"
+                "unknown backend `{backend}`, expected stock, lab or x86-lab"
             )),
         }
     }
 
     pub(crate) const fn host(self) -> &'static dyn Target {
         match self {
-            Self::Stock(target) => target,
+            Self::Target(target, _) => target,
             Self::X86Lab => &X86_64Linux,
         }
     }
@@ -41,12 +42,16 @@ impl Compiler {
         favour: Favour,
         symbols: SymbolTable,
     ) -> Result<Vec<u8>, Diagnostic> {
+        let program = faun::optimize_application(program)?;
         match self {
-            Self::Stock(target) => {
-                faun::compile_barb_to_image_with(program, target, favour, symbols)
+            Self::Target(target, pipeline) => {
+                let ir = faun_core::lower_with_pipeline(&program, &target.routines(), pipeline)
+                    .map_err(Diagnostic::new)?;
+                target
+                    .compile_with_pipeline(&ir, favour, symbols, pipeline)
+                    .map_err(Diagnostic::new)
             }
             Self::X86Lab => {
-                let program = faun::optimize_application(program)?;
                 faun_x86_lab::compile(&program, favour, symbols).map_err(Diagnostic::new)
             }
         }
@@ -57,10 +62,15 @@ impl Compiler {
             return Ok(program.render_analyzed(&program.analyze()));
         }
         match self {
-            Self::Stock(target) => {
-                let machine = faun_core::lower_to_machine_ir(program, &target.routines())?;
+            Self::Target(target, pipeline) => {
+                let machine =
+                    faun_core::lower_with_pipeline(program, &target.routines(), pipeline)?;
                 match stage {
-                    Stage::Target => Ok(target.render(&target.prepare(&machine)?)),
+                    Stage::Target => Ok(target.render(&target.prepare_with_pipeline(
+                        &machine,
+                        Favour::Speed,
+                        pipeline,
+                    )?)),
                     _ => Ok(machine.render()),
                 }
             }

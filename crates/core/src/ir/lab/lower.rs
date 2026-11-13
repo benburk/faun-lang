@@ -18,7 +18,7 @@
 //!   values its fields are held as, end to end, with no object of its own.
 //!   Constructing one allocates nothing and taking it apart reads nothing.
 //!   Whether it fits a target's registers is the target's question, answered
-//!   by [`super::fit`]. A product on a cycle made only of products has no
+//!   by [`crate::ir::fit`]. A product on a cycle made only of products has no
 //!   values, and one with more than [`FLAT_LEAVES`] leaves is a cell: a
 //!   value that large is cheaper shared than copied.
 //! - a sequence -- a two-constructor sum whose step holds one element and
@@ -56,9 +56,11 @@ use super::program::Program;
 use super::validate::validate;
 use crate::platform::{Built, Returns, Routine, Routines, Takes, reads, takes as takes_sentence};
 
+#[path = "lower/inline_bytes.rs"]
 mod inline_bytes;
 
 #[cfg(test)]
+#[path = "lower/tests.rs"]
 mod tests;
 
 /// Lower a whole program, or say what it holds that this tier cannot yet

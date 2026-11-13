@@ -50,7 +50,7 @@ use super::{
 /// Rejects invalid IR, unsupported host/address conversions, fixed widths
 /// wider than the word, invalid runtime configuration, and constants
 /// exceeding the layout. A fixed width wider than the word is held as words,
-/// which [`super::split`] makes it before this runs.
+/// which [`crate::ir::split`] makes it before this runs.
 pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     validate(source)?;
     if !matches!(config.word_bits, 16 | 32 | 64) {
@@ -264,7 +264,7 @@ fn known(packed: &Packed, (elements, leaf_bytes): (&[u8], u8), word_bits: u16) -
         let mut laid = vec![0; stride];
         for (leaf, &value) in packed.leaves.iter().zip(element) {
             // A natural small enough to be held in place is twice itself.
-            let value = if leaf.kind == cell::NATURAL {
+            let value = if leaf.kind == super::packing::NATURAL {
                 value * 2
             } else {
                 value

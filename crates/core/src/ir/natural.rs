@@ -726,8 +726,24 @@ fn handle(b: &mut Builder<'_>, address: ValueId) -> ValueId {
     b.convert(A, named)
 }
 
+/// Below a power of two, an immediate handle has both its tag and every
+/// bit above the doubled payload clear. Every boxed handle fails the tag test.
+pub(super) fn below_power_of_two(
+    b: &mut Builder<'_>,
+    value: ValueId,
+    limit: u64,
+    bits: u16,
+) -> ValueId {
+    let held = b.convert(W, value);
+    let payload = (limit - 1) << 1;
+    let excluded = number(b, !payload & (u64::MAX >> (64 - bits)));
+    let excess = b.binary(Binary::And, held, excluded);
+    let zero = number(b, 0);
+    eq(b, excess, zero)
+}
+
 /// The number an immediate holds.
-fn unwrapped(b: &mut Builder<'_>, value: ValueId) -> ValueId {
+pub(super) fn unwrapped(b: &mut Builder<'_>, value: ValueId) -> ValueId {
     let held = b.convert(W, value);
     b.shift(W, Direction::Down, held, 1)
 }

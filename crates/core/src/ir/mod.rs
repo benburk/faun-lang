@@ -67,6 +67,7 @@ mod common;
 mod digits;
 pub mod evaluate;
 mod fit;
+pub mod lab;
 mod layout;
 mod legalize;
 mod lower;
