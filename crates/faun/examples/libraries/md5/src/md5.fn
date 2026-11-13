@@ -3,7 +3,7 @@
 
 package {}
 
-export {md5_hash}
+export {Md5, md5_hash}
 
 State = (U32, U32, U32, U32)
 
@@ -12,11 +12,50 @@ State = (U32, U32, U32, U32)
 # them as the usual 32 hex digits. MD5 is broken for security; use it only
 # as a checksum.
 md5_hash : List(U8) -> List(U8)
-md5_hash(message) -> (
-  initial = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476)
-  (a, b, c, d) = padded(message).blocks(64).complete.fold(initial, compress)
-  [a, b, c, d].flat_map(word_bytes)
+md5_hash(message) -> Md5.empty.update(message).digest()
+
+# Incremental hashing keeps the chaining state and up to 63 pending bytes.
+Md5 : (State, List(U8), Nat).(
+  empty : Md5
+  empty = (
+    initial = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476)
+    Md5((initial, [], 0))
+  )
+
+  update : (Md5, List(U8)) -> Md5
+  update(Md5((state, pending, length)), chunk) -> (
+    (next, tail) = update_blocks(state, pending, chunk)
+    Md5((next, tail, length + chunk.len()))
+  )
+
+  digest : Md5 -> List(U8)
+  digest(Md5((state, tail, length))) -> (
+    (done, _) = blocks(state, padded(tail, length))
+    (a, b, c, d) = done
+    [a, b, c, d].flat_map(word_bytes)
+  )
 )
+
+# Fill a pending block from the front of the new chunk. The rest of the
+# chunk can be read directly, including when it arrived in a short read.
+update_blocks : (State, List(U8), List(U8)) -> (State, List(U8))
+update_blocks(state, [], chunk) -> blocks(state, chunk)
+update_blocks(state, pending, chunk) -> (
+  needed = 64 - pending.len()
+  if chunk.len() < needed then (state, pending.concat(chunk))
+  else (
+    first = pending.concat(chunk.take(needed))
+    blocks(compress(state, first), chunk.drop(needed))
+  )
+)
+
+# Walk complete blocks through slices. Keep the final partial block for
+# the next update or for padding at the end of the message.
+blocks : (State, List(U8)) -> (State, List(U8))
+blocks(state, bytes) if bytes.len() >= 64 ->
+  blocks(compress(state, bytes.take(64)), bytes.drop(64))
+blocks(state, []) -> (state, [])
+blocks(state, tail) -> (state, tail)
 
 word_bytes : U32 -> List(U8)
 word_bytes(word) -> (
@@ -25,11 +64,10 @@ word_bytes(word) -> (
 )
 
 # A one bit, zeroes, and the length in bits, to a whole number of blocks.
-padded : List(U8) -> List(U8)
-padded(message) -> (
-  length = message.len()
+padded : (List(U8), Nat) -> List(U8)
+padded(tail, length) -> (
   zeroes = (119 - length % 64) % 64
-  message.append(0x80)
+  tail.append(0x80)
     .concat(List.repeat(0, zeroes))
     .concat(length_bytes(U64.of_nat(length * 8)))
 )
@@ -42,19 +80,20 @@ length_bytes(bits) -> (
 
 compress : (State, List(U8)) -> State
 compress(start is (a, b, c, d), block) -> (
-  words = words_le(block)
-  (a2, b2, c2, d2) = steps.enumerate().fold(start, |state, step| round(words, state, step))
+  (a2, b2, c2, d2) = steps.enumerate().fold(start, |state, step| round(block, state, step))
   (a + a2, b + b2, c + c2, d + d2)
 )
 
-words_le : List(U8) -> List(U32)
-words_le([a, b, c, d, *rest]) -> [U32.of_le_bytes(a, b, c, d), *words_le(rest)]
-words_le(_) -> []
+word_at : (List(U8), Nat) -> U32
+word_at(block, i) -> (
+  block.drop(4 * i) is [a, b, c, d, *_] else return 0
+  U32.of_le_bytes(a, b, c, d)
+)
 
-round : (List(U32), State, (Nat, (U32, Nat))) -> State
-round(words, (a, b, c, d), (i, (k, s))) -> (
+round : (List(U8), State, (Nat, (U32, Nat))) -> State
+round(block, (a, b, c, d), (i, (k, s))) -> (
   (f, g) = mix(b, c, d, i)
-  (d, b + (a + f + k + words.get_or(g, 0)).rotate_left(s), b, c)
+  (d, b + (a + f + k + word_at(block, g)).rotate_left(s), b, c)
 )
 
 # Each round's function of b, c and d, and which word of the block it adds.
@@ -94,3 +133,18 @@ expect Str.hex(md5_hash("".to_utf8())) == "d41d8cd98f00b204e9800998ecf8427e"
 expect Str.hex(md5_hash("abc".to_utf8())) == "900150983cd24fb0d6963f7d28e17f72"
 expect Str.hex(md5_hash("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".to_utf8()))
   == "d174ab98d277d9f5a5611c2c9f419d9f"
+
+# Split updates may end anywhere in a block, and a digest can be taken
+# while the same prefix is still in use.
+expect (
+  prefix = Md5.empty.update("a".to_utf8())
+  Str.hex(prefix.digest()) == "0cc175b9c0f1b6a831c399e269772661"
+    & Str.hex(prefix.update([]).update("bc".to_utf8()).digest()) == "900150983cd24fb0d6963f7d28e17f72"
+)
+
+expect (
+  input = List.range(257).map(U8.of_nat)
+  expected = md5_hash(input)
+  [0, 1, 55, 56, 63, 64, 65, 127, 128, 129, 256, 257].all(|n|
+    Md5.empty.update(input.take(n)).update(input.drop(n)).digest() == expected)
+)
