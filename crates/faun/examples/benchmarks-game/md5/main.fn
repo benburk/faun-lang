@@ -1,0 +1,21 @@
+# Hash standard input in chunks and print the 16-byte digest in lowercase hex.
+package {
+  md5: "../../libraries/md5/src/md5"
+}
+
+import std.host {Host}
+import md5 {Md5}
+
+hash! : (Host, Md5) -> []
+hash!(host, hash) -> (
+  read = host.stdin.read!(65536)
+  read is Ok(chunk) else return host.exit!(1)
+  if chunk is Data(bytes) then hash!(host, hash.update(bytes))
+  else (
+    wrote = host.println!(Str.hex(hash.digest()))
+    host.exit!(if wrote.is_ok() then 0 else 1)
+  )
+)
+
+main! : Host -> []
+main!(host) -> hash!(host, Md5.empty)

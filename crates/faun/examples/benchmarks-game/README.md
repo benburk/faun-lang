@@ -42,6 +42,29 @@ Each program is built, checked against the game's output, and run
 must equal. Sizes default to ones the whole set takes a minute or so at;
 `--game` asks for the game's own.
 
+## Supplemental MD5 benchmark
+
+The MD5 program hashes standard input in 64 KiB chunks. The supplemental
+runner checks the full digest against Python and reports median runtime,
+peak RSS and executable size. From the repository root, run
+
+```console
+$ just bench 8 --backend x86-lab --only md5
+```
+
+Choose an available CPU in place of 8. To check whether allocations grow
+with the number of MD5 blocks, count calls in a separate symbolized build.
+The probe requires GDB on native x86-64 Linux.
+
+```console
+$ target/release/faun build --backend=x86-lab --symbols crates/faun/examples/benchmarks-game/md5/main.fn -o target/md5-profile
+$ python3 crates/faun/examples/benchmarks-game/md5/allocations.py target/md5-profile
+```
+
+Both probe inputs fit in one read and need one padding block. The probe
+checks both digests and fails if 63 additional full blocks increase the
+allocator call count. The eight game programs supply the promotion scores.
+
 ## Scoring
 
 As the game scores programs:

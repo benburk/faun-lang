@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Time a set of Faun programs, built by one compiler or several, on fixed
 inputs: JSON parsing and decoding, grep, word frequency, hex encoding, codon
-counts, a SAT search, n-body and spectral norm. Every build's answer must
+counts, MD5, a SAT search, n-body and spectral norm. Every build's answer must
 agree with the first compiler's before any is timed. Runs alternate, pinned to one CPU, and the
 median time, peak RSS, and executable size are reported. Where available,
 `perf stat` counts instructions in a separate run.
@@ -13,6 +13,7 @@ Instructions are the steadier measure: they move little with the machine's
 load, so a change to the compiler shows in them where times are noisy."""
 
 import argparse
+import hashlib
 from collections import Counter
 import os
 from pathlib import Path
@@ -35,6 +36,7 @@ BENCHMARKS = [
     ("grep", HERE / "grep.fn", [".*(error|warn).*timeout.*"], "log.txt"),
     ("codon-count", HERE / "codon-count.fn", [], "dna.txt"),
     ("hex-encode", HERE / "hex-encode.fn", [], "binary.dat"),
+    ("md5", EXAMPLES / "benchmarks-game/md5/main.fn", [], "binary.dat"),
     ("wordfreq", HERE / "wordfreq.fn", [], "words.txt"),
     ("sat", HERE / "sat.fn", ["7"], None),
     ("nbody", EXAMPLES / "benchmarks-game/n-body/main.fn", ["5000000"], None),
@@ -203,6 +205,10 @@ def main():
                 expected = word_counts(stdin_path)
             elif name == "codon-count":
                 expected = codon_counts(stdin_path)
+            elif name == "md5":
+                expected = (
+                    hashlib.md5(stdin_path.read_bytes()).hexdigest().encode() + b"\n"
+                )
             elif name == "hex-encode":
                 expected = stdin_path.read_bytes().hex().encode("ascii") + b"\n"
             for label, image in builds:
