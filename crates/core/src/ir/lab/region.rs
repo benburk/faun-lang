@@ -44,6 +44,11 @@ fn returns_cell(p: &Program, id: FunctionId) -> bool {
 /// come from outside, or be published before the constructor returns.
 fn constructor(p: &Program, id: FunctionId, packed: &[Packed]) -> bool {
     let f = p.function(id);
+    if f.tree_role
+        .is_some_and(|role| role != crate::barb::TreeRole::Builder)
+    {
+        return false;
+    }
     let Some(body) = f.body() else { return false };
     if id == p.entry()
         || !returns_cell(p, id)
@@ -126,6 +131,11 @@ fn connected(p: &Program, region: RegionId, exit: super::Exit) -> bool {
 /// a join, loop, result, call to another routine or stored value.
 fn reader(p: &Program, id: FunctionId) -> bool {
     let f = p.function(id);
+    if f.tree_role
+        .is_some_and(|role| role != crate::barb::TreeRole::Reader)
+    {
+        return false;
+    }
     let Some(body) = f.body() else { return false };
     if !p.signature(f.params).contains(&Class::Cell) {
         return false;

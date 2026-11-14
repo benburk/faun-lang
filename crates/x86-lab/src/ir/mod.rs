@@ -152,3 +152,7 @@ mod tests;
 mod validation_tests;
 #[cfg(test)]
 mod zero_width_tests;
+
+#[cfg(test)]
+#[path = "../../../core/src/ir/float_compare_tests.rs"]
+mod float_compare_tests;

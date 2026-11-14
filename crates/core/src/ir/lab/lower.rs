@@ -137,6 +137,7 @@ fn lowered(
     let (entry_params, arguments) = entry_parameters(&demand, entry, routines, wanted)?;
     let (mut machine, main) = begun(program, entry, &entry_params);
     let callees = declare(&demand, routines, &mut machine, (entry, main))?;
+    transfer_facts(&mut machine, &callees, facts);
     let bytes = argument_bytes(program, facts, entry, &demand.carries);
 
     let lowering = Lowering {
@@ -165,6 +166,20 @@ fn lowered(
     }
     validate(&machine)?;
     Ok(machine)
+}
+
+/// Carry semantic summaries into machine IR; never remove its terminators.
+fn transfer_facts(machine: &mut Program, callees: &[Callee<'_>], facts: &barb::Facts) {
+    for (at, callee) in callees.iter().enumerate() {
+        if let Callee::Function(id) = callee {
+            machine.functions[*id].tree_role = Some(facts.tree_role(barb::FnId::at(at)));
+            if facts.pure(barb::FnId::at(at))
+                && matches!(machine.functions[*id].returns, super::Returns::Values(_))
+            {
+                machine.mark_inert(*id);
+            }
+        }
+    }
 }
 
 /// The machine program, begun with its entry taking `params`.
@@ -253,6 +268,7 @@ enum Callee<'a> {
     Instruction(barb::Operation),
     /// Answered by the target's own IEEE 754 instruction.
     Float(crate::float::Float),
+    Rotation(barb::Rotation),
     /// Answered from how the sequence it is handed is held.
     Sequence(barb::SequenceOperation),
     Function(FunctionId),
@@ -332,6 +348,10 @@ fn declare<'a>(
         }
         if let Some(operation) = facts.operation(id) {
             callees.push(Callee::Instruction(operation));
+            continue;
+        }
+        if let Some(rotation) = facts.rotation(id) {
+            callees.push(Callee::Rotation(rotation));
             continue;
         }
         if let Some(float) = facts.float(id) {
@@ -2606,6 +2626,32 @@ impl Lowering<'_> {
         }
     }
 
+    fn float_comparison(
+        &self,
+        b: &mut super::Builder,
+        comparison: barb::FloatComparison,
+        locals: &Locals,
+    ) -> ValueId {
+        let left = Self::scalar(locals, comparison.left);
+        let right = Self::scalar(locals, comparison.right);
+        let condition = b.float_not_above(comparison.format, right, left);
+        let yes = u64::from(self.barb.tag(comparison.yes));
+        let no = u64::from(self.barb.tag(comparison.no));
+        let class = width(barb::Bounds::at(yes).or(barb::Bounds::at(no)));
+        b.if_(
+            condition,
+            &[class],
+            |b| {
+                let value = b.constant(class, yes);
+                b.yield_(&[value]);
+            },
+            |b| {
+                let value = b.constant(class, no);
+                b.yield_(&[value]);
+            },
+        )[0]
+    }
+
     fn expr(
         &self,
         b: &mut super::Builder,
@@ -2613,6 +2659,10 @@ impl Lowering<'_> {
         locals: &Locals,
         statics: &[Option<Known>],
     ) -> Answer<Held> {
+        if let Some(comparison) = self.facts.float_comparison(expr) {
+            let result = self.float_comparison(b, comparison, locals);
+            return Answer::Value(Held::One(b.convert(self.width(expr), result)));
+        }
         match self.barb.expr(expr) {
             barb::Expr::Atom(atom) => locals[atom.0.index()].clone().into(),
             // A value the tier above worked out, as the word it lowers to:
@@ -2956,7 +3006,12 @@ impl Lowering<'_> {
     ) -> Answer<Held> {
         let (results, answers) = match &self.callees[function.index()] {
             Callee::Instruction(operation) => {
-                let args = self.call_arguments(function, arguments, locals);
+                let mut args = self.call_arguments(function, arguments, locals);
+                for (value, &bound) in args.iter_mut().zip(self.facts.arguments(expr)) {
+                    if b.class(*value) == Class::Natural && width(bound) != Class::Natural {
+                        *value = b.convert(width(bound), *value);
+                    }
+                }
                 if matches!(operation, barb::Operation::Add | barb::Operation::Mul)
                     && let Some(affine) = self.facts.affine(expr)
                 {
@@ -2968,6 +3023,53 @@ impl Lowering<'_> {
                     self.width(expr),
                     &args,
                 )));
+            }
+            Callee::Rotation(rotation) => {
+                let args = self.call_arguments(function, arguments, locals);
+                let bits = b.constant(Class::fixed(7), u64::from(rotation.bits));
+                let count = self.operation(
+                    b,
+                    barb::Operation::Mod,
+                    Class::fixed(u16::try_from(rotation.bits.ilog2()).expect("rotation width")),
+                    &[args[1], bits],
+                );
+                let two = b.constant(Class::fixed(2), 2);
+                let factor = self.operation(
+                    b,
+                    barb::Operation::Pow,
+                    Class::fixed(rotation.bits),
+                    &[two, count],
+                );
+                let wide = if rotation.bits <= 32 {
+                    Class::fixed(rotation.bits * 2)
+                } else {
+                    Class::Natural
+                };
+                let moved = self.operation(b, barb::Operation::Mul, wide, &[args[0], factor]);
+                let modulus = if rotation.bits < 64 {
+                    b.constant(Class::fixed(rotation.bits + 1), 1u64 << rotation.bits)
+                } else {
+                    b.natural(&(num_bigint::BigUint::from(1u8) << usize::from(rotation.bits)))
+                };
+                let low = self.operation(
+                    b,
+                    barb::Operation::Mod,
+                    Class::fixed(rotation.bits),
+                    &[moved, modulus],
+                );
+                let high = self.operation(
+                    b,
+                    barb::Operation::Div,
+                    Class::fixed(rotation.bits),
+                    &[moved, modulus],
+                );
+                let rotated = self.operation(
+                    b,
+                    barb::Operation::Add,
+                    Class::fixed(rotation.bits),
+                    &[low, high],
+                );
+                return Answer::Value(Held::One(b.convert(self.width(expr), rotated)));
             }
             Callee::Float(float) => {
                 let args = self.call_arguments(function, arguments, locals);

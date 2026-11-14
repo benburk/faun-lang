@@ -228,6 +228,7 @@ impl Facts {
         self.operation(id).is_some()
             || self.sequence_operation(id).is_some()
             || self.float(id).is_some()
+            || self.rotation(id).is_some()
     }
     /// The IEEE 754 operation `id` was claimed to compute: an answer a
     /// target with the instruction gives in its place, and one without it

@@ -316,6 +316,18 @@ impl Builder<'_> {
         )
     }
 
+    pub(crate) fn float_not_above(
+        &mut self,
+        format: crate::float::Format,
+        left: ValueId,
+        right: ValueId,
+    ) -> ValueId {
+        let class = Class::fixed(format.bits());
+        let left = self.convert(class, left);
+        let right = self.convert(class, right);
+        self.compare(Relation::FloatNotAbove(format), left, right)
+    }
+
     pub fn compare(&mut self, relation: Relation, left: ValueId, right: ValueId) -> ValueId {
         let op = Op::Compare {
             relation,

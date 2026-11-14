@@ -84,3 +84,36 @@ fn apple_silicon_builds_the_greeting_on_each_backend() {
         }
     }
 }
+
+#[test]
+fn shared_semantic_facts_lower_on_wasm_and_6502() {
+    let package = Package::new(
+        "semantic-targets",
+        r"
+        compare : (F32, Nat) -> Bool
+        compare(value, 0) -> (4.0 - value).sign_bit()
+        compare(value, n) -> compare(value, n - 1)
+        main!(host) -> (
+          count = host.args.len()
+          value = F32.of_bits(U32.of_nat(0x40800000 + count))
+          rotated = U8.of_nat(count).rotate_left(count)
+          host.exit!(compare(value, count).select(rotated, 99))
+        )
+    ",
+    );
+    for target in ["wasm32-wasi", "mos6502-sim65"] {
+        for backend in ["stock", "lab"] {
+            let result = Command::new(env!("CARGO_BIN_EXE_faun"))
+                .args(["run", "--backend", backend, "--target", target])
+                .arg(package.entry())
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(2),
+                "{target}/{backend}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+}

@@ -552,6 +552,7 @@ impl Program {
             Returns::Values(classes) => Returns::Values(self.sign(classes)),
         };
         self.functions.push(Function {
+            tree_role: None,
             name,
             params,
             parameters,
@@ -591,6 +592,7 @@ impl Program {
         let name = self.symbol(name);
         let returns = self.sign(returns);
         self.functions.push(Function {
+            tree_role: None,
             name,
             params,
             parameters,

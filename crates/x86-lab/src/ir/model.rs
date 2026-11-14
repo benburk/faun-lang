@@ -457,6 +457,9 @@ pub(super) struct Parameter {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
+    /// A Barb proof, when this declaration came from value-level lowering.
+    /// Direct machine-IR clients leave this absent.
+    pub tree_role: Option<crate::barb::TreeRole>,
     /// The provider symbol for an external, or a descriptive name for a body.
     /// Source aliases are resolved before constructing this declaration.
     pub name: Symbol,

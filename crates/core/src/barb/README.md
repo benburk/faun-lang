@@ -40,20 +40,28 @@ Recognized definitions are currently protected from rewriting and inlining.
 A new recognition rule must account for that policy as well as the equivalence
 it proves, so retaining a fact does not inadvertently block useful optimization.
 
-A future Barb rotate fact would need to specify the rotation width and count
-semantics. Width belongs to the operation's meaning, even when a target's
-machine word has another width. A later tier could implement it with a native
-rotate or shifts and a bitwise combination. Preserve enough meaning to make
-either choice and preserve any separately used intermediate values when
-rewriting. Recognition consumes compiler work and should use bounded matching.
-Knowing an equivalence and deciding whether to expand or duplicate code have
-different costs. Target-dependent profitability belongs with the tier that
-knows those costs.
+`Facts::rotation` records a structurally recognized left rotation, its bit
+width (8, 16, 32 or 64), and a count taken modulo that width. It is exposed
+only when range analysis proves that the input fits. Matching is bounded and
+uses equations, not names. The definition remains available as a fallback.
+Lowering expands the fact into portable arithmetic; x86 instruction selection
+can select ROL. Separately used intermediates remain live.
 
-Currently, `Operation` contains natural arithmetic, bitwise operations and
-comparisons, and `SequenceOperation` describes recognized list operations.
-Rotate recognition lives in x86-lab instruction selection. The proposed Barb
-rotate fact is a design example for future work.
+`Facts::float_comparison` recognizes the sign of a difference after NaN
+canonicalization. Its contract includes unordered inputs and excludes the
+negative-zero exception. Native x86 can compare directly; portable lowering
+orders IEEE bit patterns. This requires no change to the expression language.
+
+`Facts::tree_role` summarizes recursive builders and readers with scalar
+payloads. It does not authorize an allocation strategy: machine IR still checks
+cell layouts, ownership, nonescape, connected construction, and region lifetime.
+Short constructor lists reversed onto a destination and multiplication of a
+float by two are value identities in normalization. The former is bounded to
+four elements; the latter reuses a compatible addition definition when present.
+
+Machine recognizers remain useful fallbacks for hand-built IR and patterns
+exposed by later passes. Target-dependent profitability and physical storage
+choices stay below Barb.
 
 The public API is re-exported from `barb::mod.rs`.
 
@@ -69,8 +77,11 @@ The public API is re-exported from `barb::mod.rs`.
   `Assumed` describes justified facts about entry parameters and bodyless
   results, including supported float handling.
 - Query `Facts::operation`, `sequence_operation`, and `float` for recognized
-  meanings, `held`, `takes`, `answers`, and `field` for ranges, and `affine`
+  meanings, `rotation`, `float_comparison`, and `tree_role` for semantic summaries,
+  `pure` for effect freedom, `held`, `takes`, `answers`, and `field` for ranges, and `affine`
   for bounded affine summaries. `type_shape` classifies inductive declarations.
+  `Facts::arguments(expr)` gives operand ranges refined by the enclosing
+  branch, without narrowing other uses of the same value.
   `Program::byte_sequence` records the frontend's byte-list or string identity.
 - Use `Program::render_analyzed` to inspect a program with its facts.
   `faun emit barb` exposes that view through the CLI.
@@ -80,7 +91,8 @@ Sweep can renumber function IDs, and cleanup rebuilds expression IDs and
 term ranges. Type, constructor, and constant IDs survive this schedule.
 Adding, removing, or redefining functions invalidates the internal recognition
 cache. Semantics-preserving body rewrites can reuse it. Final analysis obtains
-recognition, then computes ranges and affine summaries. Consumers and passes
+recognition, then computes ranges (including branch-local operands), affine
+summaries, purity, floating comparison facts, and tree roles. Consumers and passes
 request this analysis when they need facts.
 
 ## Input program requirements
@@ -491,7 +503,8 @@ resimplifies definitions to which it has supplied known values.
 8. Simplification: the normalizing walk with every rule on, each definition
    after what it calls, so that a caller meets its callees' answers as
    constants. A construction, call or match whose every input is known is
-   evaluated; the identities apply; constants combine across recognized
+   evaluated; the identities apply (including short reverse-onto and float
+   doubling); constants combine across recognized
    associative operations and directional monus/division chains;
    power-of-two moduli push through sums and products; and a repeated call
    of an answered definition answers what the first did. Each definition
