@@ -37,6 +37,8 @@
 //! both. Only where no arm of the second is taken by two arms of the first,
 //! so nothing is copied twice.
 
+mod semantic;
+
 use std::collections::HashMap;
 
 use super::budget::{Budget, FoldLimits};
@@ -690,6 +692,11 @@ impl Rewrite<'_> {
                     return held;
                 }
                 if self.rules.identities
+                    && let Some(held) = self.float_double(called, &args, scope)
+                {
+                    return held;
+                }
+                if self.rules.identities
                     && let Some(held) = self.identity(called, &args, scope)
                 {
                     return held;
@@ -1248,6 +1255,7 @@ impl Rewrite<'_> {
         Some(match op {
             SequenceOperation::ReverseOnto | SequenceOperation::Prepend if empty(0) => args[1],
             SequenceOperation::Prepend if empty(1) => args[0],
+            SequenceOperation::ReverseOnto => return self.short_reverse(called, args, scope),
             SequenceOperation::Drop if self.small(args[1]) == Some(0) => args[0],
             SequenceOperation::Drop | SequenceOperation::Take | SequenceOperation::Replace
                 if empty(0) =>

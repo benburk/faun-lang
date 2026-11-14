@@ -2027,3 +2027,35 @@ fn a_search_over_a_joined_list_stops_at_what_it_accepts() {
     let args = vec![nat(&p, 30), nat(&p, 5)];
     assert_eq!(run(&p, some, args, &mut vec![]), Value(w.true_, vec![]));
 }
+
+#[test]
+fn short_reversal_preserves_shared_values_and_effect_order() {
+    let (mut p, w) = walks();
+    let observe = p.declare("observe", &[w.list], w.nat);
+    let first = p.declare("first", &[], w.nat);
+    let second = p.declare("second", &[], w.nat);
+    let entry = p.declare("short", &[w.list], w.list);
+    p.define(entry, |b, args| {
+        let a = b.call(first, &[]);
+        let c = b.call(second, &[]);
+        let nil = b.con(w.nil, &[]);
+        let tail = b.con(w.cons, &[c, nil]);
+        let original = b.con(w.cons, &[a, tail]);
+        let reversed = b.call(w.reverse, &[original, args[0]]);
+        b.call(observe, &[original]);
+        reversed
+    });
+    let original = p.clone();
+    super::normalize::identities(&mut p);
+    validate(&p).unwrap();
+    assert!(!callees(&p, entry).contains(&w.reverse));
+    for tail in [&[][..], &[1, 2, 3][..]] {
+        let args = vec![w.list_of(&original, tail)];
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        let expected = run(&original, entry, args.clone(), &mut before);
+        assert_eq!(run(&p, entry, args, &mut after), expected);
+        assert_eq!(after, before);
+        assert_eq!(after, vec![first, second, observe]);
+    }
+}
