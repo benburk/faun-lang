@@ -26,6 +26,9 @@ is made, leaving buffering to the host.
 Each folder holds `main.fn`, the game's C program as `main.c`, and the
 game's output at a small size, which the tests hold the Faun program to.
 
+For iterative compiler and source comparisons, see the [x86 experiment contract](LAB.md). It adds executable size and a gate against the last
+accepted Faun revision.
+
 ## Running
 
 ```console
@@ -38,6 +41,41 @@ Each program is built, checked against the game's output, and run
 `--runs` times beside its C program, whose output at the measured size it
 must equal. Sizes default to ones the whole set takes a minute or so at;
 `--game` asks for the game's own.
+
+## Supplemental MD5 benchmark
+
+The MD5 program hashes standard input in 64 KiB chunks. The supplemental
+runner checks the full digest against Python and reports median runtime,
+peak RSS and executable size. From the repository root, run
+
+```console
+$ just bench 8 --backend x86-lab --only md5
+```
+
+Choose an available CPU in place of 8. To count Faun heap allocations from
+startup through hex output, run the probe on a symbolized build. The probe
+requires GDB on native x86-64 Linux.
+
+```console
+$ target/release/faun build --backend=x86-lab --symbols crates/faun/examples/benchmarks-game/md5/main.fn -o target/md5-profile
+$ python3 crates/faun/examples/benchmarks-game/md5/allocations.py target/md5-profile
+```
+
+The probe checks the digest and requires zero heap calls for each input,
+including the 55-byte tail that fits in one final block, the 56-byte tail
+that needs two, and inputs spanning several reads.
+
+The streaming C comparison uses the same 64 KiB read size and prints the
+same lowercase digest and newline. Build it with the locked shell's GCC
+and compare both digests on the same file.
+
+```console
+$ nix develop -c gcc -std=c11 -O3 -fomit-frame-pointer -s crates/faun/examples/benchmarks-game/md5/main.c -o target/md5-c
+$ target/md5-c < input.dat
+$ target/md5-profile < input.dat
+```
+
+The eight game programs supply the promotion scores.
 
 ## Scoring
 

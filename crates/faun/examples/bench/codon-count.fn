@@ -1,0 +1,29 @@
+# Count non-overlapping DNA triplets in frame zero of a raw sequence.
+# Fold ASCII case and count ambiguous codons too. Skip non-ASCII triplets
+# and ignore a trailing incomplete triplet.
+import std.host {Host}
+
+count : (List(U8), Map(Str, Nat)) -> Map(Str, Nat)
+count([a, b, c, *rest], counts) -> (
+  bytes = [a.to_ascii_upper(), b.to_ascii_upper(), c.to_ascii_upper()]
+  Str.from_ascii(bytes) is Ok(key) else return count(rest, counts)
+  count(rest, counts.update_or(key, 0, |n| n + 1))
+)
+count(_, counts) -> counts
+
+usage : List(U8) -> List(Str)
+usage(dna) -> count(dna, Map.empty).to_list()
+  .sort_on(|(key, _)| key)
+  .map(|(key, n)| "${key}\t${n}")
+
+expect usage("atgNNNATGgaTcc".to_utf8()) == ["ATG\t2", "GAT\t1", "NNN\t1"]
+expect usage([]) == [] & usage("ac".to_utf8()) == []
+expect usage([255, 65, 67, 65, 67, 71]) == ["ACG\t1"]
+
+main! : Host -> []
+main!(host) -> (
+  input = host.stdin.read_to_end!()
+  input is Ok(dna) else return host.exit!(1)
+  wrote = host.print_lines!(usage(dna))
+  host.exit!(if wrote.is_ok() then 0 else 1)
+)

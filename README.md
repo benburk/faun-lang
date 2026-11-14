@@ -41,11 +41,20 @@ Faun is equally defined by the features it does not have
 
 ## What works today
 
-Three backends
+Compilation targets
 
 - x86-64 Linux
 - wasm32 WASI
 - MOS 6502 sim65
+- Apple Silicon macOS, with baseline support for constant exits, argument counts, and static writes.
+
+`--backend lab` selects the experimental lowering and storage passes on any target. Word size governs which layouts are available. On x86-64 Linux this also selects the experimental x86 emitter (`--backend x86-lab` is its existing spelling). `--backend stock` is the default. In the development shell, `faun run` and `faun test` can execute Wasm with Wasmtime and 6502 images with sim65.
+
+```sh
+faun run --target wasm32-wasi --backend lab crates/faun/examples/minimal-hello.fn
+faun run --target mos6502-sim65 --backend lab crates/faun/examples/minimal-hello.fn
+faun build --target aarch64-macos --backend lab crates/faun/examples/minimal-hello.fn -o hello
+```
 
 Programs, in [`crates/faun/examples`](crates/faun/examples)
 

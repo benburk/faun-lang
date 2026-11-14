@@ -18,8 +18,22 @@
 //! nothing in it holds a claim, so the runtime needs no per-shape code to
 //! walk what any object holds.
 
-use super::cell;
 use super::{Class, Width};
+
+pub(super) const SCALAR: u64 = 0;
+pub(super) const NATURAL: u64 = 1;
+pub(super) const CELL: u64 = 2;
+pub(super) const BUFFER: u64 = 3;
+
+/// The kind a value of `class` is stored as, in a cell field or a buffer.
+pub(super) const fn kind(class: Class) -> u64 {
+    match class {
+        Class::Natural => NATURAL,
+        Class::Cell => CELL,
+        Class::Buffer => BUFFER,
+        _ => SCALAR,
+    }
+}
 
 /// One leaf of a shape, where it lies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,7 +68,7 @@ impl Packed {
                     return Leaf {
                         offset: 0,
                         width: None,
-                        kind: cell::SCALAR,
+                        kind: SCALAR,
                     };
                 }
                 offset = offset.next_multiple_of(bytes);
@@ -62,7 +76,7 @@ impl Packed {
                 let leaf = Leaf {
                     offset,
                     width: Some(width(bytes, word_bits)),
-                    kind: cell::kind(class),
+                    kind: kind(class),
                 };
                 offset += bytes;
                 leaf
@@ -79,7 +93,7 @@ impl Packed {
     pub(super) fn managed(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
         self.leaves
             .iter()
-            .filter(|leaf| leaf.kind != cell::SCALAR)
+            .filter(|leaf| leaf.kind != SCALAR)
             .map(|leaf| (leaf.offset, leaf.kind))
     }
 

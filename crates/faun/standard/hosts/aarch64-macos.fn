@@ -1,0 +1,26 @@
+# Apple Silicon process startup and direct descriptor writes.
+export {Host, Stdout}
+
+Host : {args: List(Str)}.(
+  exit! : (Host, U8) -> []
+
+  stdout : Host -> Stdout
+  stdout(_) -> Stdout
+
+  print! : (Host, Str) -> {}
+  print!(host, text) -> (
+    host.stdout.write!(text.to_utf8())
+    {}
+  )
+)
+
+Stdout : [Stdout].(
+  write! : (Stdout, List(U8)) -> {}
+  write!(_, bytes) -> (
+    fd_put!(Fd(1), bytes)
+    {}
+  )
+)
+
+Fd : [Fd(U32)]
+fd_put! : (Fd, List(U8)) -> Nat

@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 description = "The shared Barb and machine compiler core for Faun"
 
+[features]
+backend-tests = []
+
 [dependencies]
 num-bigint = "0.4.8"
 num-traits = "0.2"

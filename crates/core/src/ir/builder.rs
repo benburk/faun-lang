@@ -316,6 +316,61 @@ impl Builder<'_> {
         )
     }
 
+    /// Unordered-or-less-or-equal, expressed on IEEE bit patterns.
+    pub(crate) fn float_not_above(
+        &mut self,
+        format: crate::float::Format,
+        left: ValueId,
+        right: ValueId,
+    ) -> ValueId {
+        let class = Class::fixed(format.bits());
+        let left = self.convert(class, left);
+        let right = self.convert(class, right);
+        let sign = 1u64 << (format.bits() - 1);
+        let infinity = match format {
+            crate::float::Format::Binary32 => 0x7f80_0000,
+            crate::float::Format::Binary64 => 0x7ff0_0000_0000_0000,
+        };
+        let mask = self.constant(class, sign - 1);
+        let infinity = self.constant(class, infinity);
+        let zero = self.constant(class, 0);
+        let a = self.binary(Binary::And, left, mask);
+        let b = self.binary(Binary::And, right, mask);
+        let nan_a = self.compare(Relation::Less, infinity, a);
+        let nan_b = self.compare(Relation::Less, infinity, b);
+        let unordered = self.binary(Binary::Or, nan_a, nan_b);
+        let magnitude = self.binary(Binary::Or, a, b);
+        let zeros = self.compare(Relation::Equal, magnitude, zero);
+        let a = self.float_order_key(format, left);
+        let b = self.float_order_key(format, right);
+        let above = self.compare(Relation::Less, b, a);
+        let no = self.constant(Class::fixed(1), 0);
+        let le = self.compare(Relation::Equal, above, no);
+        let accepted = self.binary(Binary::Or, unordered, zeros);
+        self.binary(Binary::Or, accepted, le)
+    }
+
+    fn float_order_key(&mut self, format: crate::float::Format, value: ValueId) -> ValueId {
+        let class = Class::fixed(format.bits());
+        let sign = 1u64 << (format.bits() - 1);
+        let mask = self.constant(class, sign - 1);
+        let negative = self.compare(Relation::Less, mask, value);
+        self.if_(
+            negative,
+            &[class],
+            |b| {
+                let all = b.constant(class, format.greatest());
+                let key = b.binary(Binary::Xor, value, all);
+                b.yield_(&[key]);
+            },
+            |b| {
+                let sign = b.constant(class, sign);
+                let key = b.binary(Binary::Or, value, sign);
+                b.yield_(&[key]);
+            },
+        )[0]
+    }
+
     pub fn compare(&mut self, relation: Relation, left: ValueId, right: ValueId) -> ValueId {
         let op = Op::Compare {
             relation,

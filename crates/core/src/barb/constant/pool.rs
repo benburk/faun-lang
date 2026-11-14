@@ -115,6 +115,7 @@ mod tests {
     fn a_pool_needs_only_declarations_not_a_program_or_name_table() {
         let mut types = Pool::default();
         let nat = types.push(Type {
+            byte_sequence: None,
             name: Symbol::at(0),
             inline: false,
             definition: TypeDefinition::Defined(Range::of(0, 2)),

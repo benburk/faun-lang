@@ -10,39 +10,49 @@
 
 import std.host {Host, WriteError}
 
-Complex = {re: F64, im: F64}
+# Inside the main cardioid or period-two bulb the orbit stays bounded.
+# Leave a margin at each boundary so points within rounding distance
+# take the same fifty steps as the rest of the image.
+pixel : (F64, F64) -> Bool
+pixel(x, y) -> (
+  u = x - 0.25
+  yy = y * y
+  q = u * u + yy
+  if q * (q + u) + 1.0e-12 < 0.25 * yy return True
+  if (x + 1.0) * (x + 1.0) + yy + 1.0e-12 < 0.0625 return True
+  orbit(x, y, 0.0, 0.0, 50)
+)
 
-# Whether `c` stays within two of nought for `left` more steps of `z² + c`,
-# from `z`.
-stays : (Complex, Complex, Nat) -> Bool
-stays(_, {re, im}, _) if re * re + im * im > 4.0 -> False
-stays(_, _, 0) -> True
-stays(c, {re, im}, left) -> stays(c, {re: re * re - im * im + c.re, im: 2.0 * re * im + c.im}, left - 1)
+# At radius two the point is still in range. On this finite grid the sign
+# of the distance to the squared limit detects strict escape.
+orbit : (F64, F64, F64, F64, Nat) -> Bool
+orbit(x, y, re, im, left) -> (
+  rr = re * re
+  ii = im * im
+  if (4.0 - (rr + ii)).sign_bit() return False
+  left is Succ(n) else return True
+  orbit(x, y, rr - ii + x, 2.0 * re * im + y, n)
+)
 
-# Where on the grid, from `low` to two past it, place `at` of `n` lies.
 coordinate : (Nat, Nat, F64) -> F64
 coordinate(at, n, low) -> 2.0 * F64.of_nat(at) / F64.of_nat(n) - low
 
-bit : Bool -> Nat
-bit(True) -> 1
-bit(False) -> 0
-
-# Up to eight pixels as a byte, the first the highest bit, a short last one
-# filled out with unset bits.
-packed : List(Bool) -> U8
-packed(pixels) -> U8.of_nat(pixels.fold(0, |byte, set| byte * 2 + bit(set)) * 2.pow(8 - pixels.len()))
-
-# Row `y` of the bitmap, packed.
+# Build each PBM byte from its most significant bit. The last byte
+# shifts in zeroes for positions past the end of the row.
 row : (Nat, Nat) -> List(U8)
 row(y, n) -> (
   im = coordinate(y, n, 1.0)
-  pixels = List.range(n).map(|x| stays({re: coordinate(x, n, 1.5), im}, {re: 0.0, im: 0.0}, 50))
-  blocks = pixels.blocks(8)
-  blocks.complete.append(blocks.remainder).filter(|block| !block.is_empty()).map(packed)
+  List.range((n + 7) / 8).map(|i| (
+    (_, byte) = 8.times((i * 8, U8.of_nat(0)), |(x, byte)| (
+      set = x < n & pixel(coordinate(x, n, 1.5), im)
+      (x + 1, byte + byte + set.select(1, 0))
+    ))
+    byte
+  ))
 )
 
 expect row(0, 8) == [U8.of_nat(0)]
-expect stays({re: -0.5, im: 0.0}, {re: 0.0, im: 0.0}, 50) & !stays({re: 1.0, im: 1.0}, {re: 0.0, im: 0.0}, 50)
+expect pixel(-0.5, 0.0) & !pixel(1.0, 1.0)
 
 # Rows `y` to `n - 1`, written a row at a time.
 drawn! : (Host, Nat, Nat) -> Result({}, WriteError)

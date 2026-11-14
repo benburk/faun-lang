@@ -8,16 +8,24 @@ use super::{InlineLimits, Program};
 /// malformed definition. A definition may never come back; a pass may leave
 /// out pure work nothing needs, and nothing else, as the module's rules say.
 ///
-/// Each stage runs once, in this order: structural normalization, building
-/// lists front to back, descent, helper inlining with arithmetic
-/// identities, fusion, writing a walk over a list in place, simplification -- evaluating what is known, the
-/// identities and combining constants, in one walk -- copies of a loop for
-/// the known values its callers hand it and the values they all hand alike,
-/// simplified again where they bound something, joining what still calls
-/// round through another definition, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
-/// aliases and unused inert bindings, never calls or matches whose
-/// evaluation may have effects. Inlining and folding stop at their fixed
-/// budgets, which bound work rather than choose what is done.
+/// The outer schedule runs once, in this order:
+///
+/// 1. Structural normalization.
+/// 2. Forward list construction.
+/// 3. Descent over natural numbers.
+/// 4. Helper inlining with arithmetic identities.
+/// 5. Producer/consumer fusion.
+/// 6. First-element demand specialization.
+/// 7. List walks expressed through functional replacements.
+/// 8. Simplification, including constant evaluation and identities.
+/// 9. Specialization for known arguments, resimplifying changed definitions.
+/// 10. Joining recursive rounds through helper inlining.
+/// 11. Reachability sweep.
+/// 12. Effect-safe cleanup.
+///
+/// Recognized induction equations are left intact. Cleanup removes aliases
+/// and unused pure bindings while preserving observable calls. Inlining and
+/// folding use fixed work budgets.
 ///
 /// Cleanup rebuilds the term pools: discard saved expression IDs and body or
 /// range handles. Declaration and constant IDs are preserved.

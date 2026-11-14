@@ -44,9 +44,9 @@
 //!   it takes no range for one, nor for what the entry is handed: the tier
 //!   lowering the program says what it assumes of values from outside, as
 //!   an [`Assumed`], and the analysis it asks for is its own.
-//! - **What effects those names perform.** Programs express dependencies by
-//!   threading state through calls. Optimizations also retain eager bindings:
-//!   an unused answer does not prove a call harmless or that it returns.
+//! - **What effects those names perform.** Calls reaching a bodyless name
+//!   are observable even if their answers are unused. Their order, path and
+//!   multiplicity are preserved without a world-state argument.
 //!
 //! # What a pass may do
 //!
@@ -65,7 +65,8 @@
 //!
 //! The bounded optimizer substitutes already-evaluated ANF atoms, leaves
 //! argument bindings in place when applying laws. Cleanup removes aliases and
-//! unused atoms, constants and constructors, but retains calls and matches.
+//! unused pure expressions, including calls reaching no bodyless name and
+//! matches with only pure arms. It retains calls and matches with effects.
 //! Constant evaluation refuses a whole call or match if any
 //! selected eager binding cannot be evaluated, and its budget bounds the
 //! work, so a definition that never comes back cannot hang the compiler.
@@ -74,6 +75,15 @@
 //! Nothing here knows what a branch costs, what a word is, or how often
 //! anything runs, so the tier that knows prices is the tier that may trade
 //! work for time.
+//!
+//! # API and pass order
+//!
+//! Build with [`Program`] and [`Builder`], call [`validate`], then [`optimize`].
+//! Analyze the resulting program with [`Program::analyze`] or, when lowering
+//! supplies external guarantees, [`Program::assuming`]. [`Facts`] records
+//! recognized operations, value ranges and affine summaries for that revision.
+//! [`optimize`] documents the ordered rewrite schedule. The adjacent README
+//! describes tier responsibilities, recognition and the API in more detail.
 //!
 //! # Code organization
 //!
@@ -103,6 +113,7 @@ mod evaluate;
 mod facts;
 #[cfg(test)]
 pub(crate) mod fixture;
+mod float_compare;
 mod forward;
 mod fuse;
 mod head;
@@ -113,16 +124,18 @@ mod normalize;
 mod optimize;
 mod pretty;
 mod program;
+mod rotation;
 mod sequence;
 mod specialize;
 mod sweep;
 mod terms;
+mod tree;
 mod types;
 mod validate;
 mod walk;
 
-pub(crate) use affine::Affine;
-pub use bounds::{Assumed, Bounds};
+pub use affine::Affine;
+pub use bounds::{Assumed, Bounds, bounds_of_constants};
 pub use budget::{Budget, FoldLimits, LimitExceeded};
 pub use builder::Builder;
 pub use constant::{
@@ -134,11 +147,14 @@ pub use constant::{
 // `TypeShape`, so nothing outside this tier needs this one.
 pub(crate) use constant::Shape;
 pub use facts::{Facts, Operation, SequenceOperation};
+pub use float_compare::FloatComparison;
+pub use rotation::Rotation;
+pub use tree::TreeRole;
 
 pub use inline::InlineLimits;
 pub use model::{
-    Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,
-    Range, Symbol, Type, TypeId,
+    Arm, Atom, Body, ByteSequence, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId,
+    Function, Local, Range, Symbol, Type, TypeId,
 };
 #[cfg(test)]
 pub(crate) use normalize::fold;
@@ -148,9 +164,27 @@ pub(crate) use normalize::structural;
 pub use optimize::optimize;
 pub(crate) use program::shape;
 pub use program::{Program, type_shape};
-pub(crate) use program::{single_field, single_field_constant};
+pub use program::{single_field, single_field_constant};
 pub use types::TypeShape;
 pub use validate::{Refusal, validate};
+
+/// Individual optimizer steps used to construct machine-IR test inputs.
+#[cfg(feature = "backend-tests")]
+pub mod test_support {
+    use super::{InlineLimits, Program, normalize};
+
+    pub fn structural(program: &mut Program) {
+        normalize::structural(program);
+    }
+
+    pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
+        normalize::normalize_with_limits(program, limits);
+    }
+
+    pub fn fold(program: &mut Program) {
+        normalize::fold(program);
+    }
+}
 
 #[cfg(test)]
 use constant::decode;

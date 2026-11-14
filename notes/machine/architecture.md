@@ -189,6 +189,13 @@ stay and run wherever nothing faster does, on a target without float
 instructions such as the 6502, and
 `examples/floats/` is run both with and without the claims to check them.
 
+## Open questions
+
+The [experimental x86-64 backend](../../crates/x86-lab/README.md) takes
+optimized Barb and starts with its own copy of x86 lowering and emission.
+Its machine IR can choose representation and placement independently. The [experiment contract](../../crates/faun/examples/benchmarks-game/LAB.md)
+describes the boundary, the first milestones and how to compare results.
+
 ## Related
 
 - [Memory](memory.md): reference counting and reuse in the machine tier

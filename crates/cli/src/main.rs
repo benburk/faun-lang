@@ -5,6 +5,7 @@
 //! what the compiler makes. The compiler itself is the `faun` library.
 
 mod args;
+mod compiler;
 
 use std::fs;
 use std::io;
@@ -12,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 
 use args::{Command, Stage};
+use compiler::Compiler;
 use faun::diagnostic::{Diagnostic, Location};
+use faun_aarch64_macos::Aarch64Macos;
 use faun_core::barb;
 use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_mos6502_sim65::Mos6502Sim65;
@@ -20,11 +23,13 @@ use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
 
 /// Every target this binary compiles for.
-const TARGETS: [&dyn Target; 3] = [&X86_64Linux, &Wasm32Wasi, &Mos6502Sim65];
+const TARGETS: [&dyn Target; 4] = [&X86_64Linux, &Wasm32Wasi, &Mos6502Sim65, &Aarch64Macos];
 
 /// The target running on this machine, which `--target` defaults to.
 const NATIVE: Option<&dyn Target> = if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
     Some(&X86_64Linux)
+} else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+    Some(&Aarch64Macos)
 } else {
     None
 };
@@ -50,23 +55,23 @@ fn answer(command: Command) -> ExitCode {
     let outcome = match command {
         Command::Check { target, source } => check(&source, target).map(|()| ExitCode::SUCCESS),
         Command::Build {
-            target,
+            compiler,
             source,
             output,
             favour,
             symbols,
-        } => build(&source, target, &output, favour, symbols).map(|()| ExitCode::SUCCESS),
+        } => build(&source, compiler, &output, favour, symbols).map(|()| ExitCode::SUCCESS),
         Command::Run {
-            target,
+            compiler,
             source,
             args,
-        } => run(&source, target, &args),
-        Command::Test { target, source } => test(&source, target).map(|()| ExitCode::SUCCESS),
+        } => run(&source, compiler, &args),
+        Command::Test { compiler, source } => test(&source, compiler).map(|()| ExitCode::SUCCESS),
         Command::Emit {
-            target,
+            compiler,
             stage,
             source,
-        } => emit(stage, &source, target).map(|()| ExitCode::SUCCESS),
+        } => emit(stage, &source, compiler).map(|()| ExitCode::SUCCESS),
     };
     match outcome {
         Ok(exit) => exit,
@@ -100,11 +105,12 @@ fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
 /// build, so building one checks it.
 fn build(
     source: &Path,
-    target: &dyn Target,
+    compiler: Compiler,
     output: &Path,
     favour: Favour,
     symbols: SymbolTable,
 ) -> Result<(), Diagnostic> {
+    let target = compiler.host();
     let barb = faun::lower_to_barb(source, target)?;
     if barb.entry().is_none() {
         println!(
@@ -113,7 +119,7 @@ fn build(
         );
         return Ok(());
     }
-    let image = faun::compile_barb_to_image_with(barb, target, favour, symbols)?;
+    let image = compiler.compile(barb, favour, symbols)?;
     let written = write(target, &image, output)?;
     println!("wrote {}", written.display());
     Ok(())
@@ -122,10 +128,17 @@ fn build(
 /// Compile for the machine this runs on, run it, and answer how it exited.
 /// Where a signal stopped it, say which, and answer as a shell does,
 /// 128 and the signal's number.
-fn run(source: &Path, target: &dyn Target, args: &[String]) -> Result<ExitCode, Diagnostic> {
-    runs_here(target)?;
-    let image = faun::compile_to_image(source, target)?;
-    let status = execute(target, &image, |program| program.args(args).status())?;
+fn run(source: &Path, compiler: Compiler, args: &[String]) -> Result<ExitCode, Diagnostic> {
+    let target = compiler.host();
+    let runner = runner(target)?;
+    let image = compiler.compile(
+        faun::lower_to_barb(source, target)?,
+        Favour::Speed,
+        SymbolTable::Omitted,
+    )?;
+    let status = execute(target, runner, &image, |program| {
+        program.args(args).status()
+    })?;
     if let Some(signal) = stopping_signal(status) {
         eprintln!("the program was stopped by signal {signal}");
         let shell = 128 + signal;
@@ -152,16 +165,17 @@ fn stopping_signal(_status: std::process::ExitStatus) -> Option<i32> {
 
 /// Build a package's expectations for the machine this runs on, run them,
 /// and say where each one that does not hold was written.
-fn test(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
-    runs_here(target)?;
+fn test(source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
+    let target = compiler.host();
+    let runner = runner(target)?;
     let tests = faun::lower_tests_to_barb(source, target)?;
     let count = tests.expectations.len();
     if count == 0 {
         println!("no expectations");
         return Ok(());
     }
-    let image = faun::compile_barb_to_image(tests.barb, target)?;
-    let output = execute(target, &image, Process::output)?;
+    let image = compiler.compile(tests.barb, Favour::Speed, SymbolTable::Omitted)?;
+    let output = execute(target, runner, &image, Process::output)?;
     if !output.status.success() {
         let message = format!("the expectations stopped with {}", output.status);
         return Err(Diagnostic::new(message));
@@ -215,55 +229,53 @@ fn report(failed: &[&Location], count: usize) -> Result<(), Diagnostic> {
     Err(Diagnostic::new(message))
 }
 
-/// Refuse a target whose programs this machine cannot run.
-fn runs_here(target: &dyn Target) -> Result<(), Diagnostic> {
-    let name = target.name();
-    if NATIVE.is_none_or(|native| native.name() != name) {
-        let diagnostic = Diagnostic::new(format!("{name} programs do not run on this machine"));
-        let diagnostic = diagnostic.help(format!(
-            "build one with `faun build --target {name}` instead"
-        ));
-        return Err(diagnostic);
+/// A runtime and its options, or an empty command for native execution.
+fn runner(target: &dyn Target) -> Result<&'static [&'static str], Diagnostic> {
+    if NATIVE.is_some_and(|native| native.name() == target.name()) {
+        return Ok(&[]);
     }
-    Ok(())
+    match target.name() {
+        "wasm32-wasi" => Ok(&["wasmtime", "run", "--dir", "."]),
+        "mos6502-sim65" => Ok(&["sim65"]),
+        name => Err(
+            Diagnostic::new(format!("{name} programs do not run on this machine"))
+                .help(format!("cross-compile with `faun build --target {name}`")),
+        ),
+    }
 }
 
 /// Write `image` to a directory of its own, `start` it there, and remove the
 /// directory whatever it did.
 fn execute<T>(
     target: &dyn Target,
+    runner: &[&str],
     image: &[u8],
     start: impl FnOnce(&mut Process) -> io::Result<T>,
 ) -> Result<T, Diagnostic> {
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
     fs::create_dir_all(&directory).map_err(|error| cannot("create", &directory, &error))?;
     let outcome = write(target, image, &directory.join("program")).and_then(|program| {
-        let mut process = Process::new(&program);
-        start(&mut process).map_err(|error| cannot("run", &program, &error))
+        let (command, options) = runner
+            .split_first()
+            .map_or((program.as_path(), &[][..]), |(bin, flags)| {
+                (Path::new(bin), flags)
+            });
+        let mut process = Process::new(command);
+        if !runner.is_empty() {
+            process.args(options).arg(&program);
+        }
+        start(&mut process).map_err(|error| cannot("run", command, &error))
     });
     fs::remove_dir_all(&directory).map_err(|error| cannot("remove", &directory, &error))?;
     outcome
 }
 
 /// Print one stage of a program.
-fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
+fn emit(stage: Stage, source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
+    let target = compiler.host();
     let mut barb = faun::lower_to_barb(source, target)?;
     barb::optimize(&mut barb);
-    let routines = target.routines();
-    let text = match stage {
-        Stage::Barb => barb.render_analyzed(&barb.analyze()),
-        Stage::Machine => {
-            let machine =
-                faun_core::lower_to_machine_ir(&barb, &routines).map_err(Diagnostic::new)?;
-            machine.render()
-        }
-        Stage::Target => {
-            let machine =
-                faun_core::lower_to_machine_ir(&barb, &routines).map_err(Diagnostic::new)?;
-            let prepared = target.prepare(&machine).map_err(Diagnostic::new)?;
-            target.render(&prepared)
-        }
-    };
+    let text = compiler.render(stage, &barb).map_err(Diagnostic::new)?;
     print!("{text}");
     Ok(())
 }

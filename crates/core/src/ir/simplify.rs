@@ -45,13 +45,18 @@
 //! requirement is worked out exactly, and left alone where the answer would
 //! not fit it.
 
+mod prepend;
+
+use std::collections::HashMap;
+
 use num_bigint::BigUint;
+use prepend::{Pushed, temporary_pushes};
 
 use crate::facts::Facts;
 
 use super::{
-    Binary, Builder, Class, Direction, Exit, Op, Program, RegionId, Relation, ValueId, model::wrap,
-    rewrite,
+    Binary, Builder, Class, Direction, Exit, Op, Program, Range, RegionId, Relation, ShapeId,
+    ValueId, model::wrap, rewrite,
 };
 
 /// The fewest bits a machine word has on any target this compiles for.
@@ -76,6 +81,7 @@ const LOW_DEPTH: u8 = 32;
 pub(super) fn simplify(source: &Program) -> Program {
     let mut pass = Simplify {
         wrote: Wrote::of(source),
+        pushes: temporary_pushes(source),
         steps: vec![None; source.values_count()],
         folded: vec![None; source.values_count()],
         word_bits: source.layout.map(|layout| layout.word_bits),
@@ -85,6 +91,7 @@ pub(super) fn simplify(source: &Program) -> Program {
 
 struct Simplify {
     wrote: Wrote,
+    pushes: HashMap<ValueId, Pushed>,
     /// What each old value is a fixed step past, once anything has been
     /// found to be a step past anything. Written as the walk goes, since
     /// what a step is past is whatever the walk has already written.
@@ -128,6 +135,9 @@ impl rewrite::Pass for Simplify {
             return true;
         }
         match op {
+            Op::BufferPrepend { operands, shape } => {
+                self.prepend_elements(rebuild, b, operands, shape, results)
+            }
             Op::CellField { cell, index, shape } => {
                 let Some((
                     Op::Cell {

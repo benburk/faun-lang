@@ -160,6 +160,9 @@ impl Program {
             return Some(float.to_string());
         }
         let facts = facts?;
+        if let Some(rotation) = facts.rotation(id) {
+            return Some(format!("rotate left {}", rotation.bits));
+        }
         if let Some(operation) = facts.operation(id) {
             let name = match operation {
                 Operation::Add => "add",

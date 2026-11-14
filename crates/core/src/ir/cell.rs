@@ -10,12 +10,8 @@
 //! through their respective helpers.
 
 use super::natural::{Counting, Helper, Library as NaturalLibrary};
+use super::packing::{BUFFER, CELL, NATURAL};
 use super::{Binary, Builder, Class, FunctionId, Offset, Program, Relation, ValueId, Width};
-
-pub(super) const SCALAR: u64 = 0;
-pub(super) const NATURAL: u64 = 1;
-pub(super) const CELL: u64 = 2;
-pub(super) const BUFFER: u64 = 3;
 
 /// The word holding a cell's tag.
 pub(super) const TAG: i32 = 2;
@@ -23,16 +19,6 @@ pub(super) const TAG: i32 = 2;
 pub(super) const DESCRIPTOR: i32 = 3;
 /// The word a cell's fields begin at.
 pub(super) const FIELDS: i32 = 4;
-
-/// The kind a value of `class` is stored as, in a cell field or a buffer.
-pub(super) const fn kind(class: Class) -> u64 {
-    match class {
-        Class::Natural => NATURAL,
-        Class::Cell => CELL,
-        Class::Buffer => BUFFER,
-        _ => SCALAR,
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Library {

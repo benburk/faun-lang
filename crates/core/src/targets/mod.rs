@@ -36,6 +36,13 @@ pub enum Favour {
     Size,
 }
 
+/// Representation and ownership passes to use before target-specific emission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pipeline {
+    Stock,
+    Lab,
+}
+
 /// A machine, and everything below the IR that reaching it takes.
 ///
 /// Shared preparation checks layout and representation; each target checks
@@ -166,7 +173,25 @@ pub trait Target: fmt::Debug {
         favour: Favour,
         symbols: SymbolTable,
     ) -> Result<Vec<u8>, String> {
-        let image = self.emit_with(&self.prepare_favouring(program, favour)?, favour, symbols);
+        self.compile_with_pipeline(program, favour, symbols, Pipeline::Stock)
+    }
+
+    /// Prepare and emit with the chosen representation passes.
+    ///
+    /// # Errors
+    /// Reports invalid IR or unsupported target operations.
+    fn compile_with_pipeline(
+        &self,
+        program: &Program,
+        favour: Favour,
+        symbols: SymbolTable,
+        pipeline: Pipeline,
+    ) -> Result<Vec<u8>, String> {
+        let image = self.emit_with(
+            &self.prepare_with_pipeline(program, favour, pipeline)?,
+            favour,
+            symbols,
+        );
         if favour == Favour::Speed {
             return Ok(image);
         }
@@ -176,7 +201,7 @@ pub trait Target: fmt::Debug {
         // claims are counted by calls, and its code is emitted favouring
         // size.
         let faster = self.emit_with(
-            &prepare_counting(self, program, Favour::Speed, false)?,
+            &prepare_counting(self, program, Favour::Speed, false, pipeline)?,
             Favour::Size,
             symbols,
         );
@@ -206,7 +231,20 @@ pub trait Target: fmt::Debug {
     /// # Errors
     /// Reports invalid IR or a representation this target cannot safely emit.
     fn prepare_favouring(&self, program: &Program, favour: Favour) -> Result<Program, String> {
-        prepare_counting(self, program, favour, favour == Favour::Speed)
+        self.prepare_with_pipeline(program, favour, Pipeline::Stock)
+    }
+
+    /// Prepare the same machine IR for rendering or emission.
+    ///
+    /// # Errors
+    /// Reports invalid IR or unsupported target operations.
+    fn prepare_with_pipeline(
+        &self,
+        program: &Program,
+        favour: Favour,
+        pipeline: Pipeline,
+    ) -> Result<Program, String> {
+        prepare_counting(self, program, favour, favour == Favour::Speed, pipeline)
     }
 
     /// Whether it can hold what the program holds.
@@ -270,6 +308,7 @@ fn prepare_counting<T: Target + ?Sized>(
     program: &Program,
     favour: Favour,
     counts: bool,
+    pipeline: Pipeline,
 ) -> Result<Program, String> {
     let speed = favour == Favour::Speed;
     crate::ir::validate(program)?;
@@ -279,8 +318,17 @@ fn prepare_counting<T: Target + ?Sized>(
     let program = &crate::ir::split(program, target.word());
     crate::ir::validate(program).map_err(|error| format!("after splitting: {error}"))?;
     let program = &crate::ir::fit(program, target.budget());
-    let prepared = crate::ir::legalize(
-        program,
+    let compared = if pipeline == Pipeline::Lab {
+        crate::ir::lab::lower_word_comparisons(program, target.word())
+    } else {
+        None
+    };
+    let legalize = match pipeline {
+        Pipeline::Stock => crate::ir::legalize,
+        Pipeline::Lab => crate::ir::lab::legalize,
+    };
+    let prepared = legalize(
+        compared.as_ref().unwrap_or(program),
         crate::ir::natural::Config {
             word_bits: target.word(),
             // The first arena the heap asks the target for; it grows

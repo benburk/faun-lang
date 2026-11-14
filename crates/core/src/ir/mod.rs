@@ -67,6 +67,7 @@ mod common;
 mod digits;
 pub mod evaluate;
 mod fit;
+pub mod lab;
 mod layout;
 mod legalize;
 mod lower;
@@ -140,3 +141,6 @@ mod tests;
 mod validation_tests;
 #[cfg(test)]
 mod zero_width_tests;
+
+#[cfg(test)]
+mod float_compare_tests;

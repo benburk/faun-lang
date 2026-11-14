@@ -72,7 +72,7 @@ pub fn type_shape(program: &Program, id: TypeId) -> TypeShape {
 
 /// The sole constructor and field of a one-field product.
 #[must_use]
-pub(crate) fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, TypeId)> {
+pub fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, TypeId)> {
     match type_shape(program, id) {
         TypeShape::Wrapper { constructor, field } => Some((constructor, field)),
         _ => None,
@@ -80,11 +80,11 @@ pub(crate) fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, Typ
 }
 
 /// Peel nested one-field products from an already validated constant.
+///
+/// # Panics
+/// If the constant does not have the validated encoding for its type.
 #[must_use]
-pub(crate) fn single_field_constant<'a>(
-    program: &'a Program,
-    mut value: Constant<'a>,
-) -> Constant<'a> {
+pub fn single_field_constant<'a>(program: &'a Program, mut value: Constant<'a>) -> Constant<'a> {
     let mut budget = Budget::new(super::FoldLimits {
         work: u64::MAX,
         work_per_function: u64::MAX,
@@ -196,10 +196,12 @@ impl Program {
             .iter()
             .map(|function| function.float)
             .collect();
+        let rotations = super::rotation::recognize(self, &operations);
         Recognised {
             operations,
             sequences,
             floats,
+            rotations,
         }
     }
 
@@ -344,8 +346,20 @@ impl Program {
         self.types.push(Type {
             name,
             inline,
+            byte_sequence: None,
             definition: TypeDefinition::Declared,
         })
+    }
+
+    /// Record the source identity supplied by the frontend. A structurally identical
+    /// declaration in another module need not carry the same byte or text contract.
+    pub fn mark_byte_sequence(&mut self, ty: TypeId, kind: super::ByteSequence) {
+        self.types[ty].byte_sequence = Some(kind);
+    }
+
+    #[must_use]
+    pub fn byte_sequence(&self, ty: TypeId) -> Option<super::ByteSequence> {
+        self.types[ty].byte_sequence
     }
 
     /// Give a reserved type its constructors, once, in tag order.

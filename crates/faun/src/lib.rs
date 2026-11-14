@@ -217,21 +217,30 @@ pub fn compile_barb_to_image(
 /// # Errors
 /// As [`compile_barb_to_image`].
 pub fn compile_barb_to_image_with(
-    mut barb: barb::Program,
+    barb: barb::Program,
     target: &dyn Target,
     favour: Favour,
     symbols: SymbolTable,
 ) -> Result<Vec<u8>, Diagnostic> {
-    if barb.entry().is_none() {
-        return Err(Diagnostic::new("a library has no `main!` to build")
-            .help("write `main! : Host -> []` and a clause `main!(host) -> ...`"));
-    }
-    barb::optimize(&mut barb);
+    let barb = optimize_application(barb)?;
     let machine =
         faun_core::lower_to_machine_ir(&barb, &target.routines()).map_err(Diagnostic::new)?;
     target
         .compile_machine_ir_with(&machine, favour, symbols)
         .map_err(Diagnostic::new)
+}
+
+/// Prepare a frontend-validated application for lowering by a backend.
+///
+/// # Errors
+/// Reports a library, which has no entry to build.
+pub fn optimize_application(mut barb: barb::Program) -> Result<barb::Program, Diagnostic> {
+    if barb.entry().is_none() {
+        return Err(Diagnostic::new("a library has no `main!` to build")
+            .help("write `main! : Host -> []` and a clause `main!(host) -> ...`"));
+    }
+    barb::optimize(&mut barb);
+    Ok(barb)
 }
 
 /// The x86-64 Linux host, which frontend tests load their programs with.

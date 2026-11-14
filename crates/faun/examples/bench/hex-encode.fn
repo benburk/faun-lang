@@ -1,0 +1,9 @@
+# Each input byte produces two lowercase hexadecimal digits. The number of
+# pairs and the digits themselves depend on the binary input.
+app : {stdin: List(U8), *} -> Str
+app(input) -> Str.hex(input.stdin)
+
+expect app({stdin: [0, 15, 16, 128, 255]}) == "000f1080ff"
+expect app({stdin: []}) == ""
+
+main!(host) -> host.run_stdin!(app)

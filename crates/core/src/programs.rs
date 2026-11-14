@@ -10,10 +10,15 @@
 //! Nothing here names a machine. What each becomes is a question for
 //! whichever target is handed one, and every target is handed all of them.
 
+#[path = "programs/abi.rs"]
 pub mod abi;
+#[path = "programs/arithmetic.rs"]
 pub mod arithmetic;
+#[path = "programs/control.rs"]
 pub mod control;
+#[path = "programs/external.rs"]
 pub mod external;
+#[path = "programs/ladder.rs"]
 pub mod ladder;
 
 use crate::ir::Class::Word;
