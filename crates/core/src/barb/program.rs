@@ -196,10 +196,12 @@ impl Program {
             .iter()
             .map(|function| function.float)
             .collect();
+        let rotations = super::rotation::recognize(self, &operations);
         Recognised {
             operations,
             sequences,
             floats,
+            rotations,
         }
     }
 

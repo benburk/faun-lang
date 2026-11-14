@@ -128,6 +128,7 @@ pub(super) struct Recognised {
     /// What a definition's claim says it computes; see
     /// [`super::Program::claim`].
     pub floats: Vec<Option<Float>>,
+    pub rotations: Vec<Option<super::Rotation>>,
 }
 
 impl Recognised {
@@ -137,6 +138,7 @@ impl Recognised {
         self.operations[id.index()].is_some()
             || self.sequences[id.index()].is_some()
             || self.floats[id.index()].is_some()
+            || self.rotations[id.index()].is_some()
     }
 
     /// The first definition recognized as `operation` over `params`,
@@ -173,9 +175,31 @@ pub struct Facts {
     recognised: Recognised,
     ranges: Ranges,
     affine: Vec<Option<Affine>>,
+    trees: Vec<super::TreeRole>,
+    comparisons: Vec<Option<super::FloatComparison>>,
+    pure: Vec<bool>,
 }
 
 impl Facts {
+    /// Whether the function reaches no observable bodyless call.
+    #[must_use]
+    pub fn pure(&self, id: FnId) -> bool {
+        self.pure.get(id.index()).copied().unwrap_or(false)
+    }
+
+    /// A floating comparison proven from this expression's value semantics.
+    #[must_use]
+    pub fn float_comparison(&self, id: ExprId) -> Option<super::FloatComparison> {
+        self.comparisons.get(id.index()).copied().flatten()
+    }
+
+    /// A source-level construction or consumption summary. Storage proofs
+    /// remain the responsibility of the lowering tier.
+    #[must_use]
+    pub fn tree_role(&self, id: FnId) -> super::TreeRole {
+        self.trees.get(id.index()).copied().unwrap_or_default()
+    }
+
     #[must_use]
     pub fn operation(&self, id: FnId) -> Option<Operation> {
         self.recognised
@@ -184,6 +208,19 @@ impl Facts {
             .copied()
             .flatten()
     }
+    /// A structurally recognized rotation whose input range fits its width.
+    #[must_use]
+    pub fn rotation(&self, id: FnId) -> Option<super::Rotation> {
+        let rotation = self
+            .recognised
+            .rotations
+            .get(id.index())
+            .copied()
+            .flatten()?;
+        let high = self.takes(id).first()?.high?;
+        (rotation.bits == 64 || high < (1u64 << rotation.bits)).then_some(rotation)
+    }
+
     /// Whether a call to `id` is answered as what it was recognized as,
     /// rather than by walking its body.
     #[must_use]
@@ -211,6 +248,14 @@ impl Facts {
             .copied()
             .unwrap_or(Bounds::ANY)
     }
+    #[must_use]
+    pub fn arguments(&self, id: ExprId) -> &[Bounds] {
+        self.ranges
+            .arguments
+            .get(id.index())
+            .map_or(&[], Vec::as_slice)
+    }
+
     #[must_use]
     pub fn matched(&self, id: ExprId) -> Bounds {
         self.ranges
@@ -268,9 +313,15 @@ pub(super) fn analyze(
     }
     let ranges = super::bounds::analyze(program, &recognised, assumed);
     let affine = super::affine::analyze(program, &recognised.operations);
+    let pure = super::calls::pure(program, &recognised);
+    let comparisons = super::float_compare::analyze(program, &recognised.operations);
+    let trees = super::tree::analyze(program, &recognised);
     Facts {
         recognised,
         ranges,
         affine,
+        trees,
+        comparisons,
+        pure,
     }
 }

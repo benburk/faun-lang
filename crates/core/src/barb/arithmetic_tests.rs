@@ -1038,3 +1038,43 @@ fn a_count_beside_a_walk_is_bounded_by_what_it_walks() {
     let facts = program.analyze();
     assert_ne!(facts.takes(walk)[2].high, Some(5));
 }
+
+#[test]
+fn call_operand_ranges_follow_the_branch_and_do_not_escape_it() {
+    let mut lib = fixture::Library::new();
+    let hundred = lib.number(100);
+    let p = &mut lib.program;
+    let entry = p.declare("guarded", &[lib.nat], lib.nat);
+    p.define(entry, |b, args| {
+        let limit = b.known(hundred);
+        let small = b.call(lib.less_than, &[args[0], limit]);
+        b.match_(small, lib.bool_, |b, ctor, _| {
+            if ctor == lib.true_ {
+                b.call(lib.mul, &[args[0], limit])
+            } else {
+                b.call(lib.add, &[args[0], limit])
+            }
+        });
+        b.call(lib.sub, &[args[0], limit])
+    });
+    p.set_entry(entry);
+    validate(p).unwrap();
+    let facts = p.analyze();
+    let calls: Vec<_> = (0..p.exprs_count())
+        .filter_map(|at| {
+            let id = ExprId::at(at);
+            let Expr::Call(callee, _) = p.expr(id) else {
+                return None;
+            };
+            let args = facts.arguments(id);
+            (!args.is_empty()).then(|| (callee, args[0]))
+        })
+        .collect();
+    for (callee, low, high) in [
+        (lib.mul, 0, Some(99)),
+        (lib.add, 100, None),
+        (lib.sub, 0, None),
+    ] {
+        assert!(calls.contains(&(callee, Bounds { low, high })));
+    }
+}

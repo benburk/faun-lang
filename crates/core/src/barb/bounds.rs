@@ -71,6 +71,7 @@ pub(super) struct Ranges {
     /// What each term answers, by the term.
     pub terms: Vec<Bounds>,
     pub matched: Vec<Bounds>,
+    pub arguments: Vec<Vec<Bounds>>,
     /// What each definition is handed, by definition.
     pub takes: Vec<Vec<Bounds>>,
     /// And what each answers.
@@ -129,8 +130,34 @@ pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assu
 
     Ranges {
         unsettled,
+        arguments: argument_bounds(program, recognised, assumed, &held),
         ..finish(program, assumed, held)
     }
+}
+
+/// Read operand ranges under each branch from the settled analysis.
+fn argument_bounds(
+    program: &Program,
+    recognised: &Recognised,
+    assumed: &Assumed,
+    held: &Propagation,
+) -> Vec<Vec<Bounds>> {
+    let mut arguments = vec![Vec::new(); program.exprs_count()];
+    let mut terms = vec![Bounds::NOTHING; program.exprs_count()];
+    let mut matched = terms.clone();
+    for at in 0..program.functions().len() {
+        walk(
+            (program, recognised, assumed),
+            held,
+            FnId::at(at),
+            (&mut terms, &mut matched),
+            Some(&mut arguments),
+        );
+    }
+    for bound in arguments.iter_mut().flatten() {
+        *bound = anything(Some(*bound));
+    }
+    arguments
 }
 
 /// What the tier lowering a program assumes of values that come from
@@ -258,6 +285,7 @@ fn finish(program: &Program, assumed: &Assumed, held: Propagation) -> Ranges {
     // A term nothing reached is a term nothing knows, and so is a parameter
     // nothing was ever handed.
     Ranges {
+        arguments: Vec::new(),
         matched: held
             .matched
             .into_iter()
@@ -484,6 +512,7 @@ fn once(
         held,
         id,
         (&mut terms, &mut matched),
+        None,
     );
     held.terms = terms;
     held.matched = matched;
@@ -516,6 +545,7 @@ fn narrowed(
             held,
             FnId::at(at),
             (&mut next.terms, &mut next.matched),
+            None,
         ) else {
             continue;
         };
@@ -533,6 +563,7 @@ fn walk(
     held: &Propagation,
     id: FnId,
     (terms, matched): (&mut [Bounds], &mut [Bounds]),
+    arguments: Option<&mut [Vec<Bounds>]>,
 ) -> Option<(Bounds, Found)> {
     let mut params: Vec<Bounds> = held.params[id.index()]
         .iter()
@@ -560,7 +591,7 @@ fn walk(
         return Some((assumed.length.unwrap_or(Bounds::ANY), Found::default()));
     }
 
-    let mut walk = FunctionWalk {
+    let walk = FunctionWalk {
         program,
         assumed,
         operations: &recognised.operations,
@@ -574,15 +605,10 @@ fn walk(
         scope: params,
         terms,
         matched,
+        arguments,
         calls: Vec::new(),
     };
-    let answer = walk.body(body);
-    let found = Found {
-        calls: walk.calls,
-        built: walk.built,
-        outside: walk.outside,
-    };
-    Some((answer, found))
+    Some(walk.finish(body))
 }
 
 /// Widen `held` by `found`, answering whether that changed it. Past the
@@ -669,11 +695,24 @@ struct FunctionWalk<'a> {
     exact: Vec<Option<u128>>,
     /// And what each term answers, joined over every walk of it.
     terms: &'a mut [Bounds],
+    arguments: Option<&'a mut [Vec<Bounds>]>,
     matched: &'a mut [Bounds],
     calls: Vec<(FnId, Vec<Bounds>)>,
 }
 
 impl FunctionWalk<'_> {
+    fn finish(mut self, body: Body) -> (Bounds, Found) {
+        let answer = self.body(body);
+        (
+            answer,
+            Found {
+                calls: self.calls,
+                built: self.built,
+                outside: self.outside,
+            },
+        )
+    }
+
     fn body(&mut self, body: Body) -> Bounds {
         for &binding in self.program.bindings(body.bindings) {
             let held = self.expr(binding);
@@ -759,6 +798,15 @@ impl FunctionWalk<'_> {
     /// What a term answers, held against the term so that the tier below
     /// has it where it walks.
     fn expr(&mut self, id: ExprId) -> Bounds {
+        if let Some(arguments) = &mut self.arguments
+            && let Expr::Call(_, args) | Expr::Con(_, args) = self.program.expr(id)
+        {
+            let found = &mut arguments[id.index()];
+            found.resize(self.program.atoms(args).len(), Bounds::NOTHING);
+            for (bound, atom) in found.iter_mut().zip(self.program.atoms(args)) {
+                *bound = bound.or(self.scope[atom.0.index()]);
+            }
+        }
         let held = self.worked(id);
         self.terms[id.index()] = self.terms[id.index()].or(held);
         held

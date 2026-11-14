@@ -113,6 +113,7 @@ mod evaluate;
 mod facts;
 #[cfg(test)]
 pub(crate) mod fixture;
+mod float_compare;
 mod forward;
 mod fuse;
 mod head;
@@ -123,10 +124,12 @@ mod normalize;
 mod optimize;
 mod pretty;
 mod program;
+mod rotation;
 mod sequence;
 mod specialize;
 mod sweep;
 mod terms;
+mod tree;
 mod types;
 mod validate;
 mod walk;
@@ -144,6 +147,9 @@ pub use constant::{
 // `TypeShape`, so nothing outside this tier needs this one.
 pub(crate) use constant::Shape;
 pub use facts::{Facts, Operation, SequenceOperation};
+pub use float_compare::FloatComparison;
+pub use rotation::Rotation;
+pub use tree::TreeRole;
 
 pub use inline::InlineLimits;
 pub use model::{
