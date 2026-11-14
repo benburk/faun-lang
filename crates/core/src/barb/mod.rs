@@ -76,6 +76,15 @@
 //! anything runs, so the tier that knows prices is the tier that may trade
 //! work for time.
 //!
+//! # API and pass order
+//!
+//! Build with [`Program`] and [`Builder`], call [`validate`], then [`optimize`].
+//! Analyze the resulting program with [`Program::analyze`] or, when lowering
+//! supplies external guarantees, [`Program::assuming`]. [`Facts`] records
+//! recognized operations, value ranges and affine summaries for that revision.
+//! [`optimize`] documents the ordered rewrite schedule. The adjacent README
+//! describes tier responsibilities, recognition and the API in more detail.
+//!
 //! # Code organization
 //!
 //! - `model`: terms, declarations, IDs, and their small intrinsic methods.

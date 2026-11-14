@@ -10,6 +10,79 @@ The idea is that, by encoding very little information in the program, there are 
 - Better code gen on tricky targets, e.g. 6502
 - Easy to add new backends
 
+## Responsibilities and API
+
+Barb is the shared, first-order value IR consumed by machine lowering.
+The frontend supplies fully monomorphized, defunctionalized definitions.
+Barb validates their structure, recognizes what they compute, derives facts,
+and rewrites them while preserving value and effect semantics.
+
+Place a proof or rewrite at the earliest tier that can express it correctly.
+Barb owns list identities and fusion, recognized arithmetic, known values,
+sequence lengths, and value ranges. Machine IR uses these facts to choose
+representations, storage placement, ownership operations, and word widths.
+Target IR selects instructions, addressing modes, registers, and scheduling.
+Barb's in-place pass expresses a walk through functional list replacements.
+Machine lowering establishes when those replacements can reuse storage.
+
+Recognition records a semantic capability in analysis. For example,
+`Facts::operation(function)` may answer `Operation::Add`, and
+`Facts::sequence_operation(function)` may answer
+`SequenceOperation::ReverseOnto`. The definition keeps its body. Other passes
+can use the fact to simplify a call, and lowering can implement the operation
+using the target's capabilities. `Program::claim` supplies a frontend assertion
+about an IEEE 754 operation whose equivalence the recognizer cannot establish;
+validation checks the claim's shape, so its correctness is the frontend's
+responsibility. These interfaces emit no machine instructions. The expression
+language remains locals, constructors, constants, calls, and matches.
+
+Recognized definitions are currently protected from rewriting and inlining.
+A new recognition rule must account for that policy as well as the equivalence
+it proves, so retaining a fact does not inadvertently block useful optimization.
+
+A future Barb rotate fact would need to specify the rotation width and count
+semantics. Width belongs to the operation's meaning, even when a target's
+machine word has another width. A later tier could implement it with a native
+rotate or shifts and a bitwise combination. Preserve enough meaning to make
+either choice and preserve any separately used intermediate values when
+rewriting. Recognition consumes compiler work and should use bounded matching.
+Knowing an equivalence and deciding whether to expand or duplicate code have
+different costs. Target-dependent profitability belongs with the tier that
+knows those costs.
+
+Currently, `Operation` contains natural arithmetic, bitwise operations and
+comparisons, and `SequenceOperation` describes recognized list operations.
+Rotate recognition lives in x86-lab instruction selection. The proposed Barb
+rotate fact is a design example for future work.
+
+The public API is re-exported from `barb::mod.rs`.
+
+- Build types with `Program::declare_type` and `define_type`, and functions
+  with `declare` and `define`. `Builder` constructs bodies in A-normal form.
+  `set_entry` identifies the program's root.
+- Run `validate(&program)` before optimization. It checks structure under the
+  frontend's typing and arena-construction preconditions and returns a
+  `Refusal` on invalid input.
+- Run `optimize(&mut program)` for the ordered rewrite schedule below.
+- Run `program.analyze()` on the resulting program to obtain `Facts`.
+  A lowering tier with external guarantees uses `program.assuming(&assumed)`.
+  `Assumed` describes justified facts about entry parameters and bodyless
+  results, including supported float handling.
+- Query `Facts::operation`, `sequence_operation`, and `float` for recognized
+  meanings, `held`, `takes`, `answers`, and `field` for ranges, and `affine`
+  for bounded affine summaries. `type_shape` classifies inductive declarations.
+  `Program::byte_sequence` records the frontend's byte-list or string identity.
+- Use `Program::render_analyzed` to inspect a program with its facts.
+  `faun emit barb` exposes that view through the CLI.
+
+Facts and IDs belong to their program revision. Reanalyze after rewriting.
+Sweep can renumber function IDs, and cleanup rebuilds expression IDs and
+term ranges. Type, constructor, and constant IDs survive this schedule.
+Adding, removing, or redefining functions invalidates the internal recognition
+cache. Semantics-preserving body rewrites can reuse it. Final analysis obtains
+recognition, then computes ranges and affine summaries. Consumers and passes
+request this analysis when they need facts.
+
 ## Input program requirements
 
 value semantics. a bodyless call is a value the target computes
@@ -52,10 +125,10 @@ rely on these; a pass that breaks one is wrong.
 
 - **Values only.** A value is what it holds, never where: there is no
   identity, so a value may be copied, shared or rebuilt freely.
-- **Representation is Barb's.** A frontend says what each type holds,
-  structurally, and nothing about how it is laid out; Barb chooses each
-  type's representation (see `type_shape` below), and a program cannot tell
-  which it chose.
+- **Representation is compiler-selected.** A frontend says what each type
+  holds structurally. Barb classifies its shape and derives facts about its
+  values. Machine lowering chooses its representation using those facts and
+  the target's capabilities, and a program cannot observe which it chose.
 - **Bodyless calls are observable.** Their order among themselves, how often
   each is made and on which paths are kept as written. A function whose
   calls reach one is observable too. There is no world value threaded
@@ -381,7 +454,10 @@ two types -- so nothing infers a provider or an effect from the display name.
 
 ## Optimization passes
 
-`optimize(program)` runs a small fixed schedule after validation:
+The authoritative schedule is `optimize.rs::optimize`. After validation,
+`optimize(program)` runs the following stages in order. The outer schedule
+runs once. Individual stages may analyze their input, and specialization
+resimplifies definitions to which it has supplied known values.
 
 1. Structural normalization: substitute local aliases, without expanding calls.
    It also floats a one-arm match, as reading a record's field is, over the rest
@@ -405,10 +481,14 @@ two types -- so nothing infers a provider or an effect from the display name.
    recognized `Operation` facts, so what one decides is decided before folding,
    and shares repeated calls of answered definitions.
 5. Fusion: a list built by one walk and read once by another is never built.
-6. In place: a walk building a list of what it walks, element for element,
-   replaces each where it lies instead, once fusion has had every walk it
-   can remove outright.
-7. Simplification: the normalizing walk with every rule on, each definition
+6. First-element demand (`head::heads`): specialize a pure list producer when
+   its consumer needs only the first element or an early answer from a walk.
+   A search can stop as soon as it produces that answer, preserving calls
+   with observable effects.
+7. In place: express a walk rebuilding a list element for element through
+   indexed functional replacements, once fusion has removed the walks it can.
+   Lowering can then reuse uniquely owned storage for those replacements.
+8. Simplification: the normalizing walk with every rule on, each definition
    after what it calls, so that a caller meets its callees' answers as
    constants. A construction, call or match whose every input is known is
    evaluated; the identities apply; constants combine across recognized
@@ -417,7 +497,7 @@ two types -- so nothing infers a provider or an effect from the display name.
    of an answered definition answers what the first did. Each definition
    draws at most a per-definition allowance from the walk's budget, so a
    costly answer declined in one leaves the rest something to fold with.
-8. Specialization: a parameter a definition passes on to itself as it came,
+9. Specialization: a parameter a definition passes on to itself as it came,
    which callers hand different known values, gets a copy of the definition
    for each value, at most four, simplified with that value bound. A copy is
    kept, and takes the calls handing its value, only where simplifying it
@@ -430,22 +510,22 @@ two types -- so nothing infers a provider or an effect from the display name.
    of that value -- a known sequence's length, a match on it -- is answered
    too. Simplifying one copy again skips call-graph construction and
    ordering; several keep callee-first order and the same budgets.
-9. Joining rounds: inlining again, of only the definitions keeping a round
-   apart -- in a round with others, and no breaker -- with no identity or
-   folding. Simplifying and specializing change what calls what: a walk over
-   a list known to hold one element calls on rather than round, and a loop
-   nested in two others can be left as two definitions calling each other,
-   neither of them calling itself. Copying the one into the other leaves a
-   definition calling itself, which machine lowering makes a loop.
-10. Sweep: where there is an entry, drop every definition it does not reach,
+10. Joining rounds: inlining again, of only the definitions keeping a round
+    apart -- in a round with others, and no breaker -- with no identity or
+    folding. Simplifying and specializing change what calls what: a walk over
+    a list known to hold one element calls on rather than round, and a loop
+    nested in two others can be left as two definitions calling each other,
+    neither of them calling itself. Copying the one into the other leaves a
+    definition calling itself, which machine lowering makes a loop.
+11. Sweep: where there is an entry, drop every definition it does not reach,
     renumbering function IDs in order. Types, constructors and constants stay.
-11. Effect-safe cleanup: remove aliases, unused inert terms -- constructors,
+12. Effect-safe cleanup: remove aliases, unused inert terms -- constructors,
     calls of pure definitions, and matches whose arms are all inert -- and
     retain calls reaching an external routine. Inert work read only inside
     one arm of a later match moves to the top of that arm, so the other arms
     do none of it.
 
-Every normalizing stage (1, 4, 7 and 9) also decides what is already decided: a
+Every normalizing stage (1, 4, 8 and 10) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
@@ -548,10 +628,10 @@ sum. A sequence is exactly an empty constructor plus a step with one payload and
 one recursive field; its element may be any type. Names and constructor order do
 not participate. Machine representation selection uses this exhaustive view
 instead of rediscovering products, naturals, and byte spines independently.
-Units are erased, wrappers remain transparent, naturals and enumerations are
-scalar, products of at most thirty-two leaves are held flat as their fields'
-values, sequences are a buffer and a length, and everything else carrying
-fields -- wider products and general sums -- becomes a managed cell. `Shape` is the constant codec's own
+Machine lowering uses this view to erase units, unwrap transparent wrappers,
+flatten eligible products, and select scalar, buffer, inline, or managed-cell
+representations. The selected pipeline, target capabilities, and proven facts
+determine which layouts apply. `Shape` is the constant codec's own
 view of an encoding and answers a different question; representation selection
 does not read it.
 
