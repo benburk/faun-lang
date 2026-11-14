@@ -177,7 +177,8 @@ pub struct Assumed {
     /// What any sequence's length can be, where anything says.
     pub length: Option<Bounds>,
     /// Whether a claimed float is answered by a machine rather than by its
-    /// body; where it is not, the claim is no fact of the program's.
+    /// body. This selects native float lowering and range assumptions;
+    /// semantic recognition can still use the frontend's IEEE claim.
     pub floats: bool,
 }
 

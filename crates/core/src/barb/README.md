@@ -81,7 +81,9 @@ The public API is re-exported from `barb::mod.rs`.
   `pure` for effect freedom, `held`, `takes`, `answers`, and `field` for ranges, and `affine`
   for bounded affine summaries. `type_shape` classifies inductive declarations.
   `Facts::arguments(expr)` gives operand ranges refined by the enclosing
-  branch, without narrowing other uses of the same value.
+  branch, without narrowing other uses of the same value. Stock lowering uses
+  these bounds to narrow arithmetic operands; lab retains its machine guard
+  lowering for placement of tagged-natural decodes and masks.
   `Program::byte_sequence` records the frontend's byte-list or string identity.
 - Use `Program::render_analyzed` to inspect a program with its facts.
   `faun emit barb` exposes that view through the CLI.
