@@ -167,6 +167,20 @@ impl Program {
         &self.operands[operands.range()]
     }
 
+    /// How many instructions and explicit region exits read each SSA value.
+    pub(crate) fn use_counts(&self) -> Vec<usize> {
+        let mut counts = vec![0; self.values_count()];
+        let operands = self.ops.iter().flat_map(|op| self.operands(op));
+        let exits = self
+            .regions
+            .ids()
+            .flat_map(|r| self.outgoing(r).iter().copied());
+        for value in operands.chain(exits) {
+            counts[value.index()] += 1;
+        }
+        counts
+    }
+
     /// Iterate over an instruction's immediate value operands in order,
     /// including repeated uses, without allocating. Nested regions and their
     /// terminators are not visited; operand ranges must belong to this program.
