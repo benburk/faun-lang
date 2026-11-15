@@ -37,16 +37,22 @@ records it as a fact:
 - arithmetic: add, multiply, monus, divide, modulo, bitwise and/or/xor,
   power, rotation
 - sequences: length, reverse-onto, prepend, append, drop, take, replace
-- float comparison
+- floats: add, subtract, multiply, divide, square root, comparison
 
 A recognized definition keeps its body. The body is the meaning; the fact
 lets later passes fold the call and lets a target use one instruction for
 it. A target without the instruction walks the body.
 
-There are two exceptions. `Program::claim` lets the frontend assert that a
-definition computes an IEEE 754 operation, because no equation can prove
-that. `Program::byte_sequence` records that a type is the frontend's bytes
-or string. The frontend is responsible for both.
+Floats are recognized by their code. No equation shows that a routine
+walking bits rounds as IEEE 754 does, so Barb doesn't try. It knows the
+standard's float routines by fingerprint: a hash of a definition's code and
+everything it calls, after canonicalizing, with no names in it. If a
+definition's code is the standard's `add`, it is IEEE add. The frontend
+says nothing, and `just bless` rewrites the table when the standard
+changes.
+
+So the frontend API is just the program: types, functions, the entry, and
+which declarations the target provides.
 
 ## Facts about data
 

@@ -94,22 +94,23 @@ computes the exact result on unbounded naturals, and rounds once. `f32.fn`
 and `f64.fn` are thin wrappers over a private `U32` or `U64` holding the
 bit pattern. The definitions came over from Ori whole.
 
-`add`, `sub`, `mul`, `div` and `sqrt` are the one place the compiler takes a
-meaning from a name. Lowering tells Barb that these five, at each float's
-own type, compute that IEEE 754 operation (a claim). The definition stays,
-and answers wherever nothing faster does:
+Barb recognizes `add`, `sub`, `mul`, `div` and `sqrt` at each float's own
+type by their code: a fingerprint of each and everything it calls, checked
+against a table written from the standard by `just bless`. Nothing is taken
+from a name. The definition stays, and answers wherever nothing faster
+does:
 
 - **x86-64** emits one SSE2 instruction, `addsd` or `sqrtss` and so on.
 - **wasm32 and the 6502** have no float instructions in Faun today, and run
   the definitions.
-- **Constant folding** answers a claimed call with the compiler's host
+- **Constant folding** answers a recognized call with the compiler's host
   arithmetic.
 
 A hardware NaN may be any NaN's pattern, which no program can tell. The
 expectations in `examples/floats/` are asked twice, once compiled for the
 machine and once of the definitions alone, and must agree.
 
-`of_nat` below `2^52` (`2^23` for `F32`) is a claimed subtraction too: the
+`of_nat` below `2^52` (`2^23` for `F32`) is a recognized subtraction too: the
 pattern of `2^52 + n` less `2^52`, both exact. What is left in software,
 `fma`, `of_decimal`, the other conversions and the text, costs thousands of
 instructions an operation. A decimal numeral is folded at compile time, but
@@ -171,7 +172,7 @@ is that inexactness and underflow cannot be detected after the fact, and
 interval arithmetic would need directed operations of its own, which do not
 exist.
 
-### Why are floats software-defined, with five operations claimed?
+### Why are floats software-defined, with five operations recognized by their code?
 
 So the definition is the specification, and it runs. Written over unbounded
 naturals, each operation is its exact result and one rounding, with the
@@ -181,17 +182,19 @@ folding. Ori's oracle harness held these definitions to the host FPU over
 roughly 166,000 adversarial cases per width before Faun ported them, so
 selecting an instruction is a checked optimization, not the semantics.
 
-The claim exists because recognition cannot reach this far. Barb
-recognizes `Nat`'s addition by checking its equations by induction, but no
-such check shows that a file of unpacking and rounding is IEEE 754 addition.
-So the frontend says so, for five operations at two types, and the
-expectations are asked both ways to keep the claim honest.
+Equations cannot reach this far. Barb recognizes `Nat`'s addition by
+checking its equations by induction, but no such check shows that a file of
+unpacking and rounding is IEEE 754 addition. So Barb recognizes the
+standard's routines by their exact code instead, for five operations at two
+types, and the expectations are asked both ways to keep that table honest.
+The frontend once named these five by hand; matching the code means a
+buggy frontend can't make Barb treat anything else as a float operation.
 
-The cost is speed wherever a claim does not reach. In spectral-norm,
+The cost is speed wherever recognition does not reach. In spectral-norm,
 `F64.of_nat` rounding in software was four-fifths of a 6.31 s run; made a
-claimed subtraction, the run took 1.04 s
+recognized subtraction, the run took 1.04 s
 ([spectral-norm](../spectralnorm-performance.md)). With every operation in
-its loop claimed, n-body's x86-64 code uses `addsd`, `mulsd`, `divsd` and
+its loop recognized, n-body's x86-64 code uses `addsd`, `mulsd`, `divsd` and
 `sqrtsd`. A million steps take 0.05 s against scalar C's 0.03 s, and most
 of what remains of the gap is its lists.
 
@@ -201,7 +204,7 @@ Because it changes the answer. `0.1 * 10.0 - 1.0` is `0.0`, and
 `0.1.fma(10.0, -1.0)` is about `5.55e-17`. A compiler that fused when the
 machine allowed it would answer differently on different machines. `fma` is
 there to ask for one rounding, and it runs in software today, since it is
-not claimed.
+not recognized.
 
 ## Related
 
@@ -211,7 +214,7 @@ not claimed.
   views
 - [Collections](collections.md): hashing, and why keys need a lawful
   `equals`
-- [Architecture](../machine/architecture.md): how a claimed call reaches a
+- [Architecture](../machine/architecture.md): how a recognized call reaches a
   target's instruction
 - [N-body](../nbody-performance.md) and
   [spectral-norm](../spectralnorm-performance.md): float speed, measured

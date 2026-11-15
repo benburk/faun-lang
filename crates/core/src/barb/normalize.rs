@@ -79,13 +79,15 @@ struct Rules {
     blind: bool,
 }
 
-/// Rewrite every body as [`structural`] does, before anything is
-/// recognized, then forget what was. Each body is rewritten alone -- no
+/// Rewrite every body as structural normalization does, before anything is
+/// recognized, then forget what was.
+///
+/// Each body is rewritten alone -- no
 /// call is expanded and nothing is evaluated -- so what a definition comes
 /// to depends on its own body, never on budgets or the rest of the program,
 /// and two ways of writing one equation that differ only in aliases, record
 /// reads or decided matches are recognized alike.
-pub(crate) fn canonical(program: &mut Program) {
+pub fn canonical(program: &mut Program) {
     let rules = Rules {
         blind: true,
         ..Rules::default()

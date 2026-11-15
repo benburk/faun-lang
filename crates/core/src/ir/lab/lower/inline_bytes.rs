@@ -16,15 +16,10 @@ struct Rows {
 }
 
 impl Rows {
-    fn from_bounds(bounds: barb::Bounds, kind: barb::ByteSequence) -> Option<Self> {
+    fn from_bounds(bounds: barb::Bounds) -> Option<Self> {
         let high = bounds.high?;
         let width = usize::try_from(high).ok()?;
-        let limit = if kind == barb::ByteSequence::Text {
-            ROW
-        } else {
-            ROW - 1
-        };
-        (bounds.low <= high && width <= limit).then_some(Self {
+        (bounds.low <= high && width <= ROW).then_some(Self {
             width,
             fixed: bounds.low == high,
         })
@@ -44,6 +39,29 @@ impl Rows {
 }
 
 impl Lowering<'_> {
+    /// Whether `ty` holds bytes: a sequence, under any wrappers, held as a
+    /// buffer, whose element is carried in at most eight bits. What it is
+    /// called, and whether its bytes spell text, does not matter: a row
+    /// stores its length apart from its bytes.
+    pub(super) fn holds_bytes(&self, ty: barb::TypeId) -> bool {
+        if self.carries[ty.index()] != Storage::Seq {
+            return false;
+        }
+        let Some(list) = peeled(self.barb, ty) else {
+            return false;
+        };
+        let barb::TypeShape::Sequence {
+            push, recursive, ..
+        } = barb::type_shape(self.barb, list)
+        else {
+            return false;
+        };
+        matches!(
+            self.field_carried(push, 1 - recursive),
+            Some(Carried::One(byte)) if byte.width().is_some_and(|bits| (1..=8).contains(&bits))
+        )
+    }
+
     /// Each short row owns its bytes inline in the same immutable backing.
     /// A longer row or an element with another layout uses normal construction.
     pub(super) fn inline_rows(
@@ -58,26 +76,12 @@ impl Lowering<'_> {
             return None;
         }
         let ty = self.barb.fields(push)[1 - recursive];
-        let kind = self.barb.byte_sequence(ty)?;
-        if self.carries[ty.index()] != Storage::Seq {
-            return None;
-        }
-        let list = peeled(self.barb, ty)?;
-        let barb::TypeShape::Sequence {
-            push, recursive, ..
-        } = barb::type_shape(self.barb, list)
-        else {
-            return None;
-        };
-        let Some(Carried::One(byte)) = self.field_carried(push, 1 - recursive) else {
-            return None;
-        };
-        if byte.width().is_none_or(|bits| bits == 0 || bits > 8) {
+        if !self.holds_bytes(ty) {
             return None;
         }
         // Sequence constructors have exactly one element field and one tail.
         let values = elements.iter().map(|fields| fields[0]);
-        let rows = Rows::from_bounds(barb::bounds_of_constants(self.barb, values.clone()), kind)?;
+        let rows = Rows::from_bounds(barb::bounds_of_constants(self.barb, values.clone()))?;
         let mut data = Vec::with_capacity(elements.len().checked_mul(rows.stride())?);
         for value in values {
             let barb::ConstantView::Spine(spine) =
@@ -160,21 +164,21 @@ mod tests {
 
     #[test]
     fn rows_use_only_the_width_the_whole_table_needs() {
-        use barb::ByteSequence::{Bytes, Text};
-        let fixed = Rows::from_bounds(barb::Bounds::at(23), Bytes).unwrap();
+        let fixed = Rows::from_bounds(barb::Bounds::at(23)).unwrap();
         let mut data = Vec::new();
         fixed.write(&mut data, &[0xff; 23]);
         fixed.write(&mut data, &[0xc0; 23]);
         assert_eq!((fixed.stride(), data.len()), (23, 46));
         let bounds = barb::Bounds::at(24).or(barb::Bounds::at(0));
-        let mixed = Rows::from_bounds(bounds, Text).unwrap();
+        let mixed = Rows::from_bounds(bounds).unwrap();
         data.clear();
         mixed.write(&mut data, &"é".repeat(12).into_bytes());
         mixed.write(&mut data, &[]);
         assert_eq!((mixed.stride(), data[24], data[49]), (25, 24, 0));
-        assert!(Rows::from_bounds(bounds, Bytes).is_none());
-        assert!(Rows::from_bounds(barb::Bounds::at(25), Text).is_none());
-        assert!(Rows::from_bounds(barb::Bounds::ANY, Bytes).is_none());
-        assert!(Rows::from_bounds(barb::Bounds::NOTHING, Text).is_none());
+        mixed.write(&mut data, &[0xc0; 24]);
+        assert_eq!(data[74], 24);
+        assert!(Rows::from_bounds(barb::Bounds::at(25)).is_none());
+        assert!(Rows::from_bounds(barb::Bounds::ANY).is_none());
+        assert!(Rows::from_bounds(barb::Bounds::NOTHING).is_none());
     }
 }

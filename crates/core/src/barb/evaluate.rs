@@ -78,7 +78,7 @@ impl Evaluator<'_> {
         }
     }
 
-    /// A call's answer: from its operands where it is claimed or recognized,
+    /// A call's answer: from its operands where it is recognized,
     /// and otherwise by walking its body.
     pub(super) fn call(
         &self,
@@ -97,7 +97,7 @@ impl Evaluator<'_> {
         self.body(body, fields.into_iter().map(Ok).collect(), budget)
     }
 
-    /// A call's answer from its operands, where it is claimed or recognized.
+    /// A call's answer from its operands, where it is recognized.
     fn answered(
         &self,
         called: super::FnId,
@@ -110,7 +110,7 @@ impl Evaluator<'_> {
                 return Some(Err(limit.into()));
             }
             let answered =
-                super::claim::answer(self.program, float, function.result, fields, budget);
+                super::floats::answer(self.program, float, function.result, fields, budget);
             if answered.is_some() {
                 return answered;
             }

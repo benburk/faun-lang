@@ -179,15 +179,16 @@ the length a list holds, as the library's `len` is, and a type of one's own
 with the same shape gets the same treatment. A recognition that misses
 costs speed, never meaning: the definition runs as written.
 
-The one exception is floats. `F32` and `F64` are IEEE 754 formats written
-in Faun over `U32` and `U64` patterns, and no equation says that a
-definition is IEEE 754's addition: recognizing correct rounding from a body
-is beyond any recognizer. So lowering claims, by name, that `add`, `sub`,
-`mul`, `div` and `sqrt` at each float's own type compute that operation
-(`Program::claim`). Barb checks only the claim's shape. The definitions
-stay and run wherever nothing faster does, on a target without float
-instructions such as the 6502, and
-`examples/floats/` is run both with and without the claims to check them.
+Floats are recognized by their code instead. `F32` and `F64` are IEEE 754
+formats written in Faun over `U32` and `U64` patterns, and no equation says
+that a definition is IEEE 754's addition: recognizing correct rounding from
+a body is beyond any recognizer. So Barb knows the standard's `add`, `sub`,
+`mul`, `div` and `sqrt` at each float's own type by fingerprint, a hash of
+their code and all the code they reach after canonicalizing. Nothing is
+taken from a name, and the frontend says nothing. The definitions stay and
+run wherever nothing faster does, on a target without float instructions
+such as the 6502, and `examples/floats/` is run both with the instructions
+and walking every body to check them.
 
 ## Open questions
 
@@ -203,7 +204,7 @@ describes the boundary, the first milestones and how to compare results.
   [README](../../crates/core/src/barb/README.md): the core's contract
 - [Types](../types.md): inference, rows and monomorphization in the frontend
 - [Functions](../values/functions.md): second-class callbacks
-- [Floats](../values/floats.md): the float contract the claims stand for
+- [Floats](../values/floats.md): the float contract the recognized routines stand for
 - [Effects](../forms/effects.md): bodyless definitions, and FFI left open
 - [Machine IR, archived](../archive/machine-ir.md): the tier's contracts in
   detail, partly out of date

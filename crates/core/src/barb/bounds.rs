@@ -176,9 +176,9 @@ pub struct Assumed {
     pub fields: Vec<(CtorId, usize, Bounds)>,
     /// What any sequence's length can be, where anything says.
     pub length: Option<Bounds>,
-    /// Whether a claimed float is answered by a machine rather than by its
-    /// body. This selects native float lowering and range assumptions;
-    /// semantic recognition can still use the frontend's IEEE claim.
+    /// Whether a recognized float operation is answered by a machine rather
+    /// than by its body. This selects native float lowering and range
+    /// assumptions; semantic recognition still reads the operation.
     pub floats: bool,
 }
 
@@ -752,11 +752,11 @@ impl FunctionWalk<'_> {
 
     /// What a call answers, beyond what its equations or its body say: a
     /// remainder is below its divisor, even one past what a bound can say
-    /// exactly, so `n % 2^64` is a number a word holds; and a claimed float
+    /// exactly, so `n % 2^64` is a number a word holds; and a recognized float
     /// may be answered by a machine rather than its body, whose NaN need not
     /// be the body's -- any pattern of the format, built into each wrapper
     /// out of sight.
-    fn claimed(&mut self, called: FnId, args: Range, mut answer: Bounds) -> Bounds {
+    fn answered(&mut self, called: FnId, args: Range, mut answer: Bounds) -> Bounds {
         if self.operations.get(called.index()).copied().flatten() == Some(super::Operation::Mod)
             && let Some(divisor) = self.exact[self.program.atoms(args)[1].0.index()]
             && let Ok(greatest) = u64::try_from(divisor.saturating_sub(1))
@@ -769,7 +769,7 @@ impl FunctionWalk<'_> {
         }
         let function = self.program.function(called);
         if let Some(float) = function.float
-            && let Some((wrappers, _)) = super::claim::wrapped(self.program, function.result)
+            && let Some((wrappers, _)) = super::floats::wrapped(self.program, function.result)
         {
             let pattern = Bounds {
                 low: 0,
@@ -851,7 +851,7 @@ impl FunctionWalk<'_> {
             (None, Some(op)) => self.sequence(op, &held),
             (None, None) => self.results[called.index()].unwrap_or(Bounds::NOTHING),
         };
-        let answer = self.claimed(called, args, answer);
+        let answer = self.answered(called, args, answer);
         self.calls.push((called, held));
         if self
             .program

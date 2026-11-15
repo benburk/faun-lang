@@ -55,17 +55,8 @@ pub struct Arm {
     pub body: Body,
 }
 
-/// The canonical byte sequence types identified by the frontend's literal contract.
-/// Layout and inline capacity belong to the target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ByteSequence {
-    Bytes,
-    Text,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Type {
-    pub(super) byte_sequence: Option<ByteSequence>,
     pub name: Symbol,
     /// Whether diagnostic rendering writes this type at each use rather than
     /// as a separate declaration.
@@ -168,9 +159,9 @@ pub struct Function {
     pub(super) parameters: Range,
     pub result: TypeId,
     pub definition: Definition,
-    /// The IEEE 754 operation its body computes, where the program that
-    /// built it says so: see [`super::Program::claim`].
-    pub float: Option<crate::float::Float>,
+    /// The IEEE 754 operation its body computes, where its code is the
+    /// standard's routine for one: see `floats::recognise`.
+    pub(super) float: Option<crate::float::Float>,
 }
 
 impl Function {
