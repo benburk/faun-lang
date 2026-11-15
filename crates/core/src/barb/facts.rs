@@ -132,6 +132,16 @@ pub(super) struct Recognised {
 }
 
 impl Recognised {
+    /// Nothing recognized, of `functions` definitions.
+    pub(super) fn none(functions: usize) -> Self {
+        Self {
+            operations: vec![None; functions],
+            sequences: vec![None; functions],
+            floats: vec![None; functions],
+            rotations: vec![None; functions],
+        }
+    }
+
     /// Whether a call to `id` is answered as what it was recognized as,
     /// rather than by walking its body.
     pub(super) fn answered(&self, id: FnId) -> bool {

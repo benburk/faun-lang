@@ -10,7 +10,8 @@ use super::{InlineLimits, Program};
 ///
 /// The outer schedule runs once, in this order:
 ///
-/// 1. Structural normalization.
+/// 1. Canonicalization: structural normalization of every body, before
+///    anything is recognized, then again with what is.
 /// 2. Forward list construction.
 /// 3. Descent over natural numbers.
 /// 4. Helper inlining with arithmetic identities.
@@ -30,6 +31,7 @@ use super::{InlineLimits, Program};
 /// Cleanup rebuilds the term pools: discard saved expression IDs and body or
 /// range handles. Declaration and constant IDs are preserved.
 pub fn optimize(program: &mut Program) {
+    super::canonical(program);
     super::structural(program);
     super::forward::forward(program);
     super::descent::descend(program);

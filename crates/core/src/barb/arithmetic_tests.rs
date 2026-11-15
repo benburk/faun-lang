@@ -1078,3 +1078,47 @@ fn call_operand_ranges_follow_the_branch_and_do_not_escape_it() {
         assert!(calls.contains(&(callee, Bounds { low, high })));
     }
 }
+
+/// Reversal onto a sequence whose step puts the pushed list in a box and
+/// takes it straight out again before going on: a match canonicalizing
+/// decides, so the step is the usual one.
+fn boxed_reversal() -> Program {
+    let mut p = Program::default();
+    let nat = p.declare_type("Nat");
+    let list = p.declare_type("List");
+    let boxed = p.declare_type("Box");
+    p.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    p.define_type(list, &[("Empty", &[]), ("Push", &[nat, list])]);
+    p.define_type(boxed, &[("Box", &[list])]);
+    let empty = named_ctor(&p, list, "Empty");
+    let push = named_ctor(&p, list, "Push");
+    let box_ = named_ctor(&p, boxed, "Box");
+    let reverse = p.declare("reverse_onto", &[list, list], list);
+    p.define(reverse, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == empty {
+                args[1]
+            } else {
+                let pushed = b.con(push, &[fields[0], args[1]]);
+                let held = b.con(box_, &[pushed]);
+                b.match_(held, boxed, |b, _, inside| {
+                    b.call(reverse, &[fields[1], inside[0]])
+                })
+            }
+        })
+    });
+    p
+}
+
+#[test]
+fn canonicalizing_first_recognizes_a_reversal_written_roundabout() {
+    let mut program = boxed_reversal();
+    validate(&program).unwrap();
+    let reverse = named(&program, "reverse_onto");
+    assert_eq!(program.analyze().sequence_operation(reverse), None);
+    canonical(&mut program);
+    assert_eq!(
+        program.analyze().sequence_operation(reverse),
+        Some(SequenceOperation::ReverseOnto)
+    );
+}
