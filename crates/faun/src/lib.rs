@@ -1,11 +1,12 @@
 //! The Faun compiler as a library.
 //!
-//! [`lower_to_barb`] checks a package against a target's host and lowers
-//! it to Barb, which is what checking it means. An entry that defines `main!`
-//! makes it an application, whose Barb starts there; one that does not is a
-//! library, whose Barb has no entry. [`compile_barb_to_image`] takes an
-//! application's Barb on to a target's image. [`lower_tests_to_barb`] lowers
-//! a package whose entry asks its `expect`s instead. Any [`Target`] will do;
+//! [`check_package`] checks a package against a target's host. An entry that
+//! defines `main!` makes it an application, lowered to Barb starting there;
+//! one that does not is a library, which the frontend's checks are all of.
+//! [`lower_to_barb`] is the same for an application alone, and
+//! [`compile_barb_to_image`] takes an application's Barb on to a target's
+//! image. [`lower_tests_to_barb`] lowers a package whose entry asks its
+//! `expect`s instead. Any [`Target`] will do;
 //! which targets exist is the command line's to say.
 //!
 //! The frontend is a line of stages, each taking the program as one tree and
@@ -232,8 +233,7 @@ pub fn compile_to_image(source: &Path, target: &dyn Target) -> Result<Vec<u8>, D
 /// to machine IR, and let the target compile that.
 ///
 /// # Errors
-/// Reports a library, which has no `main!` to build, and what the machine
-/// tier or the target cannot represent.
+/// Reports what the machine tier or the target cannot represent.
 pub fn compile_barb_to_image(
     barb: barb::Program,
     target: &dyn Target,

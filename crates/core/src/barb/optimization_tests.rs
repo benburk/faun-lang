@@ -7,9 +7,8 @@ use super::{
     arithmetic, decode, fold, normalize_with_limits, optimize, validate,
 };
 
-/// `Nat`, `Bool` and their arithmetic, as a source library writes them,
-/// with no entry: every definition is one a test reads, so every one is
-/// kept, and each keeps its ID through optimization.
+/// `Nat`, `Bool` and their arithmetic, as a source library writes them. A
+/// test gives the program its entry.
 fn library() -> Program {
     super::fixture::Library::new().program
 }
