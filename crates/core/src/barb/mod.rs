@@ -156,6 +156,7 @@ pub use model::{
     Arm, Atom, Body, ByteSequence, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId,
     Function, Local, Range, Symbol, Type, TypeId,
 };
+pub(crate) use normalize::canonical;
 #[cfg(test)]
 pub(crate) use normalize::fold;
 #[cfg(test)]
