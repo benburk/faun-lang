@@ -71,6 +71,27 @@ struct Rules {
     /// with the same operands answered, where that is still in scope: see
     /// [`Rewrite::shared`].
     share: bool,
+    /// Read nothing recognized: rewrite every definition, a recognizable
+    /// one too, let no recognized operation decide anything, and leave
+    /// questions of tags uncomposed for a walk that can first ask them as
+    /// one comparison. What [`canonical`] does, so recognition reads what
+    /// the walk wrote.
+    blind: bool,
+}
+
+/// Rewrite every body as [`structural`] does, before anything is
+/// recognized, then forget what was. Each body is rewritten alone -- no
+/// call is expanded and nothing is evaluated -- so what a definition comes
+/// to depends on its own body, never on budgets or the rest of the program,
+/// and two ways of writing one equation that differ only in aliases, record
+/// reads or decided matches are recognized alike.
+pub(crate) fn canonical(program: &mut Program) {
+    let rules = Rules {
+        blind: true,
+        ..Rules::default()
+    };
+    rewrite(program, None, rules, FoldLimits::default(), None);
+    program.redefined();
 }
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
@@ -188,6 +209,7 @@ const SIMPLIFY: Rules = Rules {
     algebra: true,
     evaluate: true,
     share: true,
+    blind: false,
 };
 
 /// Whether every arm puts back the constructor it took apart, out of that
@@ -424,7 +446,11 @@ impl<'a> Rewrite<'a> {
         rules: Rules,
         limits: FoldLimits,
     ) -> Self {
-        let recognised = program.recognised().clone();
+        let recognised = if rules.blind {
+            Recognised::none(program.functions().len())
+        } else {
+            program.recognised().clone()
+        };
         Self {
             program,
             recognised,
@@ -738,11 +764,15 @@ impl Rewrite<'_> {
                 if let Some(answer) = self.evaluated_match(id, scrutinee, locals, scope) {
                     return answer;
                 }
-                if let Some(answer) = self.composed(scrutinee, arms, scope) {
-                    return answer;
-                }
-                if let Some(answer) = self.composed_within(scrutinee, arms, scope) {
-                    return answer;
+                // Composing questions of tags is left to a walk reading what
+                // is recognized, which may first ask them as one comparison.
+                if !self.rules.blind {
+                    if let Some(answer) = self.composed(scrutinee, arms, scope) {
+                        return answer;
+                    }
+                    if let Some(answer) = self.composed_within(scrutinee, arms, scope) {
+                        return answer;
+                    }
                 }
                 match self.matching(value, arms, locals, scope) {
                     Matched::Rebuilt(held) => held,
