@@ -34,16 +34,19 @@ impl Drop for Package {
 }
 
 #[test]
-fn a_library_lowers_to_barb_with_no_entry_and_does_not_build() {
+fn a_library_is_checked_by_the_frontend_alone_and_has_no_barb() {
     let package = Package::new("library", "double : Nat -> Nat\ndouble(n) -> n + n\n");
-    let barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
-    assert!(barb.entry().is_none());
-    assert!(barb.render().contains("double(v0: Nat) -> Nat ="));
-    let nothing_to_run =
-        faun_core::lower_to_machine_ir(&barb, &X86_64Linux.routines()).unwrap_err();
-    assert!(nothing_to_run.contains("no entry"));
-    let refused = faun::compile_barb_to_image(barb, &X86_64Linux).unwrap_err();
+    assert!(matches!(
+        faun::check_package(&package.entry(), &X86_64Linux).unwrap(),
+        faun::Package::Library
+    ));
+    let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
     assert!(refused.message.contains("no `main!` to build"));
+    let wrong = Package::new(
+        "wrong-library",
+        "double : Nat -> Nat\ndouble(n) -> n + True\n",
+    );
+    assert!(faun::check_package(&wrong.entry(), &X86_64Linux).is_err());
 }
 
 #[test]
@@ -124,7 +127,7 @@ fn a_loop_handed_different_strings_is_copied_for_each_where_that_decides_somethi
 fn a_definition_taking_a_function_is_compiled_where_it_is_called() {
     let package = Package::new(
         "higher-order",
-        "twice : (Nat -> Nat, Nat) -> Nat\ntwice(f, n) -> f(f(n))\n",
+        "twice : (Nat -> Nat, Nat) -> Nat\ntwice(f, n) -> f(f(n))\n\nmain!(host) -> host.exit!(0)\n",
     );
     let barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert!(!barb.render().contains("twice"));
@@ -138,14 +141,14 @@ fn clauses_that_cover_every_case_are_accepted() {
         "covered",
         "sign : Int -> Nat\nsign(0) -> 0\nsign(Pos(Succ(_))) -> 1\nsign(NegSucc(_)) -> 2\n",
     );
-    faun::lower_to_barb(&covered.entry(), &X86_64Linux).unwrap();
+    faun::check_package(&covered.entry(), &X86_64Linux).unwrap();
 }
 
 #[test]
 fn a_generic_definition_nothing_calls_is_judged_at_the_empty_type() {
     let total = Package::new(
         "length",
-        "length : List(a) -> Nat\nlength([]) -> 0\nlength([_, *rest]) -> 1 + length(rest)\n",
+        "length : List(a) -> Nat\nlength([]) -> 0\nlength([_, *rest]) -> 1 + length(rest)\n\nmain!(host) -> host.exit!(0)\n",
     );
     let barb = faun::lower_to_barb(&total.entry(), &X86_64Linux).unwrap();
     assert!(barb.render().contains("length(v0: List<[]>) -> Nat ="));
@@ -178,7 +181,7 @@ fn a_package_imports_the_root_of_one_it_depends_on() {
         "dependency",
         "package {\n  shapes: \"vendor/shapes/shapes\",\n}\n\nimport shapes {double_square}\n\neight : Nat\neight = double_square(2)\n\nexpect eight == 8\n",
     );
-    faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    faun::check_package(&package.entry(), &X86_64Linux).unwrap();
     let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert_eq!(tests.expectations.len(), 1);
 }
@@ -196,7 +199,8 @@ fn only_the_operators_on_bool_leave_their_right_side_unworked() {
          named : Bool -> Bool\nnamed(a) -> Bool.and(a, spin(0))\n\n\
          operator : Bool -> Bool\noperator(a) -> a | spin(0)\n\n\
          branching : (Bool, Nat) -> Bool\n\
-         branching(a, n) -> a & (if n == 0 then spin(n) else spin(n + 1))\n",
+         branching(a, n) -> a & (if n == 0 then spin(n) else spin(n + 1))\n\n\
+         main!(host) -> host.exit!(0)\n",
     );
     let barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     let rendered = barb.render();

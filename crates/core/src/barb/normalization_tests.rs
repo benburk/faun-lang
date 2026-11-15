@@ -32,7 +32,7 @@ fn structural_normalization_removes_aliases_without_expanding_or_discarding_call
     let (mut program, helper, effect) = fixture();
     structural(&mut program);
     validate(&program).unwrap();
-    let body = program.function(program.entry().unwrap()).body().unwrap();
+    let body = program.function(program.entry()).body().unwrap();
     let bindings = program.bindings(body.bindings);
     assert_eq!(bindings.len(), 2);
     assert!(matches!(program.expr(bindings[0]), Expr::Call(id, _) if id == helper));

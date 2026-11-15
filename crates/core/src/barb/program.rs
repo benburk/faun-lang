@@ -294,9 +294,16 @@ impl Program {
         self.constants.get(self.type_info(), value)
     }
 
+    /// The function a target enters, which every reachability question and
+    /// every assumption about what comes in from outside starts from.
+    ///
+    /// # Panics
+    ///
+    /// If no entry was set, which [`super::validate`] refuses.
     #[must_use]
-    pub const fn entry(&self) -> Option<FnId> {
+    pub const fn entry(&self) -> FnId {
         self.entry
+            .expect("a program has an entry; validation refuses one without")
     }
 
     #[must_use]
@@ -497,7 +504,7 @@ impl Program {
         *symbol = name;
     }
 
-    /// The function a target enters.
+    /// The function a target enters. Every program has one.
     pub const fn set_entry(&mut self, id: FnId) {
         self.entry = Some(id);
     }

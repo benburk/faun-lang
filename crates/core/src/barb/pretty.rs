@@ -55,7 +55,9 @@ impl Program {
     /// instruction never walks them -- and are only named.
     fn shown(&self, facts: Option<&Facts>) -> Vec<bool> {
         let count = self.functions().len();
-        let Some(entry) = self.entry() else {
+        // Rendering is for looking, so a program still being built, with no
+        // entry yet, shows every definition.
+        let Some(entry) = self.entry else {
             return vec![true; count];
         };
         let through = self.reached(entry, facts, true);

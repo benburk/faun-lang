@@ -189,7 +189,7 @@ fn a_recognized_walk_folds_to_its_operation() {
         for (a, b) in [(0u64, 0u64), (12, 10), (255, 3), (7, 0), (0, 9)] {
             let expected = op.calculate(&BigUint::from(a), &BigUint::from(b)).unwrap();
             let (mut program, _, start) = walk(kind);
-            let main = program.entry().unwrap();
+            let main = program.entry();
             let nat = program.function(start).result;
             program.define(main, |builder, _| {
                 let [x, y] = [a, b].map(|n| {
@@ -199,7 +199,7 @@ fn a_recognized_walk_folds_to_its_operation() {
                 builder.call(start, &[x, y])
             });
             optimize(&mut program);
-            let main = program.entry().unwrap();
+            let main = program.entry();
             let body = program.function(main).body().unwrap();
             let Expr::Static(answer) = program.expr(body.tail) else {
                 panic!("{kind:?} {a} {b} folds:\n{}", program.render());

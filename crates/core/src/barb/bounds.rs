@@ -337,7 +337,7 @@ fn handed(program: &Program, assumed: &Assumed) -> Vec<Vec<Option<Bounds>>> {
     (0..count)
         .map(|at| {
             let id = FnId::at(at);
-            if entry == Some(id) {
+            if entry == id {
                 program
                     .params(id)
                     .iter()
@@ -378,7 +378,7 @@ impl Propagation {
         // What comes in from outside was built where no walk sees it.
         let mut outside: Vec<TypeId> = Vec::new();
         for (at, function) in program.functions().iter().enumerate() {
-            if entry == Some(FnId::at(at)) {
+            if entry == FnId::at(at) {
                 outside.extend_from_slice(program.params(FnId::at(at)));
             }
             if function.body().is_none() {

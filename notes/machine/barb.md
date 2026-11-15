@@ -54,6 +54,11 @@ changes.
 So the frontend API is just the program: types, functions, the entry, and
 which declarations the target provides.
 
+Every program has exactly one entry, and every optimization is rooted
+there: what it doesn't reach is dropped, and only its parameters come from
+outside. A library has no entry, so it stops at the frontend's checks and
+never becomes Barb.
+
 ## Facts about data
 
 Barb classifies each type's shape: unit, wrapper, product, natural,

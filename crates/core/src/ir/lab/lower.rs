@@ -128,9 +128,7 @@ fn lowered(
     facts: &barb::Facts,
     wanted: Arguments,
 ) -> Result<Program, String> {
-    let entry = program
-        .entry()
-        .ok_or("a program with no entry has nothing to run")?;
+    let entry = program.entry();
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.
     let demand = Demand::discover(program, facts, routines, entry)?;
@@ -1637,9 +1635,7 @@ fn assumed(program: &barb::Program, routines: &Routines) -> barb::Assumed {
             assumed.fields.push((constructor, 1, routines.length()));
         }
     }
-    if let Some(entry) = program.entry() {
-        handed(program, routines, entry, &mut assumed);
-    }
+    handed(program, routines, program.entry(), &mut assumed);
     assumed.length = Some(routines.length());
     assumed
 }
@@ -2236,7 +2232,7 @@ impl Lowering<'_> {
         let Callee::Function(into) = self.callees[id.index()] else {
             unreachable!("only machine functions have bodies to lower");
         };
-        let entry = self.barb.entry() == Some(id);
+        let entry = self.barb.entry() == id;
         // What it leaves with: a word from the entry, whatever the program
         // worked in, and otherwise the width it was declared at.
         let destination = if entry {

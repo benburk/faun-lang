@@ -386,7 +386,7 @@ fn an_early_exit_refines_the_continuation() {
     normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
     let facts = program.analyze();
-    let body = program.function(program.entry().unwrap()).body().unwrap();
+    let body = program.function(program.entry()).body().unwrap();
     let sum = program.bindings(body.bindings).iter().copied().find(|expr| {
         matches!(program.expr(*expr), Expr::Call(called, _) if facts.operation(called) == Some(Operation::Add))
     }).expect("runtime addition");
@@ -958,6 +958,7 @@ fn counted(step: Step, rest_first: bool) -> (Program, FnId) {
             }
         })
     });
+    library.program.set_entry(count);
     (library.program, count)
 }
 
@@ -1107,6 +1108,7 @@ fn boxed_reversal() -> Program {
             }
         })
     });
+    p.set_entry(reverse);
     p
 }
 

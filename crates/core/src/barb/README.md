@@ -115,11 +115,13 @@ Barb has value semantics. A bodyless call is a value the target computes.
   representations; and no weak references or finalizers.
 - **The whole program is available.** Dynamic linking of libraries may come
   later.
-- **An entry is optional.** Every defined function is validated whether or
-  not the entry reaches it. Optimization then keeps only what the entry
-  reaches, so what is checked is everything written and what is kept is
-  what runs. A program with no entry is checked, keeps every definition,
-  and lowers to nothing.
+- **Exactly one entry.** Every program has one function a target enters,
+  and validation refuses a program without it. Everything is rooted there:
+  sweep keeps what the entry reaches, range analysis takes only the entry's
+  parameters as coming from outside, and specialization never binds them.
+  A library has no entry, so it never reaches Barb; the frontend's checks
+  are all a library needs. Every defined function is still validated, so
+  what is checked is everything written and what is kept is what runs.
 - **Nothing to declare about floats or text.** A frontend that wants
   hardware floats uses the standard's float routines, which Barb knows by
   their code. Text and byte lists need no marking: a backend holds any
@@ -270,8 +272,8 @@ A frontend builds a `Program` and says nothing else about it:
 1. Build types with `Program::declare_type` and `define_type`, and
    functions with `declare` and `define`. `Builder` constructs bodies in
    A-normal form.
-2. `set_entry` names the program's root, and `answered_by` names the
-   routine a bodyless declaration reaches.
+2. `set_entry` names the entry, which every program has, and
+   `answered_by` names the routine a bodyless declaration reaches.
 
 Then:
 

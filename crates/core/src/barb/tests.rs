@@ -111,6 +111,7 @@ fn addition_is_recognised_and_its_near_miss_is_not() {
             _ => unreachable!("Nat takes at most one field"),
         })
     });
+    program.set_entry(wrong);
     assert_eq!(program.analyze().operation(wrong), None);
 }
 
