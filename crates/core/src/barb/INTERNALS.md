@@ -1,0 +1,611 @@
+# Barb internals
+
+How Barb's recognizers, analyses and passes work, for someone changing them.
+What Barb is, what it recognizes and which facts it answers are in the
+[README](README.md).
+
+## Recognition
+
+Recognized definitions are currently protected from rewriting and inlining.
+A new recognition rule must account for that policy as well as the
+equivalence it proves, so keeping a fact does not block useful
+optimization.
+
+Floats are recognized by their code rather than an equation. A float is a
+natural in one-field wrappers, and an operation on one is a routine walking
+its bits; no equation shows a routine like that rounds as IEEE 754 does.
+So Barb knows the standard's own routines by their fingerprints: a hash of
+a definition's code and all the code it reaches, after canonicalizing,
+with no name or ID in it (`fingerprint.rs`). A definition whose
+fingerprint is in the table (`floats/known.rs`) is that routine, so it
+computes that operation exactly as the routine does. Nothing the frontend
+says is trusted. A definition written any other way runs as written.
+
+The table is written from the standard by `just bless`, and a test fails
+when the standard's float code changes without it, or when any operation
+goes unrecognized. The standard's float expectations run twice, once with
+the instructions and once walking every body (`Program::walk_floats`), and
+must agree, which is what keeps the table honest.
+
+The semantic summaries:
+
+- `Facts::rotation` records a structurally recognized left rotation, its
+  bit width (8, 16, 32 or 64), and a count taken modulo that width. It is
+  exposed only when range analysis proves that the input fits. Matching is
+  bounded and uses equations, not names. Lowering expands the fact into
+  portable arithmetic; x86 instruction selection can select ROL.
+  Separately used intermediates remain live.
+- `Facts::float_comparison` recognizes the sign of a difference after NaN
+  canonicalization. Its contract includes unordered inputs and excludes the
+  negative-zero exception. Native x86 can compare directly; portable
+  lowering orders IEEE bit patterns.
+- `Facts::tree_role` summarizes recursive builders and readers with scalar
+  payloads. It does not authorize an allocation strategy: machine IR still
+  checks cell layouts, ownership, nonescape, connected construction and
+  region lifetime.
+
+Short constructor lists reversed onto a destination, and multiplication of
+a float by two, are value identities in normalization rather than facts.
+The former is bounded to four elements; the latter reuses a compatible
+addition definition when present.
+
+## Facts and revisions
+
+Facts and IDs belong to their program revision, so reanalyze after
+rewriting. Sweep can renumber function IDs, and cleanup rebuilds expression
+IDs and term ranges. Type, constructor and constant IDs survive the
+schedule. Adding, removing or redefining functions invalidates the
+recognition cache; semantics-preserving body rewrites can reuse it. Facts
+attach to functions, types and fields where they can, because those survive
+rewriting.
+
+Final analysis obtains recognition, then computes ranges (including
+branch-local operands), affine summaries, purity, float comparison facts and
+tree roles.
+
+## Code map
+
+- `model.rs`: terms, declarations, IDs and their small intrinsic methods.
+- `program.rs`: `Program`, queries, declarations and coordination of owned pools.
+  Its body-construction entry point delegates to `builder.rs`.
+- `types.rs`: a private, borrowed view of declaration metadata, independent of
+  function bodies, names and constant storage.
+- `terms.rs`: owns expressions, argument lists, binding runs and match arms.
+  Its append operations return IDs, ranges and bodies; buffer fields stay private.
+  `Program` coordinates arena replacement with remapped function roots.
+- `builder.rs`: `Builder` and temporary state for scoped body construction.
+  The machine IR uses the same model/program/builder split. Keep each type's
+  core API with its definition; separate substantial named algorithms, not
+  reads from writes. Keep fields and construction machinery private or narrowly
+  visible within the tier, and re-export the public API from `mod.rs`.
+- `validate.rs`: structural checks: every call and construction saturated,
+  every name bound, every match with an arm per constructor. Whether a
+  definition stops is not asked. A `Refusal` names what it refuses by Barb's
+  own ids, never by source; a frontend maps the definition back.
+- `calls.rs`: the call graph, the rounds it goes in (its strongly connected
+  components), the loop breakers inlining keeps whole, and the order
+  folding reads definitions in, each after what it calls.
+- `fingerprint.rs`: a definition and everything it reaches as one 128-bit
+  number, with no name or ID in it: definitions and types numbered in the
+  order first met, constructors by type and tag, known values by type and
+  encoding.
+- `floats.rs`: recognizing the standard's float routines by fingerprint,
+  among definitions taking one or two of the wrapped-natural type they
+  answer, right after canonicalizing; the table itself is `floats/known.rs`.
+  Also answering a recognized call from its operands' patterns with the
+  host's arithmetic (`crate::float`). A recognized float is kept, never
+  inlined, and inert to cleanup, and the fact stays on the definition
+  through every later rewrite. Range analysis gives its answer, and each
+  wrapper it is built into, the whole format: a machine's NaN need not be
+  the body's.
+- `arithmetic.rs`: recognize induction equations, without range analysis. The
+  same equations recognize a count of a sequence -- nought when empty, one more
+  than the rest's for a step, never reading the element -- as a
+  `SequenceOperation::Length`, a separate table from the binary `Operation`s.
+  A recognized definition of either kind keeps its body: passes neither rewrite
+  nor inline it, and cleanup treats its calls as inert.
+  Bitwise `And`, `Or` and `Xor` and `Pow` are walks with more arguments than
+  their operation: `f(a, b, place, built)` is `built + place * (a op b)`,
+  halving both sides a step, and `f(base, e, built)` is `built * base ^ e`,
+  squaring the base as the exponent halves. Halving is what makes each an
+  induction, so the equations are checked symbolically, with a step's bit --
+  which may read only `a % 2` and `b % 2`, or `e % 2` -- worked out for each
+  way it can be. Only a two-argument definition calling a walk from its
+  identity, a place of one and nothing built or one built, is the operation;
+  the walk itself is not.
+- `bounds.rs`: interval arithmetic and interprocedural range propagation.
+  Each constructor field holds the join of every value built into it, by
+  construction or in a constant; reading one back answers no more. Fields of
+  values built out of sight -- entry parameters, bodyless results, spine
+  constants -- hold anything but what an `Assumed` given to the analysis
+  says of them. Barb itself assumes nothing: the tier lowering a program for a
+  target supplies what it knows. A field of an enumeration type is also
+  bounded by its tag count. A spine's rest is read as a step of its count and
+  says nothing; a sequence's element holds what was built into it, a known
+  byte string records the range of its bytes, and a known sequence of up to
+  4096 other elements what each element's fields hold. A remainder by a
+  natural known outright is below it even past what a `u64` bound says, so
+  `n % 2^64` is a word. A call of a recognized sequence operation is
+  answered from what its operands hold, as arithmetic is: a length is how
+  many its sequence holds, replacing keeps them, appending adds one,
+  putting one before another adds both, dropping takes the count away and
+  taking keeps the fewer -- within what `Assumed` says a length can be,
+  which machine lowering says is below the largest word, and which a way
+  nothing reaches answers. So a list a loop rewrites keeps the length it
+  started with, and machine lowering holds a length known outright as that
+  number, which answers whether an index is within it before anything asks.
+  Widening settles what recursion leaves growing: a greatest that keeps
+  growing goes to the next machine width -- 8, 16, 32 or 64 bits -- and past
+  the widest to no bound, so a value a remainder keeps below a width settles
+  there. The first bound found for something, however late, is no growth. Narrowing cannot take back a bound a field copied into itself holds,
+  so giving that up would be for good. A few narrowing rounds then
+  walk every definition afresh from the settled state, without widening, and
+  take back what nothing reaches -- a remainder of a widened count is still
+  below its divisor, and so is whatever it is handed to.
+  A sequence is bounded by how many elements it holds, as a number is by
+  its value: the empty one is nought, a push one more than the rest, and a
+  known one its length. A count a definition steps by one on every call to
+  itself, beside another parameter it hands the rest of itself, is no more
+  than the most the two sum to where a call from outside hands them in
+  (`counters.rs`): a loop's index is bounded by what it walks.
+  A bitwise and is no more than either operand, an or or exclusive or is no
+  wider than the wider, and a power is at most the greatest base to the
+  greatest exponent where that fits a word.
+  `Propagation` is the evolving state; `Ranges` is the conservative final result.
+- `sequence.rs`: recognize a definition reversing one sequence onto
+  another -- the other for the empty one, itself on the rest onto the element
+  pushed for a step -- as `SequenceOperation::ReverseOnto`, and one that is a
+  reversal onto nothing reversed again onto its second argument as
+  `SequenceOperation::Prepend`. Both keep their bodies and are answered by
+  machine lowering as one buffer operation: room made once, then a copy;
+  reversed onto nothing, a buffer nothing else holds is turned round where
+  it lies. A prepend of a sequence onto one element alone is
+  `SequenceOperation::Append`, written after the last element where nothing
+  else holds the buffer and it has room, so appending one at a time copies
+  each element a bounded number of times. A
+  definition taking a count of elements off the front -- the sequence for
+  nought, the empty one for an empty sequence, itself on the rest and the
+  count less one otherwise, matching either first -- is
+  `SequenceOperation::Drop`, answered as the same buffer holding fewer, and
+  known bytes less some of their front as the same bytes further on. A
+  definition starting, from the empty sequence, a walk that pushes a
+  sequence's elements onto what it has taken while a count lasts and
+  answers that reversed onto nothing when either runs out is
+  `SequenceOperation::Take`: the same buffer from the same start, holding
+  fewer, so a prefix, a split or a block copies nothing. A
+  definition rebuilding a sequence's front with the element a count reaches
+  replaced by a value -- the empty sequence or itself for an empty one, the
+  value pushed before the rest at nought, and the element pushed before
+  itself on the rest and the count less one otherwise -- is
+  `SequenceOperation::Replace`, answered as one element written over: where
+  the buffer, and in place where nothing else holds it.
+- `affine.rs`: derive small affine summaries from recognized natural addition and
+  multiplication by constants, without adding an expression kind or expanding
+  nonlinear products.
+- `facts.rs`: the fact tables. Recognition is the one table `Program` keeps:
+  worked out the first time a pass asks and kept across rewrites, since
+  rewriting a body keeps what it means; defining a body or a type forgets it.
+  A reader with only `&Program` uses what is kept where it still holds and
+  works it out afresh otherwise. `Program::analyze` and `Program::assuming`
+  answer ranges and affine summaries as a value, so facts are always about
+  the program as it stands; lowering asks `assuming` for its own. Facts
+  attach to functions, types and fields where possible, because those
+  survive rewriting; expression-indexed facts do not.
+- `normalize.rs`: capture-free structural rebuilding; `inline.rs`: expansion
+  eligibility, copy costs and budgets. Structural-only normalization does not
+  construct an inlining plan or compute its recursion/copy-cost tables. Every
+  walk also takes the arm a match on a local written as a constructor or a
+  known value selects, with its fields what built it, and replaces a match
+  whose arms bind nothing and are term-for-term the same with that arm.
+  A match turning tags into tags, on a local another match wrote out of tags
+  alone, becomes one match asking the first's questions -- so `a < b`, which
+  becomes an `Order` and then a `Bool`, branches on the comparison itself,
+  and range analysis sees what the branch says of `a` and `b`. The first
+  match may work something out in an arm before answering with tags, as
+  taking a byte apart to compare it does; that match is written again with
+  each arm answering with the composed tags. Asking whether `a` is below `b`
+  and then whether it equals `b` is one comparison where two of the three
+  answers agree. Inside an arm, what its match took apart is known to be
+  that constructor of those fields, and a match of one arm floats over the
+  rest of its body, so taking the same value apart again takes that arm.
+- `counters.rs`: which parameters of a definition are counts kept beside a
+  walk -- one more on every call it makes to itself, beside another handed
+  the rest of itself -- for range analysis to bound by what they walk.
+- `specialize.rs`: a parameter every call from inside passes on as it
+  came, which callers hand known values. Where they hand different ones, a
+  copy of the definition holding each, calling itself; kept, and given the
+  calls handing its value, only where folding it decides a match between
+  two or more arms. Then, read again, where every call from outside hands
+  the same one, the definition binds it first and reads it there, so what
+  reads it inside a loop reads something known. The parameter stays, read
+  by nothing.
+- `descent.rs`: a definition taking two numbers of one natural type down
+  together -- nought answers one base case, a step and nought another, two
+  steps call it again on both predecessors with nothing else changed -- is
+  those base cases applied to `a monus b` and `b monus a`, so it calls itself
+  no more and may be inlined. The monus is the definition recognized as one
+  over that type, or one declared in the shape recognition reads.
+- `forward.rs`: a walk building its list on the way out, each element put
+  in front of what it answers for the rest, in the list it answers or in one
+  field of a product it answers, is written again carrying what it has built:
+  each element appended, a call answering its own answer outright handing on
+  what was built, and a clause calling nothing answering what was built
+  followed by what it answers. Its calls of itself are then all tail calls,
+  so a direct `map` is a loop building its buffer front to back. The append
+  and prepend it calls are recognized definitions, found or written here.
+- `fuse.rs`: a producer walks a list, pushes one element onto an accumulator
+  per step and answers it reversed, or appends each and answers it prepended
+  onto nothing, as `forward.rs` writes a walk, or answers it as it is, which
+  is what the identities make of that. Its step may go on walking
+  whatever it likes -- `kick` goes on with what pairing its head with the
+  rest worked out -- and may call itself inside matches of one arm, taking
+  apart what it worked out first; a consumer takes a list apart from the
+  front, reading its rest only as the argument of tail calls to itself. A
+  producer's call onto an empty accumulator read once, by a consumer's call
+  later in the same body, becomes a call of a new definition doing both steps
+  in one walk. Where the consumer is itself a producer, so is the fused one,
+  so a chain fuses a link at a time. Only definitions reaching no bodyless
+  call take part: fusing interleaves their work and cuts the producer short
+  where the consumer stops, which leaves out pure work nothing needs.
+  Nothing is recognized by name. The same walk
+  turns a list reversed onto nothing and read once, by a reversal of it onto
+  another, into one prepend in order: the recognized definition for that
+  type, or one declared in the shape recognition reads.
+- `head.rs`: a call whose list is read once, by a match whose step never
+  reads the rest, needs only its first element. Where what it calls joins,
+  in tail position, what calls of itself answer -- every solution of a
+  search, the first branch's before the second's -- the call goes to a copy
+  named with `.head` after it, answering a list with that first element and
+  little else: a join becomes a match on the first list, whose empty arm
+  works out the second, and everything only the second needs, and whose
+  step answers the first; a call of the definition goes to the copy, and an
+  element pushed onto a rest is pushed onto nothing. A search asked for its
+  first solution stops at it. Several matches reading only whether the
+  list is empty and its first element, as a test and its negation inline
+  to, read no more. The answer may be read once by a walk instead: a fold
+  appending to an accumulator handed nothing, as `filter` and `map` become,
+  read for its first element, or a search answering a value of one
+  constructor on the empty list and on a step going on or answering one of
+  another, as `find`, `any` and `all` are. A fold walked over a join is
+  the second walked from what the first left, which keeps the first's
+  first element, and a search answers on the first list unless that found
+  nothing. The call then goes to a copy named for both, joined by `+`,
+  handed the walk's other parameters after its own, which walks each list
+  it does not join and tries the first list's walk before the second's.
+  Only definitions reaching no bodyless call are copied or walked, since
+  the copy leaves out pure work nothing needs, and nothing is recognized by
+  name: the join is the recognized prepend, and the fold's append the
+  recognized append.
+- `inplace.rs`: a walk built front to back that appends, for each element
+  it takes off what it walks, one element of the same type -- `map`, or
+  `map_accum` beside its state -- is written again replacing each element
+  where it lies: `drop` reads the element and `replace` writes its
+  successor. It counts only how many are left; the one to replace is as far
+  from the end as that, worked out from the length, which replacing keeps,
+  so range analysis bounds it by a length with nothing to relate. A step
+  may go on with what another walk so rewritten made of its rest, through
+  matches of one arm taking that answer apart, as `kick` goes on with what
+  `map_accum` made of the bodies after its head: the other walk then runs
+  on the whole, with one fewer left, and the element is written into what
+  it answered. A call handing a walk nothing built goes to the rewriting,
+  through a definition starting it on the whole. A buffer nothing else
+  holds is written in place; a shared one is copied once, by the first
+  replacement. What a walk built may be read only in appending and going
+  round, and the rest of what it walks only in going round or in the other
+  walk's call, so nothing else holds the buffer while it writes.
+- `sweep.rs`: dropping the definitions an entry does not reach, once
+  validation has checked them and inlining and fusion have copied what they
+  needed out of them.
+- `copy.rs`: copying terms into a body under construction through a map of
+  locals, with an optional edit of what each copied expression becomes;
+  what fusion, descent, specialization and writing in place build new
+  bodies with.
+- `walk.rs`: reading terms without a scope -- every expression a body
+  holds however deep its matches nest, how often a local is read, whether a
+  body calls a definition -- and the equation shapes recognizers and
+  rewrites share: a body that is one match on a parameter, its two arms in
+  constructor order. A definition a rewrite needs and the program lacks is
+  written beside the recognizer that reads its shape: monus in
+  `arithmetic.rs`, reversal, prepend and append in `sequence.rs`.
+- `constant.rs`, `constant/view.rs`, `constant/checked.rs`: compact encoding,
+  validated semantic views, and checked construction.
+  Views read magnitudes and constructors without materializing trees.
+  Evaluator field scans walk an encoding's extent within a budget.
+- `constant/pool.rs`: owns constant entries, encoded bytes and checked insertion.
+  `Program` keeps this pool paired with its own declarations; callers cannot
+  substitute a different catalogue. The codec and views borrow only type metadata.
+- `evaluate.rs`, `budget.rs`: evaluation and its shared work/size/depth policy.
+  A tail taking an arm or calling a definition goes on in a loop, so a loop
+  as long as its input costs work but not depth, and a match takes its arm
+  with the fields pushed onto the locals in scope rather than a copy of them,
+  so it costs what its arm does and not what is in scope.
+- `normalize.rs`, `cleanup.rs`: separate optimizing rewrites. The normalizing
+  walk knows what wrote each local, and its rules are switched on per walk:
+  the arithmetic identities -- `x + 0`, `x * 1`, `x monus x` and the like,
+  on recognized operations only, and their sequence counterparts:
+  prepending onto or reversing nothing, dropping nought, the length of
+  the empty sequence -- combining constants, evaluating a
+  construction, call or match whose every input is known, and sharing.
+  Evaluating is constant folding: there is no pass of its own for it.
+  Sharing answers a call of an answered definition -- pure and total --
+  with an earlier call of it with the same operands still in scope, known
+  values compared by what they are and a commutative operation's operands
+  in either order. Inside an arm of a match on the first call's answer,
+  what the arm knows of it then decides a match on the second's too.
+  Constant bindings are not merged, which would keep one live across more
+  of the program than either was.
+- `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
+
+## Diagnostic rendering
+
+`Program::render` uses indentation to delimit match arms and nested bodies,
+without braces. Bodyless declarations keep `= <elsewhere>` on the signature
+line, and a definition answered rather than walked keeps what it is answered
+as there instead of its body: `<binary64 add>` for a recognized float, and, in
+`Program::render_analyzed`, `<add>` or `<prepend>` for a recognized operation.
+Where there is an entry, a definition it reaches only through such a body --
+soft-float helpers a target with the instruction never runs -- is named at
+the end rather than rendered. `faun emit barb` analyzes before rendering. Types reserved with `declare_inline_type` carry their complete structural
+spelling at each use and omit a redundant top-level declaration. The text is a
+diagnostic view, not surface syntax or a serialization.
+Frontend-created declarations retain their source names, including `!` on
+platform calls such as `exit!` and `stdout!`, and those are the names machine
+lowering carries through for linkage. A declaration may still name a different
+provider symbol -- `answered_by` is how two declarations reach one routine at
+two types -- so nothing infers a provider or an effect from the display name.
+
+## Optimization passes
+
+The authoritative schedule is `optimize.rs::optimize`. After validation,
+`optimize(program)` runs the following stages in order. The outer schedule
+runs once. Individual stages may analyze their input, and specialization
+resimplifies definitions to which it has supplied known values.
+
+The stages fall into four groups:
+
+- **Shape the program** (1-4): normalize, build lists forward, descend,
+  and inline, so later passes see loops as self-recursive walks.
+- **Remove list work** (5-7): fuse, demand only a first element, and
+  rewrite element-for-element walks in place.
+- **Fold what is known** (8-10): simplify callee-first, specialize on known
+  values, and join what specializing left calling each other.
+- **Tidy up** (11-12): sweep what the entry doesn't reach and clean up
+  unused pure work.
+
+1. Structural normalization: substitute local aliases, without expanding calls.
+   It also floats a one-arm match, as reading a record's field is, over the rest
+   of its body, so a record read several times is taken apart once. Inlining
+   prices each callee before it begins, so this is what lets it price a helper
+   by what copying it costs rather than by how it was written: without this
+   stage a helper reading several fields looks several times its size, the
+   per-definition budget runs out sooner, and less is inlined, which leaves a
+   smaller program that does more calling.
+
+   Before anything is recognized, the same rules run once over every body,
+   a recognizable one too, reading nothing recognized (`canonical`).
+   Recognition then reads each definition as its own body comes to, not as
+   the frontend happened to write it, so a step that boxes a value and takes
+   it straight out again does not hide a reversal. Each body is rewritten
+   alone, so what it comes to never depends on budgets or the rest of the
+   program. That walk leaves questions of tags uncomposed: the walk after
+   recognition may first ask `a < b` then `a == b` as one comparison, which
+   composing them earlier would hide. Float routines are recognized by
+   their fingerprints in between, so what they are read from is the code as
+   canonicalizing left it.
+2. Building forward: a walk answering `[f(x), *walk(rest)]`, or its list so
+   beside a state, carries what it has built and appends each element, so it
+   calls itself only in tail position.
+3. Descent: rewrite definitions taking two numbers down together as their
+   base cases on the two differences, so they no longer recurse.
+4. Helper inlining: non-arithmetic helpers other than loop breakers. In each
+   recursive component, a definition calling itself is a breaker, and so are
+   enough of the rest that no cycle is left among the others; each other one may
+   be copied into its caller, so definitions calling each other become one
+   calling itself, which machine lowering makes a loop where the call is a tail.
+   The same walk applies the arithmetic identities justified by structurally
+   recognized `Operation` facts, so what one decides is decided before folding,
+   and shares repeated calls of answered definitions.
+5. Fusion: a list built by one walk and read once by another is never built.
+6. First-element demand (`head::heads`): specialize a pure list producer when
+   its consumer needs only the first element or an early answer from a walk.
+   A search can stop as soon as it produces that answer, preserving calls
+   with observable effects.
+7. In place: express a walk rebuilding a list element for element through
+   indexed functional replacements, once fusion has removed the walks it can.
+   Lowering can then reuse uniquely owned storage for those replacements.
+8. Simplification: the normalizing walk with every rule on, each definition
+   after what it calls, so that a caller meets its callees' answers as
+   constants. A construction, call or match whose every input is known is
+   evaluated; the identities apply (including short reverse-onto and float
+   doubling); constants combine across recognized
+   associative operations and directional monus/division chains;
+   power-of-two moduli push through sums and products; and a repeated call
+   of an answered definition answers what the first did. Each definition
+   draws at most a per-definition allowance from the walk's budget, so a
+   costly answer declined in one leaves the rest something to fold with.
+9. Specialization: a parameter a definition passes on to itself as it came,
+   which callers hand different known values, gets a copy of the definition
+   for each value, at most four, simplified with that value bound. A copy is
+   kept, and takes the calls handing its value, only where simplifying it
+   leaves fewer matches between two or more arms than its original, so a loop
+   is not copied for values it only carries. Then a parameter every caller the entry reaches hands one
+   known value is bound to that value in its definition, the calls read
+   again after copying, since a copy hands on what it holds. After
+   simplification, so what they hand is known. Each definition given a
+   value is then simplified again, with a budget of its own, so what it asks
+   of that value -- a known sequence's length, a match on it -- is answered
+   too. Simplifying one copy again skips call-graph construction and
+   ordering; several keep callee-first order and the same budgets.
+10. Joining rounds: inlining again, of only the definitions keeping a round
+    apart -- in a round with others, and no breaker -- with no identity or
+    folding. Simplifying and specializing change what calls what: a walk over
+    a list known to hold one element calls on rather than round, and a loop
+    nested in two others can be left as two definitions calling each other,
+    neither of them calling itself. Copying the one into the other leaves a
+    definition calling itself, which machine lowering makes a loop.
+11. Sweep: where there is an entry, drop every definition it does not reach,
+    renumbering function IDs in order. Types, constructors and constants stay.
+12. Effect-safe cleanup: remove aliases, unused inert terms -- constructors,
+    calls of pure definitions, and matches whose arms are all inert -- and
+    retain calls reaching an external routine. Inert work read only inside
+    one arm of a later match moves to the top of that arm, so the other arms
+    do none of it.
+
+Every normalizing stage (1, 4, 8 and 10) also decides what is already decided: a
+match on a known constructor is its arm, the length of a known sequence is a
+number, and a match whose arms agree is that
+arm. A match that is the last binding of a body answering a match on it, and
+read nothing else there, becomes one match: where each of its arms ends by
+building a constructor, that arm goes on into the second's arm for it. Only
+where no arm of the second is taken by two of the first, so nothing is copied
+twice. Fusion, descent, specialization, building a list's first element and
+writing in place add definitions; a copy's name is its original's and a number
+after a dot; a copy answering a list's first element is named with `.head`
+after it, and one answering a walk over it joins the two names with `+`; a walk written in place is named with `.place` after it, and what
+starts it with `.enter`; a fused walk's name joins its two halves' with `+`,
+and what they replace stays until nothing calls it.
+
+Each stage runs once, always; there are no switches. Tests isolating one stage
+call it directly within the crate. Inlining is also what gives range analysis
+most of its precision, so lowering an uninlined program can need wider values.
+`normalize_with_limits` does structural-only rebuilding when any inline limit is
+zero, without planning expansions. Recognition still runs to protect arithmetic
+definitions; this is not a claim that structural normalization performs no analysis.
+
+`InlineLimits` bounds copied arena entries per callee, per caller and across the whole
+program, plus expansion depth. Large callees are refused before copying; exhausted
+budgets leave ordinary calls. Structural copying of the input itself is not charged
+as expansion. Normalization reads existing slots and appends new ones without
+cloning the program. Function roots change only after all bodies have been rebuilt,
+so inlining always reads original callees and respects their original cost/depth
+limits. Superseded slots remain until cleanup.
+
+`FoldLimits` bounds aggregate work, work per definition, encoded value size and
+evaluation depth. Work
+includes expression visits, copied bytes and conservative bigint word-operation
+estimates. Result-size and work checks precede native arithmetic and constructor
+concatenation. Limits are optimization policy, never language integer limits; a
+refused fold retains the original expression, and a refused constant
+combination is left uncombined. A loop evaluated costs work for every time
+round, and depth only for what it nests. Traversing/recognizing the input is not covered by evaluator
+fuel.
+
+Final-program analysis also records bounded affine forms of recognized natural
+arithmetic. A form holds a `u64` constant and at most eight local terms with `u64`
+coefficients. Addition combines forms; multiplication scales one only when the
+other is constant. Overflow, a ninth term, a nonlinear product, monus, division,
+modulus, comparison or control flow ends the summary. This is deliberately not a
+polynomial normalizer: it scales affine forms by constants but never multiplies two
+nonconstant forms or changes Barb's five expression kinds. Machine lowering
+materializes summaries as arithmetic on their original leaf locals; dead source
+operations then leave during machine-IR pruning. Source functions named like arithmetic remain ordinary calls unless their
+equations are structurally recognized.
+
+Cleanup walks bindings backward, accounting for captures in nested match arms, then
+renames retained locals. It records not only whether a local is read but where: an
+inert binding read only inside one arm of one later match is planned into that
+arm, ahead of the arm's own bindings and in the order written, and what it reads
+is then read in that arm too, so a chain of inert work moves with it. Each run
+moves work one match down. A body left answering its last binding answers that
+binding's expression. Dead constructor chains disappear in this single traversal;
+there is no fixed-point loop.
+
+A definition is pure where it is recognized as an operation, or has a body and
+calls only pure definitions and those in its own round of recursion; an
+external routine, and anything that reaches one, is not. A call of a pure
+definition is inert, and so is a match every arm of which is inert: it answers
+whichever arm it takes. Inert work may go where nothing reads it and move to
+the one arm that does, even though a pure call may not come back: leaving it
+uncalled only ever does less. A call reaching an external routine is retained
+even when its result is unused, and never moves: skipped on one path, or moved
+past another such call, it would change what the program does. Pure work moves
+past it freely. In particular, dropping a
+constructor does not drop eager calls reaching external routines that computed
+its fields. Folded, now-unused product
+constants no longer demand runtime representations; live products lower to
+their fields' machine values and payload-carrying sums to machine cells.
+
+Cleanup is also the term-arena compaction point. It borrows the original program,
+builds a fresh `TermArena`, then hands it and all remapped function roots to
+`Program::replace_terms`. Every definition the sweep kept is retained. Recognized arithmetic equations are copied without semantic rewriting, with
+expression sharing preserved; liveness rewriting remains occurrence-specific.
+Names, declarations, type lists and constant storage are neither cloned nor moved.
+Constant-pool garbage collection is not part of this pass.
+
+`TermArena` groups the same four contiguous buffers, without another heap layer.
+Normalization appends to the existing arena and publishes roots after rebuilding;
+cleanup moves replacement buffers into place without cloning them. The two passes
+share storage operations, not traversal, liveness or inlining policy. Storage
+construction still assumes valid references and lexical scopes; it neither brands
+IDs nor makes panicking builders or iterators transactional.
+
+Read-only walks borrow pool slices; mutating folding traverses stable ranges
+one entry at a time instead of copying binding/arm lists. Range propagation borrows
+the current result table for each function, then publishes its answer; it does not
+snapshot the whole table per function or delay answers until the next round.
+Constants carry their types in the pool: `Expr::Static(ConstId)` and
+`Builder::known(ConstId)` cannot independently attach a different type. Type
+constructors are assigned once; a pending declaration is distinct from a defined
+empty type. Recursive and mutually recursive declarations remain possible.
+
+`type_shape(program, id)` classifies declarations structurally as uninhabited,
+unit, wrapper, product, natural, sequence, wider spine, enumeration, or general
+sum. A sequence is exactly an empty constructor plus a step with one payload and
+one recursive field; its element may be any type. Names and constructor order do
+not participate. Machine representation selection uses this exhaustive view
+instead of rediscovering products, naturals, and byte spines independently.
+Machine lowering uses this view to erase units, unwrap transparent wrappers,
+flatten eligible products, and select scalar, buffer, inline, or managed-cell
+representations. The selected pipeline, target capabilities, and proven facts
+determine which layouts apply. `Shape` is the constant codec's own
+view of an encoding and answers a different question; representation selection
+does not read it.
+
+`Program::constant(id).view()` classifies a validated value as `Natural`, `Spine`,
+or `Constructor`, with private, shape-specific handles. A natural is a zero-payload
+spine; the `Spine` case has element payloads. Constant encoding is structural,
+never based on source names. `NaturalView::try_u64()` can fail only with `TooWide`;
+`to_biguint()` reads the magnitude without expanding the spine. `SpineView` supplies
+its length and an explicit `ByteView` capability. Every constant has a total
+`constructor()` query that inspects the header without allocating a bigint or
+computing a predecessor. Tail decomposition does that work only when requested.
+Ordinary constructor fields can be borrowed with a budget.
+
+`Program::intern` checks constructor trees; `intern_number`, `intern_natural`, `intern_byte_spine`, and their builder entry
+points return `Result`. Number insertion rejects undefined and non-natural shapes;
+byte-spine insertion requires one recursive field and one element field that is
+a natural or wraps one, since a wrapper encodes as what it wraps.
+All checks run before bytes are written. Failed construction never changes the
+pools. There is no way in from raw bytes, so every constant is canonically
+encoded; the folder builds compound constants from fields it has checked. The byte format and
+`known_bytes` remain unchanged; a tree decoder remains only as an independent test
+oracle. IDs are still unbranded and must be used with their owning program; this
+is not a full type checker for dynamic Barb expressions.
+
+`ConstructionError` describes invalid input. `LimitExceeded`
+distinguishes work, depth and value-size refusal. Evaluation separately reports
+dynamic inputs, opaque calls and limits; only the folding driver decides to keep
+an expression. Invalid construction in otherwise well-typed Barb is an invariant
+violation, not a routine reason to decline folding. Field scans share evaluation's
+depth and work budget, and construction still reserves encoded size before copying.
+Pool construction checks fields once and assembles from borrowed inputs. Compound results
+still use an owned staging buffer so pool reallocation cannot invalidate input
+slices and resource refusal leaves storage unchanged. Former field-copy charges
+remain conservative reservations: removing those temporary buffers does not alter
+folding thresholds. Entries and bytes remain compact, contiguous and append-only,
+without deduplication or per-value heap objects in the pool.
+Leaf bigint conversions are total; evaluation size-checks arguments before using
+them. Evaluation results remain owned byte buffers. Buffer sharing and arena
+branding are separate decisions.
+
+Compaction invalidates old expression IDs and term ranges, including saved bodies
+and expression-indexed facts. Function, type, constructor, symbol and constant IDs
+stay stable; expression-indexed facts are dropped with the old arena, so
+analyze after optimizing. Until cleanup runs, the append-only arena history
+stays in place; memory reclamation is not required for semantics.
+
+Identities preserve monus and zero-divisor semantics. In particular, `x / x` is not
+rewritten to one. Argument bindings remain eager even when a law makes their values
+irrelevant. Bodyless calls may have effects or fail to return: passes preserve their
+order, multiplicity and selected path. A whole call or match is folded only if every
+selected eager binding evaluates successfully.
