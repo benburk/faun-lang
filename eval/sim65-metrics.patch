@@ -1,0 +1,90 @@
+diff -u -r a/src/sim65/main.c b/src/sim65/main.c
+--- a/src/sim65/main.c
++++ b/src/sim65/main.c
+@@ -298,6 +298,7 @@
+     MemInit ();
+ 
+     SPAddr = ReadProgramFile ();
++    MemCountWrites ();
+ 
+     ParaVirtInit (I, SPAddr);
+ 
+diff -u -r a/src/sim65/memory.c b/src/sim65/memory.c
+--- a/src/sim65/memory.c
++++ b/src/sim65/memory.c
+@@ -48,6 +48,10 @@
+ /* THE memory */
+ static unsigned char Mem[0x10000];
+ 
++/* Each address the program has written since MemCountWrites */
++static unsigned char Written[0x10000];
++static unsigned char Counting;
++
+ 
+ 
+ /*****************************************************************************/
+@@ -60,6 +64,7 @@
+ /* Write a byte to a memory location */
+ {
+     Mem[Addr] = Val;
++    Written[Addr & 0xFFFF] = Counting;
+ }
+ 
+ 
+@@ -101,6 +106,26 @@
+ }
+ 
+ 
++
++void MemCountWrites (void)
++/* Count the bytes written from here on: what is loaded before is the image */
++{
++    Counting = 1;
++}
++
++
++
++unsigned MemWritten (void)
++/* Return how many different addresses were written since MemCountWrites */
++{
++    unsigned Addr, Count = 0;
++    for (Addr = 0; Addr < sizeof (Written); ++Addr) {
++        Count += Written[Addr];
++    }
++    return Count;
++}
++
++
+ 
+ void MemInit (void)
+ /* Initialize the memory subsystem */
+diff -u -r a/src/sim65/memory.h b/src/sim65/memory.h
+--- a/src/sim65/memory.h
++++ b/src/sim65/memory.h
+@@ -62,6 +62,12 @@
+ ** overflow.
+ */
+ 
++void MemCountWrites (void);
++/* Count the bytes written from here on: what is loaded before is the image */
++
++unsigned MemWritten (void);
++/* Return how many different addresses were written since MemCountWrites */
++
+ void MemInit (void);
+ /* Initialize the memory subsystem */
+ 
+diff -u -r a/src/sim65/paravirt.c b/src/sim65/paravirt.c
+--- a/src/sim65/paravirt.c
++++ b/src/sim65/paravirt.c
+@@ -126,6 +126,10 @@
+     if (PrintCycles) {
+         Print (stdout, 0, "%lu cycles\n", GetCycles ());
+     }
++    /* For a harness: the time taken and the memory the program wrote */
++    if (getenv ("SIM65_METRICS")) {
++        Print (stderr, 0, "sim65 cycles %lu written %u\n", GetCycles (), MemWritten ());
++    }
+ 
+     exit (Regs->AC);
+ }

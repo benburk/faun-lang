@@ -1,0 +1,10 @@
+# Paths a candidate may not change. The evaluator, its programs, its tools and
+# the rules it states are fixed for a series; changing them needs approval and
+# starts a new series in ratchet/log.tsv.
+eval/
+RATCHET.md
+justfile
+flake.nix
+flake.lock
+crates/faun/examples/benchmarks-game/
+crates/faun/examples/libraries/md5/

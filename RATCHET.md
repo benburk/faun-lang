@@ -1,0 +1,86 @@
+# Ratchet
+
+The ratchet improves the compiler: the frontend, Barb, the backends and the standard library. Each candidate is a git revision. `just eval <candidate> [incumbent]` builds both revisions' compilers, has each compile the suite's programs for every target with every backend, holds what the programs print to their C twins, and measures them. The incumbent defaults to the last commit the branch's log calls accepted, and to `origin/main` where it has none. Once the compilers are built, a run takes about ten seconds, on a busy machine too, because what decides is counted rather than timed.
+
+## What is measured
+
+**The suite** is fourteen programs, each a `main.fn` beside a C twin `main.c`. Nine are in [`crates/faun/examples/benchmarks-game`](crates/faun/examples/benchmarks-game/README.md): the game's eight and MD5. Five small kernels are in [`eval/workloads`](eval/workloads): checksum, collatz, queens, sieve and sort, written without floats so that they fit the 6502 and cc65 can build their twins. Every program is plain Faun, written as one would teach the algorithm, and every twin is C as plain.
+
+**A cell** is one program on one target with one backend. The targets are x86-64 Linux, wasm32 WASI and the 6502 under sim65; the backends are stock and lab. A cell has four measures, and lower is better in each:
+
+| Metric | x86-64 Linux        | wasm32 WASI    | 6502 sim65    |
+| ------ | ------------------- | -------------- | ------------- |
+| speed  | instructions        | fuel           | cycles        |
+| memory | resident memory     | memory touched | bytes written |
+| size   | image bytes         | module bytes   | image bytes   |
+| small  | the same, `--small` | the same       | the same      |
+
+- **Speed** is the work a run took, in the target's own count: instructions run in user space, Wasmtime's fuel, the simulator's cycles. A count is the same from run to run whatever else the machine is doing, so one run of each image is enough and the cells run side by side.
+- **Memory** is the most the program held: on x86-64 the pages resident, read from its page tables; on wasm32 the pages of linear memory it read or wrote, the memory's own size growing 64 KiB at a time; on the 6502 the different bytes it wrote.
+- **Size** is the image built favouring speed, as `faun build` does, and **small** the image built `--small`. A change may spend size for speed where it leaves `--small` alone.
+
+Each target measures at its own input size, in `eval/ratchet.py`'s table, small enough that a run takes a fraction of a second. Floats are in software on wasm32 and the 6502, so their sizes there are tiny.
+
+**The C twins** are built with `gcc -O3` for x86-64, clang `-O3` with wasi-libc for wasm32 and `cl65 -O` for the 6502, and measured the same way on the same simulator or runtime. A twin missing on a target leaves the cell measured without it: cc65 has no floats, and there is no GMP beyond x86-64. The twins are the same for both sides, so they do not move a verdict. They say how far there is to go, in [`ratchet/standings.md`](ratchet/standings.md).
+
+**Not measured:** Apple Silicon macOS, whose host builds none of the suite and whose images run on nothing here; compressed source, since the programs are fixed; how long compiling takes.
+
+## Promotion
+
+**Incumbent.** No tags are used: the log and the trunk are the record. The incumbent is the newest commit that the candidate's own `ratchet/log.tsv` records as `accept` or `override`, where that commit is in the candidate's history and not yet in `origin/main`. Otherwise it is `origin/main`. So a branch climbs from its last accepted commit, and once it is merged the trunk is what the next branch must beat. `just eval <candidate> <incumbent>` names another.
+
+**Golden.** Every image, built for speed and built `--small`, must print exactly what the C twin built for this machine prints at a size drawn afresh from each run's seed, and the measured image again at the measured size, leaving with status zero and nothing on standard error. A measure the incumbent has and the candidate lacks, because the program no longer builds, fits or agrees, rejects the candidate whatever else it gained.
+
+**Score.** Each measure of each cell is the candidate's over the incumbent's. The score is the geometric mean of them all, weighed so that each target's metric counts the same however many programs run there: twelve groups, a target's speed, memory, size and small. The gain is the part of the score the better cells make, and the loss the part the worse ones make.
+
+**A candidate is accepted when all of these hold:**
+
+- nothing that ran for the incumbent is broken;
+- the gain is at least twice the loss, and more than nothing;
+- no cell is more than 10% worse, a memory counting only where it is also 16 KiB larger, or 128 bytes on the 6502;
+- where the run was timed, no x86-64 program takes longer, as below;
+- it changes no protected path.
+
+So a small regression is paid for by a gain twice its size somewhere else, and a large one by nothing. A rejected change I still want is my call: log it as `override`. Only a committed candidate, scored on the whole suite by the pinned evaluator, is promoted: the summary names anything else under `not a promotion`.
+
+**Repairs.** A measure the candidate has and the incumbent lacks counts as a halving: a program that starts to fit the 6502, or to run at all. A 6502 program too large for the machine's 64 KiB on both sides still counts by where its image would end, so shrinking one towards fitting is a gain.
+
+**Noise.** `just noise` measures the incumbent against itself and must say `quiet`. Sizes, fuel, cycles and all three memories are exact. x86-64 instructions differ between runs by about a part in ten million, so counts within one part in a hundred thousand are the same. An image whose bytes did not change earns no change in speed or memory. Measured across six passes with every core of the machine busy, nothing else differed.
+
+**Time.** Instructions are not seconds: a change can run fewer and take longer. `just eval --time <cpu>` also times the x86-64 images, pinned to that CPU: after a run to warm each, the candidate, the incumbent and the twin take turns, one run each in turning order, for at least five turns and as many as take a quarter of a second. A run's time is the processor time it was given. A program takes longer where both the candidate's quickest run and its median run are more than 10%, and a quarter of a millisecond, over the incumbent's: on a busy CPU a lucky run fools the quickest and a burst the median, seldom both. Times only reject; they earn nothing. Time a candidate before promoting it wherever its x86-64 instruction counts moved, on an idle CPU where there is one.
+
+Every run writes a new JSON report to `ratchet/reports/` in the main checkout (gitignored, never overwritten). It holds both commits and compilers' hashes, the evaluator's commit, the machine, the tools, the seed, every cell's measures for both sides and the twin, the score and the verdict.
+
+## Climbing
+
+1. **Start.** Work on a branch `ratchet/<goal>` from `origin/main`, committing each candidate there. Push or merge only when I ask. Read `ratchet/log.tsv` and `ratchet/FINDINGS.md` first, and don't retry a rejected idea without a new reason.
+2. **Change one thing** and commit it. Debug with quick runs: `just eval --only fasta`, `faun emit`, a profiler on a `--symbols` build. Only a full `just eval`, with no `--only`, decides. It says which incumbent it scores the checkout against, and prints the path of its report.
+3. **Record every evaluation** as a row in `ratchet/log.tsv`, with these tab-separated columns, all but the first three from the run's summary:
+   - `series`: the current series number;
+   - `commit`: short hash;
+   - `idea`: a one-line description;
+   - `score`: the overall score, below one being better;
+   - `speed`, `memory`, `size` and `small`: each metric's change across the targets;
+   - `worst`: the worst cell's ratio;
+   - `verdict`: the verdict and its reasons;
+   - `report`: the report's file name.
+4. **Rejected:** log it, revert the candidate and keep iterating.
+5. **Accepted:** read the diff against the shortcuts below, run `just check` and `just test`, and add a test that exercises the change, since equal output on fourteen programs does not prove a compiler correct. Then log it as `accept`: once that row is committed, the commit is the incumbent for whatever the branch tries next. Run `just standings` and commit it with the row. A rebase gives the accepted commits new hashes, so write those into their rows, or the trunk is the incumbent again.
+6. After five rejections in a row, step back: profile, read what the slow cells run, and try a bigger or different change. Write what was learned in `ratchet/FINDINGS.md`.
+
+## Protected paths
+
+The evaluator runs from an export of `origin/main`, never from the working tree: what is merged there is what I approved. So a candidate cannot run its own judge, and the programs, twins and sizes it measures are the trunk's as of the last fetch. It exports other revisions, such as the incumbent, into `~/.cache/faun-ratchet` and caches their compilers per commit, so it creates no git worktrees. `eval/protected.txt` lists the evaluator, the suite, the tools' versions and these rules. `just eval` rejects a candidate whose branch changes them. Changing one needs my approval, is a pull request of its own, and starts a new series in the log once it is merged.
+
+`just eval --unpinned` runs the working tree's evaluator instead, for working on the evaluator itself. Its verdict is a measurement, never a promotion.
+
+## Shortcuts that don't count
+
+- Recognizing the suite: a program by its name, path, text or hash, an input by its size or bytes, or a shape only one of these programs has. Barb recognizes by shape what a definition computes; a recognition counts when it is as general as that and a program outside the suite shows it.
+- Precomputed answers: an output, a table or a folded result for the sizes measured.
+- Detecting the measurer: fuel, the simulator, the counter, the tracer or the seed.
+- Giving up semantics for a count: a check dropped, an overflow or a full heap or a deep stack no longer reported, memory no longer freed, output no longer written when the program says.
+- Moving work where it is not counted, such as into the kernel on x86-64. The time guard is there to see it.
+- Editing the suite, the twins, the sizes or the rules, or deleting or loosening tests.
+
+Equal output does not prove the work was done, so review each accepted diff before logging it as accepted.

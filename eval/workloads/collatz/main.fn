@@ -1,0 +1,28 @@
+# Find the start below a limit whose Collatz chain is the longest: halve an
+# even number, triple an odd one and add one, until it is 1.
+
+import std.host {Host}
+
+# How many steps take `n` to 1, counted on from `count`.
+steps : (Nat, Nat) -> Nat
+steps(1, count) -> count
+steps(n, count) if n % 2 == 0 -> steps(n / 2, count + 1)
+steps(n, count) -> steps(3 * n + 1, count + 1)
+
+# The start with the most steps and how many it takes; the first of equals.
+longest : Nat -> (Nat, Nat)
+longest(limit) -> List.range(limit).drop(1).fold((1, 0), |(best, most), start| (
+  count = steps(start, 0)
+  if count > most then (start, count) else (best, most)
+))
+
+expect steps(27, 0) == 111
+expect longest(10) == (9, 19)
+
+main! : Host -> []
+main!(host) -> (
+  limit = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  (start, count) = longest(limit)
+  printed = host.println!("${start} ${count}")
+  host.exit!(0)
+)

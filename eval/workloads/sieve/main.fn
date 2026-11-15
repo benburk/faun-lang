@@ -1,0 +1,28 @@
+# Count the primes below a limit with the sieve of Eratosthenes.
+
+import std.host {Host}
+
+# Strike every `step`th number from `at` on.
+strike : (List(Bool), Nat, Nat) -> List(Bool)
+strike(prime, at, _) if at >= prime.len() -> prime
+strike(prime, at, step) -> strike(prime.put(at, False), at + step, step)
+
+# Strike each prime's multiples from its square on, which is where the
+# first one no smaller prime has struck lies.
+sieve : (List(Bool), Nat) -> List(Bool)
+sieve(prime, n) if n * n >= prime.len() -> prime
+sieve(prime, n) if prime.get_or(n, False) -> sieve(strike(prime, n * n, n), n + 1)
+sieve(prime, n) -> sieve(prime, n + 1)
+
+primes : Nat -> Nat
+primes(limit) -> sieve(List.repeat(True, limit).put(0, False).put(1, False), 2).count(|prime| prime)
+
+expect primes(0) == 0 & primes(2) == 0 & primes(3) == 1
+expect primes(100) == 25
+
+main! : Host -> []
+main!(host) -> (
+  limit = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${primes(limit)}")
+  host.exit!(0)
+)
