@@ -351,7 +351,7 @@ impl<'a> Checker<'a> {
                     associated,
                     bare: false,
                     through,
-                    numeral: false,
+                    numeral: None,
                 });
                 progress = true;
             }
