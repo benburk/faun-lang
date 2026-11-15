@@ -73,8 +73,7 @@ mod tests;
 ///
 /// # Errors
 ///
-/// Names a program with no entry, which has nothing to run, and the first
-/// type whose representation is not decided.
+/// Names the first type whose representation is not decided.
 pub fn lower(program: &barb::Program, routines: &Routines) -> Result<Program, String> {
     lower_with(program, routines, Arguments::Made)
 }
