@@ -1,136 +1,192 @@
 # barb
 
-A simple compiler backend language with value semantics and automatic representation selection.
+Barb is Faun's main IR: a small backend language with value semantics,
+where the compiler selects every representation.
 
-The idea is that, by encoding very little information in the program, there are fewer concepts to learn, and the compiler can derive the facts easily and optimize them.
+It sits where GHC's Core does, between the frontend and machine lowering,
+but it is smaller: first-order, monomorphic and in A-normal form, with no
+lambdas, type abstraction or laziness. There are five expression kinds.
+Barb keeps the high-level shape of a program: types are still
+constructors, loops are still recursion, a list is still a list. Because
+the program says so little, there are few concepts to learn, and the
+patterns worth optimizing are easy to find.
 
 ## Goals
 
 - Competitive with LLVM with a fraction of the code
-- Better code gen on tricky targets, e.g. 6502
+- Better code generation on tricky targets, such as the 6502
 - Easy to add new backends
 
-## Responsibilities and API
+## Where Barb sits
 
-Barb is the shared, first-order value IR consumed by machine lowering.
 The frontend supplies fully monomorphized, defunctionalized definitions.
-Barb validates their structure, recognizes what they compute, derives facts,
-and rewrites them while preserving value and effect semantics.
+Barb validates their structure, recognizes what they compute, derives facts
+about them, and rewrites them while preserving value and effect semantics.
+Its output is still Barb, which machine lowering consumes along with the
+facts.
 
-Place a proof or rewrite at the earliest tier that can express it correctly.
-Barb owns list identities and fusion, recognized arithmetic, known values,
-sequence lengths, and value ranges. Machine IR uses these facts to choose
-representations, storage placement, ownership operations, and word widths.
-Target IR selects instructions, addressing modes, registers, and scheduling.
-Barb's in-place pass expresses a walk through functional list replacements.
-Machine lowering establishes when those replacements can reuse storage.
+Place a proof or rewrite at the earliest tier that can express it
+correctly:
 
-Recognition records a semantic capability in analysis. For example,
-`Facts::operation(function)` may answer `Operation::Add`, and
-`Facts::sequence_operation(function)` may answer
-`SequenceOperation::ReverseOnto`. The definition keeps its body. Other passes
-can use the fact to simplify a call, and lowering can implement the operation
-using the target's capabilities. `Program::claim` supplies a frontend assertion
-about an IEEE 754 operation whose equivalence the recognizer cannot establish;
-validation checks the claim's shape, so its correctness is the frontend's
-responsibility. These interfaces emit no machine instructions. The expression
-language remains locals, constructors, constants, calls, and matches.
-
-Recognized definitions are currently protected from rewriting and inlining.
-A new recognition rule must account for that policy as well as the equivalence
-it proves, so retaining a fact does not inadvertently block useful optimization.
-
-`Facts::rotation` records a structurally recognized left rotation, its bit
-width (8, 16, 32 or 64), and a count taken modulo that width. It is exposed
-only when range analysis proves that the input fits. Matching is bounded and
-uses equations, not names. The definition remains available as a fallback.
-Lowering expands the fact into portable arithmetic; x86 instruction selection
-can select ROL. Separately used intermediates remain live.
-
-`Facts::float_comparison` recognizes the sign of a difference after NaN
-canonicalization. Its contract includes unordered inputs and excludes the
-negative-zero exception. Native x86 can compare directly; portable lowering
-orders IEEE bit patterns. This requires no change to the expression language.
-
-`Facts::tree_role` summarizes recursive builders and readers with scalar
-payloads. It does not authorize an allocation strategy: machine IR still checks
-cell layouts, ownership, nonescape, connected construction, and region lifetime.
-Short constructor lists reversed onto a destination and multiplication of a
-float by two are value identities in normalization. The former is bounded to
-four elements; the latter reuses a compatible addition definition when present.
+- **Barb** owns list identities and fusion, recognized arithmetic, known
+  values, sequence lengths and value ranges.
+- **Machine IR** uses those facts to choose representations, storage
+  placement, ownership operations and word widths. Barb's in-place pass
+  expresses a walk as functional list replacements; machine lowering
+  establishes when those replacements can reuse storage.
+- **Target IR** selects instructions, addressing modes, registers and
+  scheduling.
 
 Machine recognizers remain useful fallbacks for hand-built IR and patterns
-exposed by later passes. Target-dependent profitability and physical storage
-choices stay below Barb.
+exposed by later passes. Target-dependent profitability and physical
+storage choices stay below Barb.
+
+## Nothing is blessed, only recognized
+
+Barb has no built-in integers, lists or strings. A number is recursion over
+constructors, and `Bool` is a two-constructor type like any other. Barb
+finds what a definition computes from its equations, never from its name,
+and records it as a fact:
+
+- `Facts::operation`: add, monus, multiply, divide, modulo, bitwise and, or
+  and xor, and power.
+- `Facts::sequence_operation`: length, reverse-onto, prepend, append, drop,
+  take and replace.
+- `Facts::rotation`, `Facts::float_comparison` and `Facts::tree_role`:
+  semantic summaries, described below.
+
+A recognized definition keeps its body. The body is the meaning; the fact
+lets other passes simplify a call, and lets lowering implement the
+operation with the target's capabilities. A target without the instruction
+walks the body. Recognition emits no machine instructions, and the
+expression language stays locals, constructors, constants, calls and
+matches.
+
+Recognized definitions are currently protected from rewriting and inlining.
+A new recognition rule must account for that policy as well as the
+equivalence it proves, so keeping a fact does not block useful
+optimization.
+
+There are two exceptions, both the frontend's responsibility:
+
+- `Program::claim` asserts that a definition computes an IEEE 754
+  operation, which no equation can establish. Validation checks only the
+  claim's shape.
+- `Program::byte_sequence` records that a type is the frontend's byte list
+  or string.
+
+The semantic summaries:
+
+- `Facts::rotation` records a structurally recognized left rotation, its
+  bit width (8, 16, 32 or 64), and a count taken modulo that width. It is
+  exposed only when range analysis proves that the input fits. Matching is
+  bounded and uses equations, not names. Lowering expands the fact into
+  portable arithmetic; x86 instruction selection can select ROL.
+  Separately used intermediates remain live.
+- `Facts::float_comparison` recognizes the sign of a difference after NaN
+  canonicalization. Its contract includes unordered inputs and excludes the
+  negative-zero exception. Native x86 can compare directly; portable
+  lowering orders IEEE bit patterns.
+- `Facts::tree_role` summarizes recursive builders and readers with scalar
+  payloads. It does not authorize an allocation strategy: machine IR still
+  checks cell layouts, ownership, nonescape, connected construction and
+  region lifetime.
+
+Short constructor lists reversed onto a destination, and multiplication of
+a float by two, are value identities in normalization rather than facts.
+The former is bounded to four elements; the latter reuses a compatible
+addition definition when present.
+
+## Facts about data
+
+Barb does not choose representations. `type_shape` classifies each type
+structurally, as unit, wrapper, product, natural, sequence, enumeration,
+general sum and so on, and analysis derives value ranges, sequence lengths,
+small affine summaries and purity. Machine IR chooses a representation from
+those facts and the target's capabilities, and a program cannot observe
+which it got.
+
+Passes rewrite the `Program` in place. They do not hand facts to one
+another: a pass asks for facts when it needs them, and `program.analyze()`
+derives them from the program as it stands. Only recognition is cached on
+the `Program`, because rewriting a body keeps what it means.
+
+Facts and IDs belong to their program revision, so reanalyze after
+rewriting. Sweep can renumber function IDs, and cleanup rebuilds expression
+IDs and term ranges. Type, constructor and constant IDs survive the
+schedule. Adding, removing or redefining functions invalidates the
+recognition cache; semantics-preserving body rewrites can reuse it. Facts
+attach to functions, types and fields where they can, because those survive
+rewriting.
+
+Final analysis obtains recognition, then computes ranges (including
+branch-local operands), affine summaries, purity, float comparison facts and
+tree roles.
+
+## API
 
 The public API is re-exported from `barb::mod.rs`.
 
-- Build types with `Program::declare_type` and `define_type`, and functions
-  with `declare` and `define`. `Builder` constructs bodies in A-normal form.
-  `set_entry` identifies the program's root.
-- Run `validate(&program)` before optimization. It checks structure under the
-  frontend's typing and arena-construction preconditions and returns a
-  `Refusal` on invalid input.
-- Run `optimize(&mut program)` for the ordered rewrite schedule below.
-- Run `program.analyze()` on the resulting program to obtain `Facts`.
-  A lowering tier with external guarantees uses `program.assuming(&assumed)`.
-  `Assumed` describes justified facts about entry parameters and bodyless
-  results, including supported float handling.
-- Query `Facts::operation`, `sequence_operation`, and `float` for recognized
-  meanings, `rotation`, `float_comparison`, and `tree_role` for semantic summaries,
-  `pure` for effect freedom, `held`, `takes`, `answers`, and `field` for ranges, and `affine`
-  for bounded affine summaries. `type_shape` classifies inductive declarations.
-  `Facts::arguments(expr)` gives operand ranges refined by the enclosing
-  branch, without narrowing other uses of the same value. Stock lowering uses
-  these bounds to narrow arithmetic operands; lab retains its machine guard
-  lowering for placement of tagged-natural decodes and masks.
-  `Program::byte_sequence` records the frontend's byte-list or string identity.
-- Use `Program::render_analyzed` to inspect a program with its facts.
-  `faun emit barb` exposes that view through the CLI.
-
-Facts and IDs belong to their program revision. Reanalyze after rewriting.
-Sweep can renumber function IDs, and cleanup rebuilds expression IDs and
-term ranges. Type, constructor, and constant IDs survive this schedule.
-Adding, removing, or redefining functions invalidates the internal recognition
-cache. Semantics-preserving body rewrites can reuse it. Final analysis obtains
-recognition, then computes ranges (including branch-local operands), affine
-summaries, purity, floating comparison facts, and tree roles. Consumers and passes
-request this analysis when they need facts.
+1. Build types with `Program::declare_type` and `define_type`, and
+   functions with `declare` and `define`. `Builder` constructs bodies in
+   A-normal form. `set_entry` identifies the program's root.
+2. Run `validate(&program)`. It checks structure under the frontend's
+   typing and arena-construction preconditions and returns a `Refusal` on
+   invalid input.
+3. Run `optimize(&mut program)` for the fixed schedule below.
+4. Run `program.analyze()` on the result to obtain `Facts`. A lowering tier
+   with external guarantees uses `program.assuming(&assumed)`. `Assumed`
+   describes justified facts about entry parameters and bodyless results,
+   including supported float handling.
+5. Query `Facts`:
+   - `operation`, `sequence_operation` and `float` for recognized meanings
+   - `rotation`, `float_comparison` and `tree_role` for semantic summaries
+   - `pure` for effect freedom
+   - `held`, `takes`, `answers` and `field` for ranges, and `arguments(expr)`
+     for operand ranges refined by the enclosing branch, without narrowing
+     other uses of the same value. Stock lowering uses these bounds to
+     narrow arithmetic operands; lab keeps its machine guard lowering for
+     placing tagged-natural decodes and masks.
+   - `affine` for bounded affine summaries
+   - `type_shape` to classify inductive declarations
+6. Use `Program::render_analyzed` to inspect a program with its facts.
+   `faun emit barb` exposes that view through the CLI.
 
 ## Input program requirements
 
-value semantics. a bodyless call is a value the target computes
+Barb has value semantics. A bodyless call is a value the target computes.
 
-- functions with bodies need not stop. A call whose answer is needed and never comes back
-  hangs the program there; pure work whose answer is not needed may be left out, so whether
-  it would have stopped is not observable. Nothing is concluded from a call having answered
-- bodyless functions
-  - can be used for representing effects
-  - must be bodyless, implemented by the target
-  - are observable: optimization keeps their calls in order among
-    themselves, made as often and on the same paths, with no world state
-    threaded through them. A function whose calls reach one is observable
-    too; one reaching none is pure (see cleanup below). Pure work may move
-    to either side of an observable call, and be left out where nothing
-    reads it, even where it would not have come back: a hang that moves past
-    an effect lets that effect happen first
-- must not have
-  - pointer equality, reference identity, identity hashing. since representation is selected for you.
-  - sizeof, alignment, layout dependent serialization, casts between representations
-  - weak refs, finalizers
-- whole source available. ish. backend will be able to dynamically link libs eventually
-- an entry is optional. Every defined function is validated whether or not
-  the entry reaches it. Optimization then keeps only what the
-  entry reaches, so what is checked is everything written and what is kept is
-  what runs; a program with no entry is checked, keeps every definition, and
-  lowers to nothing
-- must be fully defunctionalized and monomorphized
-- a function with a body may be claimed to compute an IEEE 754 operation
-  (`Program::claim`), where the frontend knows what no equation says. Its
-  body must then compute that operation on the patterns its wrapped naturals
-  hold, up to which NaN pattern a NaN is; validation checks only the claim's
-  shape. A target with float instructions answers it with one; everything
-  else, the evaluator excepted, walks the body.
+- **Fully defunctionalized and monomorphized.**
+- **Well-typed and exhaustive.** Validation checks structure, not types.
+- **Functions with bodies need not stop.** A call whose answer is needed
+  and never comes back hangs the program there. Pure work whose answer is
+  not needed may be left out, so whether it would have stopped is not
+  observable. Nothing is concluded from a call having answered.
+- **Bodyless functions are implemented by the target**, and represent
+  effects among other things. They are observable: optimization keeps their
+  calls in order among themselves, made as often and on the same paths,
+  with no world state threaded through them. A function whose calls reach
+  one is observable too; one reaching none is pure (see cleanup below).
+  Pure work may move to either side of an observable call, and be left out
+  where nothing reads it, even where it would not have come back: a hang
+  that moves past an effect lets that effect happen first.
+- **No identity or layout.** Because representation is selected for you,
+  there is no pointer equality, reference identity or identity hashing; no
+  sizeof, alignment, layout-dependent serialization or casts between
+  representations; and no weak references or finalizers.
+- **The whole program is available.** Dynamic linking of libraries may come
+  later.
+- **An entry is optional.** Every defined function is validated whether or
+  not the entry reaches it. Optimization then keeps only what the entry
+  reaches, so what is checked is everything written and what is kept is
+  what runs. A program with no entry is checked, keeps every definition,
+  and lowers to nothing.
+- **Claimed floats.** A function with a body may be claimed to compute an
+  IEEE 754 operation (`Program::claim`), where the frontend knows what no
+  equation says. Its body must then compute that operation on the patterns
+  its wrapped naturals hold, up to which NaN pattern a NaN is. A target
+  with float instructions answers it with one; everything else, the
+  evaluator excepted, walks the body.
 
 ## Semantics
 
@@ -473,6 +529,17 @@ The authoritative schedule is `optimize.rs::optimize`. After validation,
 runs once. Individual stages may analyze their input, and specialization
 resimplifies definitions to which it has supplied known values.
 
+The stages fall into four groups:
+
+- **Shape the program** (1-4): normalize, build lists forward, descend,
+  and inline, so later passes see loops as self-recursive walks.
+- **Remove list work** (5-7): fuse, demand only a first element, and
+  rewrite element-for-element walks in place.
+- **Fold what is known** (8-10): simplify callee-first, specialize on known
+  values, and join what specializing left calling each other.
+- **Tidy up** (11-12): sweep what the entry doesn't reach and clean up
+  unused pure work.
+
 1. Structural normalization: substitute local aliases, without expanding calls.
    It also floats a one-arm match, as reading a record's field is, over the rest
    of its body, so a record read several times is taken apart once. Inlining
@@ -701,6 +768,9 @@ selected eager binding evaluates successfully.
 
 ## Why this over LLVM
 
-- llvm makes you choose a representation before a target.
-- barb doesn't have to prove expensive things like pointer aliasing, purity
-- barb has no undefined behavior
+- LLVM makes a frontend choose a representation before it knows the
+  target. Barb picks one per target, from facts about the values.
+- Barb has no pointers, so it never needs alias analysis. Purity is a walk
+  of the call graph, not a proof about memory.
+- Barb has no undefined behavior. Every operation answers, hangs, or is an
+  effect the target defines.
