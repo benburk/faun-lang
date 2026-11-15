@@ -129,9 +129,12 @@ impl<'a> Lowerer<'a> {
         {
             return Err(error("the selected target does not provide `exit!`"));
         }
-        if let Some(entry) = &self.program.entry {
-            self.output.set_entry(self.function_ids[entry]);
-        }
+        let entry = self
+            .program
+            .entry
+            .as_ref()
+            .expect("only an application, which has an entry, is lowered to Barb");
+        self.output.set_entry(self.function_ids[entry]);
         barb::validate(&self.output).map_err(|refusal| self.refused(refusal))?;
         Ok(self.output)
     }
@@ -1537,7 +1540,7 @@ mod tests {
             if suffix == "$$text" {
                 // Text is a wrapper around a sequence, which is all a
                 // backend needs to hold it as bytes.
-                let text = program.function(program.entry().unwrap()).result;
+                let text = program.function(program.entry()).result;
                 let (_, bytes) = barb::single_field(&program, text).unwrap();
                 assert!(matches!(
                     barb::type_shape(&program, bytes),
@@ -1601,7 +1604,7 @@ mod tests {
             let mut program = program(&checked, entry).unwrap();
             barb::optimize(&mut program);
             barb::validate(&program).unwrap();
-            let body = program.function(program.entry().unwrap()).body().unwrap();
+            let body = program.function(program.entry()).body().unwrap();
             let barb::Expr::Static(value) = program.expr(body.tail) else {
                 panic!("{suffix} did not fold\n{}", program.render());
             };

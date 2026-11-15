@@ -93,9 +93,10 @@ fn tell(diagnostic: Diagnostic) {
     eprintln!("{diagnostic}");
 }
 
-/// Check a package against the target's host by lowering it as far as Barb.
+/// Check a package against the target's host: a library by the frontend
+/// alone, an application by lowering it as far as Barb.
 fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
-    faun::lower_to_barb(source, target)?;
+    faun::check_package(source, target)?;
     println!("checked {}", source.display());
     Ok(())
 }
@@ -111,15 +112,14 @@ fn build(
     symbols: SymbolTable,
 ) -> Result<(), Diagnostic> {
     let target = compiler.host();
-    let barb = faun::lower_to_barb(source, target)?;
-    if barb.entry().is_none() {
+    let faun::Package::Application(barb) = faun::check_package(source, target)? else {
         println!(
             "checked {}, a library with no `main!` to build",
             source.display()
         );
         return Ok(());
-    }
-    let image = compiler.compile(barb, favour, symbols)?;
+    };
+    let image = compiler.compile(*barb, favour, symbols)?;
     let written = write(target, &image, output)?;
     println!("wrote {}", written.display());
     Ok(())

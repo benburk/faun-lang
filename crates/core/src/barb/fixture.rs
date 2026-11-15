@@ -207,6 +207,43 @@ fn compare(p: &mut Program, id: FnId, (nat, zero): (TypeId, CtorId), answers: [C
     });
 }
 
+/// Give `program` an entry reaching every one of `roots`: it is handed each
+/// root's parameters from outside, calls each root with its own, and answers
+/// all their answers together. A test about several definitions is then one
+/// program with one entry, as every program is, and nothing it checks is
+/// unreachable.
+pub(crate) fn enter(program: &mut Program, roots: &[FnId]) -> FnId {
+    let results: Vec<TypeId> = roots
+        .iter()
+        .map(|&id| program.function(id).result)
+        .collect();
+    let answers = program.declare_type("Entered");
+    program.define_type(answers, &[("Entered", &results)]);
+    let answer = program.ctor_at(answers, 0);
+    let params: Vec<TypeId> = roots
+        .iter()
+        .flat_map(|&id| program.params(id).to_vec())
+        .collect();
+    let counts: Vec<usize> = roots.iter().map(|&id| program.params(id).len()).collect();
+    let entry = program.declare("enter", &params, answers);
+    let roots = roots.to_vec();
+    program.define(entry, |b, args| {
+        let mut taken = 0;
+        let answered: Vec<_> = roots
+            .iter()
+            .zip(&counts)
+            .map(|(&root, &count)| {
+                let called = b.call(root, &args[taken..taken + count]);
+                taken += count;
+                called
+            })
+            .collect();
+        b.con(answer, &answered)
+    });
+    program.set_entry(entry);
+    entry
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,7 +251,17 @@ mod tests {
 
     #[test]
     fn every_operation_is_recognised_from_its_equations() {
-        let library = Library::new();
+        let mut library = Library::new();
+        let operations = [
+            library.add,
+            library.sub,
+            library.mul,
+            library.div,
+            library.modulo,
+            library.equals,
+            library.less_than,
+        ];
+        enter(&mut library.program, &operations);
         let facts = library.program.analyze();
         for (id, expected) in [
             (library.add, Operation::Add),
@@ -266,7 +313,7 @@ mod tests {
         library.program.set_entry(main);
         crate::barb::optimize(&mut library.program);
         // What the entry does not reach is gone, and the entry renumbered.
-        let main = library.program.entry().expect("an entry");
+        let main = library.program.entry();
         let body = library.program.function(main).body().unwrap();
         let crate::barb::Expr::Static(value) = library.program.expr(body.tail) else {
             panic!("folded\n{}", library.program.render());

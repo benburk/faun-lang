@@ -3,9 +3,8 @@
 //! Inlining copies a helper into its callers and fusion writes a walk in
 //! place of two, and each leaves the definition it read behind. Nothing
 //! calls it any more, but every definition is a root to the passes before
-//! this one, so it stays until this: a program with an entry keeps what the
-//! entry reaches and nothing else. One without an entry is only checked,
-//! and every definition in it is what it is for, so it keeps them all.
+//! this one, so it stays until this: a program keeps what its entry reaches
+//! and nothing else.
 //!
 //! Function IDs are renumbered, keeping their order, so an ID held from
 //! before this names nothing or something else. Types, constructors and
@@ -14,11 +13,9 @@
 use super::{Expr, ExprId, FnId, Program};
 use crate::index::Pool;
 
-/// Keep only the definitions the entry reaches, where there is one.
+/// Keep only the definitions the entry reaches.
 pub(crate) fn sweep(program: &mut Program) {
-    let Some(entry) = program.entry else {
-        return;
-    };
+    let entry = program.entry();
     let (reached, calls) = reached(program, entry);
     if reached.iter().all(|&kept| kept) {
         return;

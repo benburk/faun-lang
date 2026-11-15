@@ -14,6 +14,20 @@ fn library() -> Program {
     super::fixture::Library::new().program
 }
 
+/// `id` of `original` in `optimized`, found by name: sweep renumbers what
+/// it keeps.
+fn same(original: &Program, optimized: &Program, id: FnId) -> FnId {
+    named(optimized, original.name(original.function(id).name))
+}
+
+/// The names of the bodyless calls `trace` recorded.
+fn names(program: &Program, trace: &[FnId]) -> Vec<String> {
+    trace
+        .iter()
+        .map(|&id| program.name(program.function(id).name).to_owned())
+        .collect()
+}
+
 fn named(program: &Program, name: &str) -> FnId {
     FnId::at(
         program
@@ -120,6 +134,7 @@ fn arithmetic_probes() -> (Program, Vec<FnId>) {
             }
         }
     }
+    super::fixture::enter(&mut original, &probes);
     validate(&original).unwrap();
     (original, probes)
 }
@@ -130,16 +145,26 @@ fn schedule_ablations_preserve_small_arithmetic_and_recognition() {
     let ty = original.params(named(&original, "add"))[0];
     let recognized = arithmetic::recognise(&original);
     for (schedule, stages) in schedules() {
-        let mut optimized = original.clone();
-        stages(&mut optimized);
-        validate(&optimized).unwrap();
-        assert_eq!(arithmetic::recognise(&optimized), recognized);
+        // Each probe is its own program, entered there.
         for &id in &probes {
+            let mut optimized = original.clone();
+            optimized.set_entry(id);
+            stages(&mut optimized);
+            validate(&optimized).unwrap();
+            let kept = arithmetic::recognise(&optimized);
+            for (at, function) in optimized.functions().iter().enumerate() {
+                let name = optimized.name(function.name);
+                if let Some(before) = (0..original.functions().len())
+                    .find(|&before| original.name(original.function(FnId::at(before)).name) == name)
+                {
+                    assert_eq!(kept[at], recognized[before], "{name}, {schedule}");
+                }
+            }
             for n in 0..6 {
                 let args = vec![super::tests::nat(&original, ty, n)];
                 let expected = run(&original, id, args.clone(), &mut vec![]);
                 assert_eq!(
-                    run(&optimized, id, args, &mut vec![]),
+                    run(&optimized, optimized.entry(), args, &mut vec![]),
                     expected,
                     "{}({n}), {schedule}",
                     original.name(original.function(id).name)
@@ -169,14 +194,14 @@ fn algebraic_arithmetic_collects_constants_in_safe_directions() {
         let id = algebra_probe(&mut original, name, called, ty, three, five);
         probes.push((name, id, called, expected));
     }
-    validate(&original).unwrap();
-
-    let mut optimized = original.clone();
-    optimize(&mut optimized);
-    validate(&optimized).unwrap();
-
     for probe in probes {
-        assert_normalized_arithmetic(&original, &optimized, ty, probe);
+        let mut entered = original.clone();
+        entered.set_entry(probe.1);
+        validate(&entered).unwrap();
+        let mut optimized = entered.clone();
+        optimize(&mut optimized);
+        validate(&optimized).unwrap();
+        assert_normalized_arithmetic(&entered, &optimized, ty, probe);
     }
 }
 
@@ -193,6 +218,7 @@ fn affine_facts_collect_shared_linear_terms_without_synthesizing_calls() {
         let sum = b.call(add, &[a, args[0]]);
         b.call(add, &[a, sum])
     });
+    program.set_entry(test);
     validate(&program).unwrap();
 
     let facts = program.analyze();
@@ -219,6 +245,7 @@ fn affine_facts_stop_at_nonlinear_products_and_the_term_limit() {
             .iter()
             .fold(args[0], |sum, &term| b.call(add, &[sum, term]))
     });
+    super::fixture::enter(&mut program, &[nonlinear, crowded]);
     validate(&program).unwrap();
 
     let facts = program.analyze();
@@ -263,8 +290,10 @@ fn assert_normalized_arithmetic(
     original: &Program,
     optimized: &Program,
     ty: TypeId,
-    (name, id, called, expected): (&str, FnId, FnId, u64),
+    (name, before, called, expected): (&str, FnId, FnId, u64),
 ) {
+    let id = optimized.entry();
+    let called = same(original, optimized, called);
     assert_eq!(calls_to(optimized, id, called), 1, "{}", optimized.render());
     let body = optimized.function(id).body().unwrap();
     let Expr::Call(actual, args) = optimized.expr(body.tail) else {
@@ -288,7 +317,7 @@ fn assert_normalized_arithmetic(
         let args = vec![super::tests::nat(original, ty, n)];
         assert_eq!(
             run(optimized, id, args.clone(), &mut vec![]),
-            run(original, id, args, &mut vec![]),
+            run(original, before, args, &mut vec![]),
             "{name}({n})"
         );
     }
@@ -339,15 +368,13 @@ fn effect_program() -> Program {
             b.call(mul, &[zero, effect])
         })
     });
+    original.set_entry(test);
     original
 }
 
 #[test]
 fn eager_effects_survive_folding_inlining_laws_and_cleanup() {
     let original = effect_program();
-    let first = named(&original, "first_effect");
-    let second = named(&original, "second_effect");
-    let test = named(&original, "eager_test");
     let helper = named(&original, "effect_then_zero");
     let ty = original.function(helper).result;
     for (schedule, stages) in schedules() {
@@ -355,10 +382,14 @@ fn eager_effects_survive_folding_inlining_laws_and_cleanup() {
         stages(&mut optimized);
         let mut trace = vec![];
         assert_eq!(
-            run(&optimized, test, vec![], &mut trace),
+            run(&optimized, optimized.entry(), vec![], &mut trace),
             super::tests::nat(&original, ty, 0)
         );
-        assert_eq!(trace, [first, second], "{schedule}");
+        assert_eq!(
+            names(&optimized, &trace),
+            ["first_effect", "second_effect"],
+            "{schedule}"
+        );
     }
     // The evaluator must decline the whole helper, even though its answer is
     // known: a refusal is not permission to skip an eager binding.
@@ -391,16 +422,17 @@ fn normalization_and_cleanup_keep_effects_on_their_original_paths() {
     });
     let test = program.declare("test", &[ty], ty);
     program.define(test, |b, args| b.call(helper, args));
+    program.set_entry(test);
     optimize(&mut program);
-    for (n, effect) in [(0, first), (1, second)] {
+    for (n, effect) in [(0, "zero_effect"), (1, "successor_effect")] {
         let mut trace = vec![];
         run(
             &program,
-            test,
+            program.entry(),
             vec![super::tests::nat(&program, ty, n)],
             &mut trace,
         );
-        assert_eq!(trace, [effect]);
+        assert_eq!(names(&program, &trace), [effect]);
     }
 }
 
@@ -467,6 +499,7 @@ fn refolding_only_rewrites_selected_functions() {
             b.call(mul, &[three, three])
         });
     }
+    super::fixture::enter(&mut program, &[first, second]);
     validate(&program).unwrap();
     let original = program.clone();
     super::normalize::resimplify(&mut program, &[]);
@@ -806,7 +839,7 @@ fn expressions(program: &Program, id: FnId) -> Vec<Expr> {
 #[test]
 fn cleanup_preserves_nested_captures_and_eager_constructor_arguments() {
     let original = nested_capture_program();
-    let test = original.entry().unwrap();
+    let test = original.entry();
     let ty = original.function(test).result;
     let mut cleaned = original.clone();
     super::cleanup::cleanup(&mut cleaned);
@@ -1415,6 +1448,7 @@ fn a_list_built_and_walked_once_is_never_built() {
         let five = b.known(five);
         b.call(w.index_over, &[sums, five, zero])
     });
+    super::fixture::enter(&mut p, &[summed, found]);
     validate(&p).unwrap();
     let original = p.clone();
     super::fuse::fuse(&mut p);
@@ -1449,6 +1483,7 @@ fn a_list_read_twice_is_built() {
         let second = b.call(w.total, &[bumped, zero]);
         b.call(w.add, &[first, second])
     });
+    super::fixture::enter(&mut p, &[twice]);
     super::fuse::fuse(&mut p);
     validate(&p).unwrap();
     assert!(callees(&p, twice).contains(&w.bump));
@@ -1479,6 +1514,7 @@ fn a_walk_reaching_a_bodyless_call_is_not_fused() {
         let zero = b.con(w.zero, &[]);
         b.call(noisy, &[bumped, zero])
     });
+    p.set_entry(main);
     super::fuse::fuse(&mut p);
     validate(&p).unwrap();
     assert!(callees(&p, main).contains(&w.bump));
@@ -1533,6 +1569,7 @@ fn a_descent_of_two_numbers_is_their_differences() {
             }
         })
     });
+    super::fixture::enter(&mut p, &[at_most, gap]);
     validate(&p).unwrap();
     let original = p.clone();
     super::descent::descend(&mut p);
@@ -1572,6 +1609,7 @@ fn a_decided_match_is_its_arm() {
         // Either way the same.
         b.match_(args[1], bool_, |b, _, _| b.call(add, &[known, known]))
     });
+    super::fixture::enter(&mut p, &[decided]);
     validate(&p).unwrap();
     let original = p.clone();
     super::structural(&mut p);
@@ -1649,6 +1687,7 @@ fn replacements_are_recognized() {
     };
     let put = replace(&mut p, "put", false);
     let bumped = replace(&mut p, "bumped", true);
+    super::fixture::enter(&mut p, &[put, bumped]);
     validate(&p).unwrap();
     let recognised = p.recognised().clone();
     let of = |id: FnId| recognised.sequences[id.index()];
@@ -1669,6 +1708,7 @@ fn a_list_reversed_twice_is_prepended() {
         let zero = b.con(w.zero, &[]);
         b.call(w.index_over, &[both, zero, zero])
     });
+    super::fixture::enter(&mut p, &[joined]);
     validate(&p).unwrap();
     let original = p.clone();
     super::fuse::fuse(&mut p);
@@ -1739,6 +1779,7 @@ fn a_list_read_for_its_first_element_is_built_no_further() {
     let (mut p, w) = walks();
     let tree = leaves(&mut p, &w, None);
     let first = first_leaf(&mut p, &w, tree);
+    super::fixture::enter(&mut p, &[first]);
     validate(&p).unwrap();
     let original = p.clone();
     super::head::heads(&mut p);
@@ -1768,6 +1809,7 @@ fn a_list_whose_rest_is_read_is_built_whole() {
         let all = b.call(tree, &[args[0], zero]);
         b.call(w.total, &[all, zero])
     });
+    super::fixture::enter(&mut p, &[summed]);
     super::head::heads(&mut p);
     validate(&p).unwrap();
     assert!(callees(&p, summed).contains(&tree));
@@ -1782,6 +1824,7 @@ fn a_list_reaching_a_bodyless_call_is_built_whole() {
     let effect = p.declare("effect!", &[w.nat], w.nat);
     let tree = leaves(&mut p, &w, Some(effect));
     let first = first_leaf(&mut p, &w, tree);
+    super::fixture::enter(&mut p, &[first]);
     super::head::heads(&mut p);
     validate(&p).unwrap();
     assert!(callees(&p, first).contains(&tree));
@@ -1902,6 +1945,7 @@ fn walked_no_further(walk: fn(&mut Program, &Walks) -> FnId, name: &str, deep: (
     let tree = leaves(&mut p, &w, None);
     let walk = walk(&mut p, &w);
     let first = first_walked(&mut p, &w, tree, walk);
+    super::fixture::enter(&mut p, &[first]);
     validate(&p).unwrap();
     let original = p.clone();
     // The walk's call goes to the copy, and what it walked is read by
@@ -1956,6 +2000,7 @@ fn a_walk_stopping_early_is_not_pushed_into_a_join() {
     let tree = leaves(&mut p, &w, None);
     let walk = upto(&mut p, &w);
     let first = first_walked(&mut p, &w, tree, walk);
+    super::fixture::enter(&mut p, &[first]);
     super::head::heads(&mut p);
     validate(&p).unwrap();
     assert!(callees(&p, first).contains(&tree), "{}", p.render());
@@ -1998,6 +2043,7 @@ fn a_search_over_a_joined_list_stops_at_what_it_accepts() {
         let all = b.call(tree, &[args[0], zero]);
         b.call(any, &[all, args[1]])
     });
+    super::fixture::enter(&mut p, &[some]);
     validate(&p).unwrap();
     let original = p.clone();
     super::head::heads(&mut p);
@@ -2046,6 +2092,7 @@ fn short_reversal_preserves_shared_values_and_effect_order() {
         reversed
     });
     let original = p.clone();
+    p.set_entry(entry);
     super::normalize::identities(&mut p);
     validate(&p).unwrap();
     assert!(!callees(&p, entry).contains(&w.reverse));

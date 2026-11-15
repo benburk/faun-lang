@@ -10,7 +10,7 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
         let nat = source.params(add)[0];
         let value = source.intern_natural(nat, &magnitude).unwrap();
         let zero = source.intern_number(nat, 0).unwrap();
-        source.define(source.entry().unwrap(), |b, _| {
+        source.define(source.entry(), |b, _| {
             let n = b.known(value);
             let sum = b.call(add, &[n, n]);
             b.match_(sum, nat, |b, _, _| b.known(zero))
@@ -43,7 +43,7 @@ fn an_unbounded_entry_result_is_not_silently_truncated() {
     let value = source
         .intern_natural(nat, &(BigUint::from(1u8) << 100usize))
         .unwrap();
-    source.define(source.entry().unwrap(), |b, _| b.known(value));
+    source.define(source.entry(), |b, _| b.known(value));
     let error = lower(&source, &crate::platform::Routines::builtin()).unwrap_err();
     assert!(error.contains("unbounded"), "{error}");
 }

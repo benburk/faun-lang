@@ -556,7 +556,7 @@ fn detached_arena_expressions_do_not_demand_a_representation() {
     let nat = source.params(exit)[1];
     assert_eq!(source.ctor(zero).owner, nat);
     let zero = source.intern_number(nat, 0).unwrap();
-    source.define(source.entry().unwrap(), |b, args| {
+    source.define(source.entry(), |b, args| {
         let zero = b.known(zero);
         b.call(exit, &[args[0], zero])
     });

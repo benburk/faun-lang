@@ -182,10 +182,7 @@ impl Sites {
                 .map(|at| vec![true; program.params(FnId::at(at)).len()])
                 .collect(),
         };
-        let reached = entry.map_or_else(
-            || vec![true; count],
-            |entry| super::sweep::reached(program, entry).0,
-        );
+        let reached = super::sweep::reached(program, entry).0;
         for (at, &reached) in reached.iter().enumerate() {
             let id = FnId::at(at);
             if let Some(body) = program.function(id).body()
@@ -199,7 +196,7 @@ impl Sites {
         // entry is called by nothing here.
         for (at, calls) in sites.calls.iter_mut().enumerate() {
             let id = FnId::at(at);
-            if recognised.answered(id) || entry == Some(id) {
+            if recognised.answered(id) || entry == id {
                 calls.clear();
             }
         }

@@ -42,7 +42,8 @@ impl Compiler {
         favour: Favour,
         symbols: SymbolTable,
     ) -> Result<Vec<u8>, Diagnostic> {
-        let program = faun::optimize_application(program)?;
+        let mut program = program;
+        barb::optimize(&mut program);
         match self {
             Self::Target(target, pipeline) => {
                 let ir = faun_core::lower_with_pipeline(&program, &target.routines(), pipeline)

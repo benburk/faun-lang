@@ -85,23 +85,45 @@ pub fn standard_path() -> &'static Path {
     standard::root_module()
 }
 
-/// Check the Faun package at `source` against `target`'s host and lower it
-/// to Barb, before any optimization.
+/// A checked package.
+#[derive(Debug)]
+pub enum Package {
+    /// A package with no `main!`. The frontend's checks are all a library
+    /// has: nothing enters it, so it has no Barb.
+    Library,
+    /// A package whose entry defines `main!`, and its Barb, before any
+    /// optimization, starting there.
+    Application(Box<barb::Program>),
+}
+
+/// Check the Faun package at `source` against `target`'s host, and lower it
+/// to Barb where it is an application.
 ///
-/// Every definition the package writes that can stand on its own is lowered
-/// and checked, whether or not anything calls it, and so is every `expect`.
-/// The entry defining `main!` makes it an application, whose Barb starts
-/// there; without one it is a library, whose Barb has no entry and so
-/// nothing to build.
+/// Every definition the package writes that can stand on its own is
+/// checked, whether or not anything calls it, and so is every `expect`.
 ///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
-pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
+pub fn check_package(source: &Path, target: &dyn Target) -> Result<Package, Diagnostic> {
     let loaded = load(source, target)?;
     let main = Main::find_in(&loaded)?;
     let (program, cx) = resolve(loaded)?;
     let program = host::sign_main(program, &cx, main.as_ref());
     lower(program, cx, main.as_ref(), target)
+}
+
+/// Check the Faun application at `source` against `target`'s host and lower
+/// it to Barb, before any optimization.
+///
+/// # Errors
+/// Reports a library, which has no `main!` to lower, and loading,
+/// resolution, checking or lowering errors.
+pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
+    match check_package(source, target)? {
+        Package::Application(barb) => Ok(*barb),
+        Package::Library => Err(Diagnostic::new("a library has no `main!` to build")
+            .help("write `main! : Host -> []` and a clause `main!(host) -> ...`")),
+    }
 }
 
 /// A package's expectations, built to be run.
@@ -130,8 +152,13 @@ pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, 
     let (program, mut cx) = resolve(loaded)?;
     let program = host::sign_main(program, &cx, application.as_ref());
     let (program, expectations) = expectations::enter(program, &mut cx, &main);
-    let barb = lower(program, cx, Some(&main), target)?;
-    Ok(Tests { barb, expectations })
+    let Package::Application(barb) = lower(program, cx, Some(&main), target)? else {
+        unreachable!("the expectations' runner is an application")
+    };
+    Ok(Tests {
+        barb: *barb,
+        expectations,
+    })
 }
 
 /// Read the package at `source`, beside the standard package and `target`'s
@@ -161,7 +188,7 @@ fn lower(
     mut cx: Context,
     main: Option<&Main>,
     target: &dyn Target,
-) -> Result<barb::Program, Diagnostic> {
+) -> Result<Package, Diagnostic> {
     let typed = checked(program, &mut cx)?;
     if let Some(main) = main {
         host::check_application_abi(&typed, &cx, main)?;
@@ -172,7 +199,11 @@ fn lower(
     let program = callbacks::lower(program, &cx)?;
     linearity::check(&program, &typed, &cx, &routines)?;
     let program = pattern_compile::compile(program, &cx)?;
+    if main.is_none() {
+        return Ok(Package::Library);
+    }
     barb_lower::lower_package_to_barb(program, &cx, &routines)
+        .map(|barb| Package::Application(Box::new(barb)))
 }
 
 /// `program` with each function's signature and clauses grouped, the
@@ -222,25 +253,13 @@ pub fn compile_barb_to_image_with(
     favour: Favour,
     symbols: SymbolTable,
 ) -> Result<Vec<u8>, Diagnostic> {
-    let barb = optimize_application(barb)?;
+    let mut barb = barb;
+    barb::optimize(&mut barb);
     let machine =
         faun_core::lower_to_machine_ir(&barb, &target.routines()).map_err(Diagnostic::new)?;
     target
         .compile_machine_ir_with(&machine, favour, symbols)
         .map_err(Diagnostic::new)
-}
-
-/// Prepare a frontend-validated application for lowering by a backend.
-///
-/// # Errors
-/// Reports a library, which has no entry to build.
-pub fn optimize_application(mut barb: barb::Program) -> Result<barb::Program, Diagnostic> {
-    if barb.entry().is_none() {
-        return Err(Diagnostic::new("a library has no `main!` to build")
-            .help("write `main! : Host -> []` and a clause `main!(host) -> ...`"));
-    }
-    barb::optimize(&mut barb);
-    Ok(barb)
 }
 
 /// The x86-64 Linux host, which frontend tests load their programs with.

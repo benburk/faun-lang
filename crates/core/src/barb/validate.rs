@@ -72,6 +72,11 @@ impl From<Refusal> for String {
 ///
 /// If the program outgrew the four billion names or arguments it may have.
 pub fn validate(program: &Program) -> Result<(), Refusal> {
+    if program.entry.is_none() {
+        return Err(Refusal::of_program(
+            "a program needs an entry: the function a target enters".to_owned(),
+        ));
+    }
     for ty in program.types() {
         if matches!(ty.definition, super::model::TypeDefinition::Declared) {
             return Err(Refusal::of_program(format!(
