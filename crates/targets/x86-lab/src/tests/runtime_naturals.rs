@@ -1,7 +1,7 @@
 use super::faun;
 use crate as faun_core;
 
-include!("../../../core/tests/support/runtime_naturals.rs");
+include!("../../../../core/tests/support/runtime_naturals.rs");
 
 #[test]
 fn source_runtime_naturals_can_be_compared_before_a_bounded_host_effect() {

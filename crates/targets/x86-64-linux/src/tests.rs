@@ -12,10 +12,10 @@ mod float_tests;
 mod abi_tests;
 
 use faun_core as backend_core;
-#[path = "../../core/tests/support/faun.rs"]
+#[path = "../../../core/tests/support/faun.rs"]
 mod faun;
 
-#[path = "../../core/tests/support/backend.rs"]
+#[path = "../../../core/tests/support/backend.rs"]
 mod shared;
 
 const TARGET: X86_64Linux = X86_64Linux;

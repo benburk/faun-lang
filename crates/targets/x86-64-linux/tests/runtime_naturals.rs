@@ -1,7 +1,7 @@
-#[path = "../../core/tests/support/faun.rs"]
+#[path = "../../../core/tests/support/faun.rs"]
 mod faun;
 
-include!("../../core/tests/support/runtime_naturals.rs");
+include!("../../../core/tests/support/runtime_naturals.rs");
 
 #[test]
 fn source_runtime_naturals_can_be_compared_before_a_bounded_host_effect() {

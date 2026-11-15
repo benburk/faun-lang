@@ -16,12 +16,12 @@ pub use faun_core::{facts, float, index};
 pub mod ir;
 pub mod platform;
 #[cfg(test)]
-#[path = "../../core/src/programs.rs"]
+#[path = "../../../core/src/programs.rs"]
 pub mod programs;
 pub mod targets;
 
 #[cfg(test)]
-#[path = "../../core/tests/support/runtime_lifetimes.rs"]
+#[path = "../../../core/tests/support/runtime_lifetimes.rs"]
 mod lifetime_fixture;
 
 mod elf;

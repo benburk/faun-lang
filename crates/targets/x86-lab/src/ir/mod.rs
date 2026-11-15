@@ -60,43 +60,43 @@
 //! layout is not part of the public API.
 
 mod arithmetic;
-#[path = "../../../core/src/ir/bounds.rs"]
+#[path = "../../../../core/src/ir/bounds.rs"]
 mod bounds;
 mod builder;
-#[path = "../../../core/src/ir/lab/cell.rs"]
+#[path = "../../../../core/src/ir/lab/cell.rs"]
 mod cell;
 mod common;
 mod digits;
 pub mod evaluate;
 mod fit;
 mod layout;
-#[path = "../../../core/src/ir/lab/legalize.rs"]
+#[path = "../../../../core/src/ir/lab/legalize.rs"]
 mod legalize;
-#[path = "../../../core/src/ir/lab/lower.rs"]
+#[path = "../../../../core/src/ir/lab/lower.rs"]
 mod lower;
 mod model;
-#[path = "../../../core/src/ir/natural.rs"]
+#[path = "../../../../core/src/ir/natural.rs"]
 pub mod natural;
 mod optimize;
-#[path = "../../../core/src/ir/lab/ownership.rs"]
+#[path = "../../../../core/src/ir/lab/ownership.rs"]
 mod ownership;
-#[path = "../../../core/src/ir/packing.rs"]
+#[path = "../../../../core/src/ir/packing.rs"]
 mod packing;
 mod pretty;
 mod program;
 mod prune;
-#[path = "../../../core/src/ir/lab/region.rs"]
+#[path = "../../../../core/src/ir/lab/region.rs"]
 mod region;
 mod rewrite;
 mod rotate;
-#[path = "../../../core/src/ir/lab/sequence.rs"]
+#[path = "../../../../core/src/ir/lab/sequence.rs"]
 mod sequence;
 mod shifts;
 mod simplify;
 mod split;
 mod uniqueness;
 mod validate;
-#[path = "../../../core/src/ir/lab/word_comparisons.rs"]
+#[path = "../../../../core/src/ir/lab/word_comparisons.rs"]
 pub(crate) mod word_comparisons;
 
 pub use bounds::conversions_taking_nothing;
@@ -154,5 +154,5 @@ mod validation_tests;
 mod zero_width_tests;
 
 #[cfg(test)]
-#[path = "../../../core/src/ir/float_compare_tests.rs"]
+#[path = "../../../../core/src/ir/float_compare_tests.rs"]
 mod float_compare_tests;

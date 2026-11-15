@@ -1,6 +1,6 @@
 use faun_core::{ir, targets};
 
-#[path = "../../core/tests/support/runtime_lifetimes.rs"]
+#[path = "../../../core/tests/support/runtime_lifetimes.rs"]
 mod fixture;
 
 #[test]

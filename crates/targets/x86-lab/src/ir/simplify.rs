@@ -46,7 +46,7 @@
 //! not fit it.
 
 mod float_sign;
-#[path = "../../../core/src/ir/simplify/prepend.rs"]
+#[path = "../../../../core/src/ir/simplify/prepend.rs"]
 mod prepend;
 
 use prepend::{Pushed, temporary_pushes};

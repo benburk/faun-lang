@@ -6,10 +6,10 @@ use crate::Wasm32Wasi;
 use shared::{EXIT_ZERO, bytes, execute, narrow, read, status, wide};
 
 use faun_core as backend_core;
-#[path = "../../core/tests/support/faun.rs"]
+#[path = "../../../core/tests/support/faun.rs"]
 mod faun;
 
-#[path = "../../core/tests/support/backend.rs"]
+#[path = "../../../core/tests/support/backend.rs"]
 mod shared;
 
 const TARGET: Wasm32Wasi = Wasm32Wasi;
