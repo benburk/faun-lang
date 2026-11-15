@@ -1,0 +1,33 @@
+# Sort numbers drawn from a small generator, and print the least, the
+# middle and the greatest with a sum that depends on every place.
+
+import std.host {Host}
+
+# The generator's next seed, below 65,536.
+next : Nat -> Nat
+next(seed) -> (seed * 25173 + 13849) % 65536
+
+# `count` numbers, each the seed after the last.
+draw : (Nat, Nat) -> List(Nat)
+draw(0, _) -> []
+draw(count, seed) -> [seed, *draw(count - 1, next(seed))]
+
+# Each number times its place from one, summed, below 65,521.
+weighed : List(Nat) -> Nat
+weighed(numbers) -> numbers.enumerate().fold(0, |sum, (place, n)| (sum + (place + 1) * n) % 65521)
+
+report : Nat -> Str
+report(count) -> (
+  sorted = draw(count, 42).sort()
+  "${sorted.first().ok_or(0)} ${sorted.get_or(count / 2, 0)} ${sorted.last().ok_or(0)} ${weighed(sorted)}"
+)
+
+expect draw(3, 42) == [42, 22539, 42944]
+expect report(3) == "42 22539 42944 42910"
+
+main! : Host -> []
+main!(host) -> (
+  count = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!(report(count))
+  host.exit!(0)
+)

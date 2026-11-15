@@ -1,0 +1,18 @@
+# A 16-bit checksum of standard input: for each byte, the sum so far turned
+# left one bit and the byte mixed in.
+
+import std.host {Host}
+
+checksum : List(U8) -> U16
+checksum(bytes) -> bytes.fold(0, |sum, byte| sum.rotate_left(1) ^ U16.of_nat(byte.to_nat()))
+
+expect checksum([]) == 0 & checksum([1]) == 1
+expect checksum([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 1]) == 0
+
+main! : Host -> []
+main!(host) -> (
+  input = host.stdin.read_to_end!()
+  input is Ok(bytes) else return host.exit!(1)
+  printed = host.println!("${checksum(bytes)}")
+  host.exit!(0)
+)

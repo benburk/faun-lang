@@ -32,6 +32,7 @@ check:
 # Run the test suite: every test at once, the doc tests nextest skips, then the tree-sitter grammar's
 test:
     python3 -B crates/faun/examples/benchmarks-game/test_lab.py
+    python3 -B eval/test_ratchet.py
     cargo nextest run --workspace
     cargo test --workspace --doc
     just tree-sitter
@@ -79,6 +80,18 @@ codegen-lab *args:
 bench cpu *args:
     cargo build --release -q -p faun-cli
     python3 crates/faun/examples/bench/run.py --cpu {{ cpu }} {{ args }}
+
+# Score this checkout (or a revision) against the incumbent: the branch's last accepted commit, or origin/main; see RATCHET.md
+eval *args:
+    nix develop .#eval --command python3 eval/ratchet.py eval {{ args }}
+
+# Measure the incumbent against itself: any difference is the evaluator's noise
+noise *args:
+    nix develop .#eval --command python3 eval/ratchet.py noise {{ args }}
+
+# Write ratchet/standings.md, Faun beside C on every target, from the newest report
+standings:
+    python3 eval/ratchet.py standings > ratchet/standings.md
 
 # Write every refused program's .err from what the compiler says now; read the diff
 bless:

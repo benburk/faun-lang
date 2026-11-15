@@ -1,5 +1,11 @@
 # The x86 codegen experiment
 
+**Status:** this contract ran the x86 experiment up to its merge. What is
+accepted is now decided by [RATCHET.md](../../../../RATCHET.md), on every
+target, by counts that hold still on a busy machine, with small regressions
+paid for by larger gains. `just codegen-lab` remains for timing the game's
+own sizes on an idle machine.
+
 **Prompt for a future iteration:**
 
 > Improve Faun's x86 code generation by one verifiable step. Follow

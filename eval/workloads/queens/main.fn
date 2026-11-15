@@ -1,0 +1,29 @@
+# Count the ways to put a queen in each row of a board so that no two share
+# a column or a diagonal.
+
+import std.host {Host}
+
+# Whether a queen in `column` is clear of those in the rows before it, the
+# nearest row first: `distance` rows away, a diagonal is as many columns off.
+clear : (Nat, List(Nat), Nat) -> Bool
+clear(_, [], _) -> True
+clear(column, [queen, *_], distance) if queen == column | queen + distance == column | column + distance == queen -> False
+clear(column, [_, *queens], distance) -> clear(column, queens, distance + 1)
+
+# The ways to fill the `rows` left, given the queens already placed.
+ways : (Nat, Nat, List(Nat)) -> Nat
+ways(_, 0, _) -> 1
+ways(size, rows, queens) -> List.range(size)
+  .filter(|column| clear(column, queens, 1))
+  .map(|column| ways(size, rows - 1, [column, *queens]))
+  .sum()
+
+expect ways(1, 1, []) == 1 & ways(3, 3, []) == 0
+expect ways(6, 6, []) == 4
+
+main! : Host -> []
+main!(host) -> (
+  size = Nat.from_str(host.args.get(1).ok_or("6")).ok_or(6)
+  printed = host.println!("${ways(size, size, [])}")
+  host.exit!(0)
+)

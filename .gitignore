@@ -4,3 +4,7 @@
 .claude/settings.local.json
 
 target/
+
+# Each `just eval` writes a report here, in the main checkout.
+ratchet/reports/
+__pycache__/
