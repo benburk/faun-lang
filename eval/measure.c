@@ -89,6 +89,8 @@ int main(int argc, char **argv) {
         .enable_on_exec = 1,
         .exclude_kernel = 1,
         .exclude_hv = 1,
+        // A compiler's threads count with it.
+        .inherit = 1,
     };
     int counter = syscall(SYS_perf_event_open, &counted, child, -1, -1, 0);
     struct timespec start, end;
