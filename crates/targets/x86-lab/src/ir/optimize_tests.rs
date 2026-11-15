@@ -1020,5 +1020,5 @@ fn a_projection_through_a_call_still_reads_the_returned_cell() {
     assert_eq!(count(&held, |op| matches!(op, Op::CellField { .. })), 1);
 }
 
-#[path = "../../../core/src/ir/simplify/prepend_tests.rs"]
+#[path = "../../../../core/src/ir/simplify/prepend_tests.rs"]
 mod prepend_tests;

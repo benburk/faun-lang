@@ -247,7 +247,7 @@ have not changed.
 
 `crates/faun/standard/README.md` documents the claims for `F64.add`, `sub`, `mul`,
 `div` and `sqrt`. Machine IR contains `binary64` operations for all five.
-`RawEncoder::float` in `crates/x86-64-linux/src/encode.rs` emits `addsd`, `subsd`,
+`RawEncoder::float` in `crates/targets/x86-64-linux/src/encode.rs` emits `addsd`, `subsd`,
 `mulsd`, `divsd` and `sqrtsd`; executable disassembly confirms those instructions
 in the pair update.
 

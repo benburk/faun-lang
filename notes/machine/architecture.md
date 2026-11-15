@@ -49,8 +49,8 @@ data, and keeps control structured: regions take parameters, and a loop
 stays the tail call it was written as. A short fixed schedule of passes
 follows lowering.
 
-**A target** (`crates/x86-64-linux`, `crates/wasm32-wasi`,
-`crates/mos6502-sim65`) first fits the program to its word and its call
+**A target** (`crates/targets/x86-64-linux`, `crates/targets/wasm32-wasi`,
+`crates/targets/mos6502-sim65`) first fits the program to its word and its call
 budget, then legalizes it: every count, allocation and buffer becomes
 loads, stores and calls to routines generated in machine IR. Then it emits.
 x86-64 allocates registers and writes a static ELF that makes system calls
@@ -184,7 +184,7 @@ and walking every body to check them.
 
 ## Open questions
 
-The [experimental x86-64 backend](../../crates/x86-lab/README.md) takes
+The [experimental x86-64 backend](../../crates/targets/x86-lab/README.md) takes
 optimized Barb and starts with its own copy of x86 lowering and emission.
 Its machine IR can choose representation and placement independently. The [experiment contract](../../crates/faun/examples/benchmarks-game/LAB.md)
 describes the boundary, the first milestones and how to compare results.

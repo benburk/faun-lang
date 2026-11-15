@@ -10,9 +10,9 @@ use std::process::Command;
 use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
 
-#[path = "../../core/tests/support/expressions.rs"]
+#[path = "../../../core/tests/support/expressions.rs"]
 mod expressions;
-#[path = "../../core/tests/support/faun.rs"]
+#[path = "../../../core/tests/support/faun.rs"]
 mod faun;
 
 use expressions::{CASES, COUNTS, Case};

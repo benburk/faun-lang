@@ -23,7 +23,7 @@ target/release/faun emit --backend=x86-lab machine crates/faun/examples/hello.fn
 ```
 
 Measure future changes from the prep worktree with the
-[experiment contract](../faun/examples/benchmarks-game/LAB.md).
+[experiment contract](../../faun/examples/benchmarks-game/LAB.md).
 
 ## Shared recognition benchmark, 2026-11-14
 

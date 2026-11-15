@@ -19,7 +19,7 @@ use crate as backend_core;
 #[path = "test_frontend.rs"]
 mod faun;
 
-#[path = "../../core/tests/support/backend.rs"]
+#[path = "../../../core/tests/support/backend.rs"]
 mod shared;
 
 const TARGET: X86_64Linux = X86_64Linux;

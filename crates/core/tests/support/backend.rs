@@ -49,8 +49,18 @@ fn corpus() -> [(&'static str, Program); 19] {
     ]
 }
 
+/// The `crates` directory, found from whichever crate includes this file:
+/// `core` itself, or a target under `crates/targets`.
+fn crates() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .find(|dir| dir.join("core/tests/support").is_dir())
+        .expect("a crate inside the crates directory")
+        .to_path_buf()
+}
+
 fn written() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests/support/examples")
+    crates().join("core/tests/support/examples")
 }
 
 /// Compile a Faun program for this target through the primary frontend.
@@ -1490,7 +1500,7 @@ fn it_is_handed_strings_beside_a_list_of_numbers() {
 #[test]
 fn a_long_walk_goes_round_rather_than_down() {
     let steps = if TARGET.word() == 16 { 300 } else { 20_000 };
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/aoc/201501.fn");
+    let path = crates().join("faun/examples/aoc/201501.fn");
     let text = fs::read_to_string(&path).expect("the day one example");
     let program = read(&text).expect("the day one example compiles");
     let program = TARGET
@@ -1689,7 +1699,7 @@ fn the_animated_lights_run_on_each_target() {
         return;
     }
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/aoc/201518.fn");
+    let path = crates().join("faun/examples/aoc/201518.fn");
     let program = faun::expectations_at(&path, &TARGET).expect("the day 18 expectations compile");
     let program = TARGET
         .prepare(&program)
@@ -1746,7 +1756,7 @@ fn the_medicine_replacements_run_on_each_target() {
         return;
     }
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/aoc/201519.fn");
+    let path = crates().join("faun/examples/aoc/201519.fn");
     let program = faun::expectations_at(&path, &TARGET).expect("the day 19 expectations compile");
     let program = TARGET
         .prepare(&program)
