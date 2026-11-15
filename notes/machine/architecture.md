@@ -18,21 +18,13 @@ source      → frontend   names, types, coverage, specialization, resources
 ```
 
 **The frontend** (`crates/faun`) is a line of stages, each taking the
-program as one tree:
-
-1. Loading reads every module of the package and the packages it names.
-2. Resolution names every global and local.
-3. Checking infers types (Hindley–Milner, with rows and methods resolved
-   by their receiver), writes the members a type asks for, and checks that
-   patterns cover what they take apart.
-4. Specialization makes each definition concrete at every type it is used
-   at, which is monomorphization; functions are then checked to be second
-   class.
-5. Callback lowering makes a definition for each set of callbacks a
-   function is handed, so no value is a function. Resources are then
-   checked to be used up once.
-6. Pattern compilation turns clauses into decisions, which Barb emission
-   reads.
+program as one tree: loading, resolution, type checking, specialization,
+callback lowering and pattern compilation, then Barb lowering for an
+application. It finds every error a programmer can cause, desugars all
+syntax into calls, constructors and matches, and hands Barb a typed,
+monomorphized, first-order program. A library stops before Barb. Its
+[README](../../crates/faun/README.md) is its contract, including what
+syntax is blessed to.
 
 **Barb** (`crates/core/src/barb`) is a first-order language in A-normal
 form (ANF), where every argument is a local and anything else is bound
