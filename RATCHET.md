@@ -6,18 +6,20 @@ The ratchet improves the compiler: the frontend, Barb, the backends and the stan
 
 **The suite** is fourteen programs, each a `main.fn` beside a C twin `main.c`. Nine are in [`crates/faun/examples/benchmarks-game`](crates/faun/examples/benchmarks-game/README.md): the game's eight and MD5. Five small kernels are in [`eval/workloads`](eval/workloads): checksum, collatz, queens, sieve and sort, written without floats so that they fit the 6502 and cc65 can build their twins. Every program is plain Faun, written as one would teach the algorithm, and every twin is C as plain.
 
-**A cell** is one program on one target with one backend. The targets are x86-64 Linux, wasm32 WASI and the 6502 under sim65; the backends are stock and lab. A cell has four measures, and lower is better in each:
+**A cell** is one program on one target with one backend. The targets are x86-64 Linux, wasm32 WASI and the 6502 under sim65; the backends are stock and lab. A cell has five measures, and lower is better in each:
 
-| Metric | x86-64 Linux        | wasm32 WASI    | 6502 sim65    |
-| ------ | ------------------- | -------------- | ------------- |
-| speed  | instructions        | fuel           | cycles        |
-| memory | resident memory     | memory touched | bytes written |
-| size   | image bytes         | module bytes   | image bytes   |
-| small  | the same, `--small` | the same       | the same      |
+| Metric  | x86-64 Linux            | wasm32 WASI    | 6502 sim65    |
+| ------- | ----------------------- | -------------- | ------------- |
+| speed   | instructions            | fuel           | cycles        |
+| memory  | resident memory         | memory touched | bytes written |
+| size    | image bytes             | module bytes   | image bytes   |
+| small   | the same, `--small`     | the same       | the same      |
+| compile | compiler's instructions | the same       | the same      |
 
 - **Speed** is the work a run took, in the target's own count: instructions run in user space, Wasmtime's fuel, the simulator's cycles. A count is the same from run to run whatever else the machine is doing, so one run of each image is enough and the cells run side by side.
 - **Memory** is the most the program held: on x86-64 the pages resident, read from its page tables; on wasm32 the pages of linear memory it read or wrote, the memory's own size growing 64 KiB at a time; on the 6502 the different bytes it wrote.
 - **Size** is the image built favouring speed, as `faun build` does, and **small** the image built `--small`. A change may spend size for speed where it leaves `--small` alone.
+- **Compile** is the instructions the compiler ran, across its threads, to build both images. The report also keeps each build's time and the compiler's peak memory, which are not scored. The C twins' compilers are not measured.
 
 Each target measures at its own input size, in `eval/ratchet.py`'s table, small enough that a run takes a fraction of a second. Floats are in software on wasm32 and the 6502, so their sizes there are tiny.
 
@@ -31,21 +33,21 @@ Each target measures at its own input size, in `eval/ratchet.py`'s table, small 
 
 **Golden.** Every image, built for speed and built `--small`, must print exactly what the C twin built for this machine prints at a size drawn afresh from each run's seed, and the measured image again at the measured size, leaving with status zero and nothing on standard error. A measure the incumbent has and the candidate lacks, because the program no longer builds, fits or agrees, rejects the candidate whatever else it gained.
 
-**Score.** Each measure of each cell is the candidate's over the incumbent's. The score is the geometric mean of them all, weighed so that each target's metric counts the same however many programs run there: twelve groups, a target's speed, memory, size and small. The gain is the part of the score the better cells make, and the loss the part the worse ones make.
+**Score.** Each measure of each cell is the candidate's over the incumbent's. The score is the geometric mean of them all, weighed so that each target's metric counts the same however many programs run there: thirteen groups, a target's speed, memory, size and small, and compiling. The compiler runs on this machine whatever the target, so compiling is one group across all three. The gain is the part of the score the better cells make, and the loss the part the worse ones make.
 
 **A candidate is accepted when all of these hold:**
 
 - nothing that ran for the incumbent is broken;
 - the gain is at least twice the loss, and more than nothing;
-- no cell is more than 10% worse, a memory counting only where it is also 16 KiB larger, or 128 bytes on the 6502;
+- no cell is more than 10% worse, a memory counting only where it is also 16 KiB larger, or 128 bytes on the 6502, and a compile only where it is 25% worse;
 - where the run was timed, no x86-64 program takes longer, as below;
 - it changes no protected path.
 
-So a small regression is paid for by a gain twice its size somewhere else, and a large one by nothing. A rejected change I still want is my call: log it as `override`. Only a committed candidate, scored on the whole suite by the pinned evaluator, is promoted: the summary names anything else under `not a promotion`.
+So a small regression is paid for by a gain twice its size somewhere else, and a large one by nothing. A candidate that passes all of these but improves the score by less than a tenth of a percent is `neutral`: logged, not promoted, so the incumbent does not move for noise-sized wins. A rejected change I still want is my call: log it as `override`. Only a committed candidate, scored on the whole suite by the pinned evaluator, is promoted: the summary names anything else under `not a promotion`.
 
 **Repairs.** A measure the candidate has and the incumbent lacks counts as a halving: a program that starts to fit the 6502, or to run at all. A 6502 program too large for the machine's 64 KiB on both sides still counts by where its image would end, so shrinking one towards fitting is a gain.
 
-**Noise.** `just noise` measures the incumbent against itself and must say `quiet`. Sizes, fuel, cycles and all three memories are exact. x86-64 instructions differ between runs by about a part in ten million, so counts within one part in a hundred thousand are the same. An image whose bytes did not change earns no change in speed or memory. Measured across six passes with every core of the machine busy, nothing else differed.
+**Noise.** `just noise` measures the incumbent against itself and must say `quiet`. Sizes, fuel, cycles and all three memories are exact. x86-64 instructions differ between runs by about a part in ten million, so counts within one part in a hundred thousand are the same. The compiler's instructions differ by up to about a percent, from how its hash tables are seeded, so compile counts within two percent are the same. An image whose bytes did not change earns no change in speed or memory. Measured across six passes with every core of the machine busy, nothing else differed.
 
 **Time.** Instructions are not seconds: a change can run fewer and take longer. `just eval --time <cpu>` also times the x86-64 images, pinned to that CPU: after a run to warm each, the candidate, the incumbent and the twin take turns, one run each in turning order, for at least five turns and as many as take a quarter of a second. A run's time is the processor time it was given. A program takes longer where both the candidate's quickest run and its median run are more than 10%, and a quarter of a millisecond, over the incumbent's: on a busy CPU a lucky run fools the quickest and a burst the median, seldom both. Times only reject; they earn nothing. Time a candidate before promoting it wherever its x86-64 instruction counts moved, on an idle CPU where there is one.
 
@@ -60,11 +62,11 @@ Every run writes a new JSON report to `ratchet/reports/` in the main checkout (g
    - `commit`: short hash;
    - `idea`: a one-line description;
    - `score`: the overall score, below one being better;
-   - `speed`, `memory`, `size` and `small`: each metric's change across the targets;
+   - `speed`, `memory`, `size`, `small` and `compile`: each metric's change across the targets;
    - `worst`: the worst cell's ratio;
    - `verdict`: the verdict and its reasons;
    - `report`: the report's file name.
-4. **Rejected:** log it, revert the candidate and keep iterating.
+4. **Rejected or neutral:** log it, revert the candidate and keep iterating.
 5. **Accepted:** read the diff against the shortcuts below, run `just check` and `just test`, and add a test that exercises the change, since equal output on fourteen programs does not prove a compiler correct. Then log it as `accept`: once that row is committed, the commit is the incumbent for whatever the branch tries next. Run `just standings` and commit it with the row. A rebase gives the accepted commits new hashes, so write those into their rows, or the trunk is the incumbent again.
 6. After five rejections in a row, step back: profile, read what the slow cells run, and try a bigger or different change. Write what was learned in `ratchet/FINDINGS.md`.
 

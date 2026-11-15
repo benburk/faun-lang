@@ -5,7 +5,15 @@ import unittest
 from ratchet import MOS, WASM, X86, decide, ratio, score, slower
 
 
-def cell(speed=1000, memory=100, size=5000, small=4000, image="one", status="ok"):
+def cell(
+    speed=1000,
+    memory=100,
+    size=5000,
+    small=4000,
+    image="one",
+    status="ok",
+    compile=None,
+):
     return dict(
         status=status,
         speed=speed,
@@ -13,6 +21,7 @@ def cell(speed=1000, memory=100, size=5000, small=4000, image="one", status="ok"
         size=size,
         small=small,
         size_sha256=image,
+        compile=compile,
     )
 
 
@@ -33,9 +42,37 @@ class Ratchet(unittest.TestCase):
     def test_the_same_measures_are_no_change(self):
         self.assertEqual(verdict(suite([cell(), cell()])), "no change")
 
-    def test_any_exact_gain_with_no_loss_is_accepted(self):
-        smaller = cell(size=4999, image="two")
+    def test_a_gain_with_no_loss_is_accepted(self):
+        smaller = cell(size=4900, image="two")
         self.assertEqual(verdict(suite([smaller, cell()])), "accept")
+
+    def test_a_gain_too_small_to_matter_is_neutral(self):
+        smaller = cell(size=4999, image="two")
+        self.assertEqual(verdict(suite([smaller, cell()])), "neutral")
+
+    def test_compiling_is_one_group_whatever_the_target(self):
+        cells = suite([cell(compile=1000)], [cell(compile=1000)], X86)
+        cells |= suite([cell(compile=500)], [cell(compile=1000)], MOS)
+        scored = score(cells)
+        self.assertIn("all compile", scored["groups"])
+        self.assertNotIn("x86_64-linux compile", scored["groups"])
+        self.assertAlmostEqual(scored["groups"]["all compile"], 0.5**0.5)
+
+    def test_compile_counts_within_their_jitter_are_the_same(self):
+        self.assertEqual(
+            ratio(X86, "compile", cell(compile=1000), cell(compile=1019)), 1.0
+        )
+        self.assertGreater(
+            ratio(MOS, "compile", cell(compile=1000), cell(compile=1021)), 1.0
+        )
+
+    def test_compiling_may_cost_a_quarter_more_before_it_rejects(self):
+        quicker = cell(speed=100, memory=10, image="quick", compile=1000)
+        heavier = cell(compile=1240)
+        same = [cell(compile=1000), cell(compile=1000)]
+        self.assertEqual(verdict(suite([quicker, heavier], same)), "accept")
+        heaviest = cell(compile=1260)
+        self.assertEqual(verdict(suite([quicker, heaviest], same)), "reject")
 
     def test_a_small_loss_is_paid_for_by_a_gain_twice_its_size(self):
         quicker = cell(speed=850, image="quick")

@@ -48,25 +48,33 @@ X86, WASM, MOS = "x86_64-linux", "wasm32-wasi", "mos6502-sim65"
 TARGETS = (X86, WASM, MOS)
 BACKENDS = ("stock", "lab")
 # What is measured of a program: how long it ran, in the target's own steady
-# count; its peak memory; its image built for speed; its image built `--small`.
-METRICS = ("speed", "memory", "size", "small")
+# count; its peak memory; its image built for speed; its image built `--small`;
+# and the instructions the compiler ran to build both.
+METRICS = ("speed", "memory", "size", "small", "compile")
 UNITS = {
-    X86: ("instructions", "KiB resident", "bytes", "bytes"),
-    WASM: ("fuel", "bytes of linear memory touched", "bytes", "bytes"),
-    MOS: ("cycles", "bytes written", "bytes", "bytes"),
+    X86: ("instructions", "KiB resident", "bytes", "bytes", "instructions"),
+    WASM: ("fuel", "bytes of linear memory touched", "bytes", "bytes", "instructions"),
+    MOS: ("cycles", "bytes written", "bytes", "bytes", "instructions"),
 }
 
-# The rules RATCHET.md states. Each metric of each target weighs the same.
-WEIGHTS = {"speed": 1, "memory": 1, "size": 1, "small": 1}
+# The rules RATCHET.md states. Each metric of each target weighs the same, and
+# compiling, which runs on this machine whatever the target, is one more group.
+WEIGHTS = {"speed": 1, "memory": 1, "size": 1, "small": 1, "compile": 1}
 WORST = 1.10  # no cell may be more than 10% worse
+COMPILE_WORST = 1.25  # nor any build take a quarter more instructions
+MINIMUM = 0.001  # a gain below a tenth of a percent overall is neutral
 # A memory this little larger is not past that, however small it was: four
 # pages, and half a page of the 6502's.
 SLACK = {(X86, "memory"): 16, (WASM, "memory"): 16 << 10, (MOS, "memory"): 128}
 MARGIN = 2.0  # gains must outweigh losses this many times over
 REPAIRED = 0.5  # a cell that starts working counts as a halving
-# The one count that is not exact: x86 instructions vary in their last digits,
-# by a part in ten million where measured, so one in a hundred thousand is the same.
+# The counts that are not exact. A program's x86 instructions vary in their
+# last digits, by a part in ten million where measured, so one in a hundred
+# thousand is the same. The compiler's vary by about a part in a hundred, from
+# the order its hash tables are seeded in, so two in a hundred are the same.
 SAME = {(X86, "speed"): lambda old, new: abs(new - old) <= old * 1e-5}
+for _target in TARGETS:
+    SAME[(_target, "compile")] = lambda old, new: abs(new - old) <= old * 2e-2
 # A timed candidate is slower where its quickest and its median run are both
 # past this band over the incumbent's: a tenth, and a quarter of a millisecond.
 TURNS, SLOWER, FLOOR_NS, TIMED_NS = 5, 1.10, 250_000, 250_000_000
@@ -378,21 +386,31 @@ def faun_build(side, target, backend, small, workload, directory):
         command.append("--small")
     source = workload.folder / workload.name / "main.fn"
     command += [source, "-o", directory / workload.name]
+    # The compiler is measured as a program is: its instructions, its time
+    # and its peak memory.
+    # Each workload's own file: the cells of a target build side by side here.
+    metrics = directory / f"{workload.name}.build-metrics"
+    probe = Path(os.environ["RATCHET_TOOLS"]) / "measure"
+    command = [probe, str(SECONDS), metrics, *command]
     env = {k: v for k, v in os.environ.items() if k != "FAUN_STD"}
     try:
         done = subprocess.run(
-            command, env=env, capture_output=True, text=True, timeout=SECONDS
+            command, env=env, capture_output=True, text=True, timeout=SECONDS + 30
         )
     except subprocess.TimeoutExpired:
-        return None, "build: timeout", None
+        return None, "build: timeout", None, {}
+    taken = {}
+    if metrics.exists():
+        ns, rss, instructions, cpu = map(int, metrics.read_text().split())
+        taken = {"instructions": instructions, "ns": ns, "rss_kib": rss}
     wrote = re.search(r"^wrote (.+)$", done.stdout, re.M)
     if done.returncode or not wrote:
         past = re.search(r"image ends at \$([0-9A-F]+), past", done.stderr)
         if past:
-            return None, "too large", int(past[1], 16)
-        return None, f"build: {first_line(done.stderr)}", None
+            return None, "too large", int(past[1], 16), taken
+        return None, f"build: {first_line(done.stderr)}", None, taken
     image = Path(wrote[1])
-    return image, "ok", image.stat().st_size
+    return image, "ok", image.stat().st_size, taken
 
 
 def faun_cell(side, label, target, backend, workload, check, oracle, work):
@@ -401,9 +419,9 @@ def faun_cell(side, label, target, backend, workload, check, oracle, work):
     speed at the target's size."""
     directory = work / label / target / backend
     cell = {"status": "ok"}
-    images = {}
+    images, builds = {}, {}
     for metric, small in (("size", False), ("small", True)):
-        image, status, size = faun_build(
+        image, status, size, builds[metric] = faun_build(
             side, target, backend, small, workload, directory / metric
         )
         cell[metric] = size
@@ -412,6 +430,11 @@ def faun_cell(side, label, target, backend, workload, check, oracle, work):
         else:
             images[metric] = image
             cell[f"{metric}_sha256"] = sha(image)
+    counts = [build.get("instructions", -1) for build in builds.values()]
+    if all(count > 0 for count in counts):
+        cell["compile"] = sum(counts)
+        cell["compile_ns"] = sum(build["ns"] for build in builds.values())
+        cell["compile_rss_kib"] = max(build["rss_kib"] for build in builds.values())
     if cell["status"] != "ok":
         return cell
     arguments, stdin, expected = oracle.case(workload, check)
@@ -545,7 +568,9 @@ def score(cells):
                 changes.append(where | {"ratio": change, "old": old, "new": new})
     groups = {}
     for change in changes:
-        groups.setdefault((change["target"], change["metric"]), []).append(change)
+        # Compiling runs here whatever the target, so it is one group.
+        target = "all" if change["metric"] == "compile" else change["target"]
+        groups.setdefault((target, change["metric"]), []).append(change)
     total = sum(WEIGHTS[metric] for _, metric in groups) or 1
     gain = loss = 0.0
     for (_, metric), members in groups.items():
@@ -584,7 +609,8 @@ def decide(scored, protected=(), slowed=()):
         reasons.append("breaks " + place(cell) + f" ({cell['status']})")
     for cell in scored["changed"]:
         slack = SLACK.get((cell["target"], cell["metric"]), 0)
-        if cell["ratio"] > WORST and cell["new"] - cell["old"] > slack:
+        worst = COMPILE_WORST if cell["metric"] == "compile" else WORST
+        if cell["ratio"] > worst and cell["new"] - cell["old"] > slack:
             reasons.append(f"{place(cell)} is {cell['ratio'] - 1:.1%} worse")
     for cell in slowed:
         reasons.append(f"{place(cell)} runs {cell['ratio'] - 1:.1%} longer")
@@ -595,7 +621,11 @@ def decide(scored, protected=(), slowed=()):
         reasons.append(
             f"gain {gain:.5f} does not outweigh loss {loss:.5f} {MARGIN:g} to 1"
         )
-    return ("reject", reasons) if reasons else ("accept", [])
+    if reasons:
+        return "reject", reasons
+    if gain - loss < MINIMUM:
+        return "neutral", [f"net gain {gain - loss:.5f} is below {MINIMUM:g}"]
+    return "accept", []
 
 
 def place(cell):
@@ -846,6 +876,8 @@ def evaluate(args):
                 "weights": WEIGHTS,
                 "worst": WORST,
                 "margin": MARGIN,
+                "compile_worst": COMPILE_WORST,
+                "minimum": MINIMUM,
                 "repaired": REPAIRED,
                 "slower": SLOWER,
             },
