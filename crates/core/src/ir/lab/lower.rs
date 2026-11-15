@@ -2376,7 +2376,7 @@ impl Lowering<'_> {
             let barb::TypeShape::Sequence { element, .. } = barb::type_shape(self.barb, ty) else {
                 break;
             };
-            if self.barb.byte_sequence(element).is_none() {
+            if !self.holds_bytes(element) {
                 break;
             }
             let bounds = self.facts.held(binding);

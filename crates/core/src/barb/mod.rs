@@ -103,7 +103,6 @@ mod bounds;
 mod budget;
 mod builder;
 mod calls;
-mod claim;
 mod cleanup;
 mod constant;
 mod copy;
@@ -111,9 +110,11 @@ mod counters;
 mod descent;
 mod evaluate;
 mod facts;
+mod fingerprint;
 #[cfg(test)]
 pub(crate) mod fixture;
 mod float_compare;
+mod floats;
 mod forward;
 mod fuse;
 mod head;
@@ -151,12 +152,13 @@ pub use float_compare::FloatComparison;
 pub use rotation::Rotation;
 pub use tree::TreeRole;
 
+pub use fingerprint::fingerprint;
 pub use inline::InlineLimits;
 pub use model::{
-    Arm, Atom, Body, ByteSequence, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId,
-    Function, Local, Range, Symbol, Type, TypeId,
+    Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,
+    Range, Symbol, Type, TypeId,
 };
-pub(crate) use normalize::canonical;
+pub use normalize::canonical;
 #[cfg(test)]
 pub(crate) use normalize::fold;
 #[cfg(test)]

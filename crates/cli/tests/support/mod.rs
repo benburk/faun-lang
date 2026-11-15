@@ -162,13 +162,13 @@ pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
     (failed, count)
 }
 
-/// As [`test_file`], with every definition claimed to compute a float
-/// answering by its body rather than by the host's instruction: the
-/// standard's own arithmetic, asked the same questions.
+/// As [`test_file`], with every float operation answering by its body
+/// rather than by the host's instruction: the standard's own arithmetic,
+/// asked the same questions.
 pub(crate) fn test_file_by_definitions(entry: &std::path::Path) -> (Vec<String>, usize) {
     let mut tests = faun::lower_tests_to_barb(entry, &X86_64Linux)
         .unwrap_or_else(|error| panic!("{}", error.message));
-    tests.barb.disclaim();
+    tests.barb.walk_floats();
     let count = tests.expectations.len();
     // Software arithmetic takes the interpreter many steps an operation.
     let (status, written) = run_barb_fueled(tests.barb, &[], None, 20_000_000_000);

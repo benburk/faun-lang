@@ -125,8 +125,8 @@ pub enum SequenceOperation {
 pub(super) struct Recognised {
     pub operations: Vec<Option<Operation>>,
     pub sequences: Vec<Option<SequenceOperation>>,
-    /// What a definition's claim says it computes; see
-    /// [`super::Program::claim`].
+    /// The IEEE 754 operation a definition's code is the standard's
+    /// routine for.
     pub floats: Vec<Option<Float>>,
     pub rotations: Vec<Option<super::Rotation>>,
 }
@@ -240,7 +240,7 @@ impl Facts {
             || self.float(id).is_some()
             || self.rotation(id).is_some()
     }
-    /// The IEEE 754 operation `id` was claimed to compute: an answer a
+    /// The IEEE 754 operation `id`'s code is recognized as: an answer a
     /// target with the instruction gives in its place, and one without it
     /// by walking the body.
     #[must_use]

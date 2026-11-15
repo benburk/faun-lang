@@ -405,15 +405,6 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.output.declare_type(&name)
             };
-            if let Type::Named(symbol, args) = ty {
-                let byte = Type::Named(self.prelude.u8_, Vec::new());
-                if *symbol == self.prelude.str_ && args.is_empty() {
-                    self.output.mark_byte_sequence(id, barb::ByteSequence::Text);
-                } else if *symbol == self.prelude.list && args.as_slice() == [byte] {
-                    self.output
-                        .mark_byte_sequence(id, barb::ByteSequence::Bytes);
-                }
-            }
             self.type_ids.insert(ty.clone(), id);
         }
     }
@@ -509,26 +500,6 @@ impl<'a> Lowerer<'a> {
             .insert((wrapper, ty.clone()), self.output.ctor_at(id, 0));
     }
 
-    /// The IEEE 754 operation `key` computes, where it is one of the
-    /// standard floats' own, at the float's type: the one place a float's
-    /// meaning is taken from its name, since no equation says it.
-    fn float(&self, key: &FunctionKey) -> Option<faun_core::float::Float> {
-        let parameters = &key.signature.parameters;
-        self.prelude.floats.iter().find_map(|float| {
-            let (_, operation) = float
-                .operations
-                .iter()
-                .find(|(method, _)| *method == key.name)?;
-            parameters
-                .iter()
-                .all(|ty| matches!(ty, Type::Named(name, arguments) if *name == float.ty && arguments.is_empty()))
-                .then_some(faun_core::float::Float {
-                    operation: *operation,
-                    format: float.format,
-                })
-        })
-    }
-
     fn declare_functions(&mut self) {
         for function in &self.program.functions {
             let parameters = &function.key.signature.parameters;
@@ -548,9 +519,6 @@ impl<'a> Lowerer<'a> {
             if let p::Definition::External(provider) = function.definition {
                 let provider = self.cx.symbols.text(provider);
                 self.output.answered_by(id, provider);
-            }
-            if let Some(float) = self.float(&function.key) {
-                self.output.claim(id, float);
             }
             self.function_ids.insert(function.key.clone(), id);
         }
@@ -1567,13 +1535,14 @@ mod tests {
             let program = program(&checked, entry).unwrap();
             barb::validate(&program).unwrap();
             if suffix == "$$text" {
+                // Text is a wrapper around a sequence, which is all a
+                // backend needs to hold it as bytes.
                 let text = program.function(program.entry().unwrap()).result;
-                assert_eq!(program.byte_sequence(text), Some(barb::ByteSequence::Text));
                 let (_, bytes) = barb::single_field(&program, text).unwrap();
-                assert_eq!(
-                    program.byte_sequence(bytes),
-                    Some(barb::ByteSequence::Bytes)
-                );
+                assert!(matches!(
+                    barb::type_shape(&program, bytes),
+                    barb::TypeShape::Sequence { .. }
+                ));
             }
         }
     }

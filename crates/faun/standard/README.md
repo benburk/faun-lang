@@ -38,17 +38,18 @@ a NaN equals itself and `-0.0` is not `0.0`; `partial_cmp` and
 `numeric_equals` are the hardware's. Ori's contract for them, rule by rule,
 is `examples/floats/`.
 
-Their `add`, `sub`, `mul`, `div` and `sqrt` are the one place the compiler
-takes a meaning from a name: nothing an equation says makes a definition
-IEEE 754's addition, so lowering tells Barb that these five, at each
-float's own type, compute that operation (`Program::claim`). The
-definitions stay, and answer wherever nothing faster does: on a target
-without float instructions, and in a program the claims are taken from to
-check them, as `examples/floats/` is asked both ways. Folding answers a
-claimed call from its operands with the host's own arithmetic, and x86-64
+Their `add`, `sub`, `mul`, `div` and `sqrt` are recognized by their code:
+nothing an equation says makes a definition IEEE 754's addition, so Barb
+knows these five, at each float's own type, by a fingerprint of their code
+and everything it calls, in a table `just bless` writes from this
+directory. Editing them means blessing that table again. The definitions
+stay, and answer wherever nothing faster does: on a target without float
+instructions, and in a program that walks every body to check them, as
+`examples/floats/` is asked both ways. Folding answers a recognized call
+from its operands with the host's own arithmetic, and x86-64
 with one SSE2 instruction; a NaN may then be any NaN's pattern, which no
 program can tell, since `to_bits`, `cmp` and `sign_bit` read every NaN as
-one. `of_nat` of a natural below `2^52`, or `2^23`, is a claimed
+one. `of_nat` of a natural below `2^52`, or `2^23`, is a recognized
 subtraction: that power taken from the pattern of the power plus the
 natural, both exact. What is left in software -- `of_decimal`, the other
 conversions and the text -- costs a program that runs it thousands of

@@ -152,7 +152,7 @@ impl Program {
     }
 
     /// What a definition is answered as rather than walked, where it is:
-    /// the IEEE 754 operation it is claimed to compute, or, where `facts`
+    /// the IEEE 754 operation it is recognized as, or, where `facts`
     /// are given, the operation it was recognized as. Its body is the
     /// operation's equations and says nothing new, so it is not rendered.
     fn answered_as(&self, id: FnId, facts: Option<&Facts>) -> Option<String> {

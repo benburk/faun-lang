@@ -93,9 +93,10 @@ noise *args:
 standings:
     python3 eval/ratchet.py standings > ratchet/standings.md
 
-# Write every refused program's .err from what the compiler says now; read the diff
+# Write every refused program's .err, and Barb's table of the standard's float code, from what the compiler says now; read the diff
 bless:
     FAUN_BLESS=1 cargo nextest run -p faun-cli --test refused
+    FAUN_BLESS=1 cargo nextest run -p faun-cli --test barb_recognition the_reference_float_table
 
 # Build the release binary
 build:

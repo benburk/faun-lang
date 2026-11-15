@@ -413,7 +413,7 @@ impl Routines {
 
     /// Say that the machine computes each [`crate::float::Float`] with an
     /// instruction of its own, correctly rounded to nearest-even and never
-    /// trapping, so that a definition claimed to compute one is answered by
+    /// trapping, so that a definition recognized as one is answered by
     /// the instruction rather than by its body.
     #[must_use]
     pub const fn with_floats(mut self) -> Self {

@@ -11,7 +11,8 @@ use super::{InlineLimits, Program};
 /// The outer schedule runs once, in this order:
 ///
 /// 1. Canonicalization: structural normalization of every body, before
-///    anything is recognized, then again with what is.
+///    anything is recognized, then again with what is. Float operations
+///    are recognized by their code in between.
 /// 2. Forward list construction.
 /// 3. Descent over natural numbers.
 /// 4. Helper inlining with arithmetic identities.
@@ -32,6 +33,7 @@ use super::{InlineLimits, Program};
 /// range handles. Declaration and constant IDs are preserved.
 pub fn optimize(program: &mut Program) {
     super::canonical(program);
+    super::floats::recognise(program);
     super::structural(program);
     super::forward::forward(program);
     super::descent::descend(program);

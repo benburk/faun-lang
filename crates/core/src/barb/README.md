@@ -52,6 +52,8 @@ and records it as a fact:
   and xor, and power.
 - `Facts::sequence_operation`: length, reverse-onto, prepend, append, drop,
   take and replace.
+- `Facts::float`: IEEE 754 add, subtract, multiply, divide and square
+  root, at binary32 and binary64.
 - `Facts::rotation`, `Facts::float_comparison` and `Facts::tree_role`:
   semantic summaries, described below.
 
@@ -67,13 +69,21 @@ A new recognition rule must account for that policy as well as the
 equivalence it proves, so keeping a fact does not block useful
 optimization.
 
-There are two exceptions, both the frontend's responsibility:
+Floats are recognized by their code rather than an equation. A float is a
+natural in one-field wrappers, and an operation on one is a routine walking
+its bits; no equation shows a routine like that rounds as IEEE 754 does.
+So Barb knows the standard's own routines by their fingerprints: a hash of
+a definition's code and all the code it reaches, after canonicalizing,
+with no name or ID in it (`fingerprint.rs`). A definition whose
+fingerprint is in the table (`floats/known.rs`) is that routine, so it
+computes that operation exactly as the routine does. Nothing the frontend
+says is trusted. A definition written any other way runs as written.
 
-- `Program::claim` asserts that a definition computes an IEEE 754
-  operation, which no equation can establish. Validation checks only the
-  claim's shape.
-- `Program::byte_sequence` records that a type is the frontend's byte list
-  or string.
+The table is written from the standard by `just bless`, and a test fails
+when the standard's float code changes without it, or when any operation
+goes unrecognized. The standard's float expectations run twice, once with
+the instructions and once walking every body (`Program::walk_floats`), and
+must agree, which is what keeps the table honest.
 
 The semantic summaries:
 
@@ -129,7 +139,9 @@ The public API is re-exported from `barb::mod.rs`.
 
 1. Build types with `Program::declare_type` and `define_type`, and
    functions with `declare` and `define`. `Builder` constructs bodies in
-   A-normal form. `set_entry` identifies the program's root.
+   A-normal form. `set_entry` identifies the program's root, and
+   `answered_by` names the routine a bodyless declaration reaches. That is
+   the whole of what a frontend says.
 2. Run `validate(&program)`. It checks structure under the frontend's
    typing and arena-construction preconditions and returns a `Refusal` on
    invalid input.
@@ -150,6 +162,8 @@ The public API is re-exported from `barb::mod.rs`.
    - `affine` for bounded affine summaries
    - `type_shape` to classify inductive declarations
 6. Use `Program::render_analyzed` to inspect a program with its facts.
+7. `canonical` and `fingerprint` are public so the float table can be
+   written from the standard; a frontend does not need them.
    `faun emit barb` exposes that view through the CLI.
 
 ## Input program requirements
@@ -181,12 +195,10 @@ Barb has value semantics. A bodyless call is a value the target computes.
   reaches, so what is checked is everything written and what is kept is
   what runs. A program with no entry is checked, keeps every definition,
   and lowers to nothing.
-- **Claimed floats.** A function with a body may be claimed to compute an
-  IEEE 754 operation (`Program::claim`), where the frontend knows what no
-  equation says. Its body must then compute that operation on the patterns
-  its wrapped naturals hold, up to which NaN pattern a NaN is. A target
-  with float instructions answers it with one; everything else, the
-  evaluator excepted, walks the body.
+- **Nothing to declare about floats or text.** A frontend that wants
+  hardware floats uses the standard's float routines, which Barb knows by
+  their code. Text and byte lists need no marking: a backend holds any
+  sequence of byte-wide elements as bytes.
 
 ## Semantics
 
@@ -260,12 +272,19 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `calls.rs`: the call graph, the rounds it goes in (its strongly connected
   components), the loop breakers inlining keeps whole, and the order
   folding reads definitions in, each after what it calls.
-- `claim.rs`: what a claimed float is -- a natural in one-field wrappers,
-  taken and answered at one type -- and answering a claimed call from its
-  operands' patterns with the host's arithmetic (`crate::float`). A claimed
-  definition is treated as a recognized one: kept, never inlined, and inert
-  to cleanup. Range analysis gives its answer, and each wrapper it is built
-  into, the whole format: a machine's NaN need not be the body's.
+- `fingerprint.rs`: a definition and everything it reaches as one 128-bit
+  number, with no name or ID in it: definitions and types numbered in the
+  order first met, constructors by type and tag, known values by type and
+  encoding.
+- `floats.rs`: recognizing the standard's float routines by fingerprint,
+  among definitions taking one or two of the wrapped-natural type they
+  answer, right after canonicalizing; the table itself is `floats/known.rs`.
+  Also answering a recognized call from its operands' patterns with the
+  host's arithmetic (`crate::float`). A recognized float is kept, never
+  inlined, and inert to cleanup, and the fact stays on the definition
+  through every later rewrite. Range analysis gives its answer, and each
+  wrapper it is built into, the whole format: a machine's NaN need not be
+  the body's.
 - `arithmetic.rs`: recognize induction equations, without range analysis. The
   same equations recognize a count of a sequence -- nought when empty, one more
   than the rest's for a step, never reading the element -- as a
@@ -509,7 +528,7 @@ x    ::= a parameter, a binding, or a field an arm bound
 `Program::render` uses indentation to delimit match arms and nested bodies,
 without braces. Bodyless declarations keep `= <elsewhere>` on the signature
 line, and a definition answered rather than walked keeps what it is answered
-as there instead of its body: `<binary64 add>` for a claimed float, and, in
+as there instead of its body: `<binary64 add>` for a recognized float, and, in
 `Program::render_analyzed`, `<add>` or `<prepend>` for a recognized operation.
 Where there is an entry, a definition it reaches only through such a body --
 soft-float helpers a target with the instruction never runs -- is named at
@@ -557,7 +576,9 @@ The stages fall into four groups:
    alone, so what it comes to never depends on budgets or the rest of the
    program. That walk leaves questions of tags uncomposed: the walk after
    recognition may first ask `a < b` then `a == b` as one comparison, which
-   composing them earlier would hide.
+   composing them earlier would hide. Float routines are recognized by
+   their fingerprints in between, so what they are read from is the code as
+   canonicalizing left it.
 2. Building forward: a walk answering `[f(x), *walk(rest)]`, or its list so
    beside a state, carries what it has built and appends each element, so it
    calls itself only in tail position.

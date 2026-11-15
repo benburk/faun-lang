@@ -43,6 +43,9 @@ pub struct Program {
     /// worked out. Rewriting a body keeps what it means, so this outlives
     /// every optimization; only defining a body or a type forgets it.
     recognised: Derived<Recognised>,
+    /// Whether every float operation answers by its body: see
+    /// [`Program::walk_floats`].
+    floats_walked: bool,
 }
 
 /// What was worked out from a program rather than said by it. Two programs
@@ -346,20 +349,8 @@ impl Program {
         self.types.push(Type {
             name,
             inline,
-            byte_sequence: None,
             definition: TypeDefinition::Declared,
         })
-    }
-
-    /// Record the source identity supplied by the frontend. A structurally identical
-    /// declaration in another module need not carry the same byte or text contract.
-    pub fn mark_byte_sequence(&mut self, ty: TypeId, kind: super::ByteSequence) {
-        self.types[ty].byte_sequence = Some(kind);
-    }
-
-    #[must_use]
-    pub fn byte_sequence(&self, ty: TypeId) -> Option<super::ByteSequence> {
-        self.types[ty].byte_sequence
     }
 
     /// Give a reserved type its constructors, once, in tag order.
@@ -468,29 +459,27 @@ impl Program {
         })
     }
 
-    /// Say that `id`'s body computes `float` on the patterns its parameters
-    /// hold, as the program building it knows and nothing here can check:
-    /// no equation says what an IEEE 754 operation is. The body stays, and
-    /// answers wherever nothing faster does -- the evaluator, a target with
-    /// no float instructions -- so a claim that is wrong is a program whose
-    /// answer depends on its target; validation checks only its shape.
-    ///
-    /// A claimed definition is treated as a recognized one: passes neither
-    /// rewrite nor inline it, folding answers a call of it from its
-    /// operands, and cleanup treats its calls as inert.
-    pub fn claim(&mut self, id: FnId, float: crate::float::Float) {
+    /// Record that `id`'s code is the reference routine for `float`: see
+    /// [`super::floats::recognise`].
+    pub(super) fn recognise_float(&mut self, id: FnId, float: crate::float::Float) {
         self.redefined();
         self.functions[id].float = Some(float);
     }
 
-    /// Forget every claim, so that each claimed definition answers by its
-    /// body wherever it is called: how a body is checked against what was
-    /// claimed of it.
-    pub fn disclaim(&mut self) {
+    /// Recognize no float operation, so that each answers by its body
+    /// wherever it is called: how the reference routines are checked
+    /// against the host's arithmetic.
+    pub fn walk_floats(&mut self) {
         self.redefined();
+        self.floats_walked = true;
         for function in &mut self.functions {
             function.float = None;
         }
+    }
+
+    /// Whether [`Program::walk_floats`] was asked for.
+    pub(super) const fn floats_walked(&self) -> bool {
+        self.floats_walked
     }
 
     /// Say what answers for a declaration out there, where a program calls

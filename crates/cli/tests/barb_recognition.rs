@@ -1,7 +1,11 @@
 //! Verify recognition through the frontend and the public Barb facts API.
 mod support;
 
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
 use faun_core::barb::{self, FnId};
+use faun_core::targets::Target;
 use faun_x86_64_linux::X86_64Linux;
 use support::Package;
 
@@ -10,6 +14,15 @@ fn optimized(package: &Package) -> barb::Program {
     barb::optimize(&mut program);
     barb::validate(&program).unwrap();
     program
+}
+
+/// The facts a target with float instructions reads, which name the float
+/// operations it answers.
+fn with_floats(program: &barb::Program) -> barb::Facts {
+    program.assuming(&barb::Assumed {
+        floats: true,
+        ..barb::Assumed::default()
+    })
 }
 
 #[test]
@@ -92,6 +105,7 @@ fn float_doubling_is_rewritten_before_machine_lowering() {
     ",
     );
     let program = optimized(&package);
+    let facts = with_floats(&program);
     let function = program
         .functions()
         .iter()
@@ -100,7 +114,7 @@ fn float_doubling_is_rewritten_before_machine_lowering() {
     let mut adds = 0;
     for expr in expressions(&program, function.body().unwrap()) {
         if let barb::Expr::Call(id, _) = expr
-            && let Some(float) = program.function(id).float
+            && let Some(float) = facts.float(id)
         {
             assert_ne!(float.operation, faun_core::float::Operation::Mul);
             adds += usize::from(float.operation == faun_core::float::Operation::Add);
@@ -126,4 +140,123 @@ fn expressions(program: &barb::Program, body: barb::Body) -> Vec<barb::Expr> {
         }
     }
     result
+}
+
+/// Every float operation the standard has, at both formats.
+const FLOATS: [(&str, &str); 2] = [("F64", "Binary64"), ("F32", "Binary32")];
+const OPERATIONS: [(&str, &str); 5] = [
+    ("add", "Add"),
+    ("sub", "Sub"),
+    ("mul", "Mul"),
+    ("div", "Div"),
+    ("sqrt", "Sqrt"),
+];
+
+/// A program asking every float operation of both formats.
+fn every_float_operation() -> Package {
+    Package::new(
+        "every-float-operation",
+        r"
+        main!(host) -> (
+          n = host.args.len()
+          wide = F64.of_nat(n)
+          narrow = F32.of_nat(n)
+          host.print!((wide + wide - wide * wide / wide).sqrt().to_str())
+          host.print!((narrow + narrow - narrow * narrow / narrow).sqrt().to_str())
+          host.exit!(0)
+        )
+    ",
+    )
+}
+
+/// Each standard float operation's fingerprint, as its code comes to after
+/// canonicalizing, on every target, with the operation and format it is.
+fn reference_fingerprints() -> BTreeMap<u128, (&'static str, &'static str)> {
+    let package = every_float_operation();
+    let targets: [&dyn Target; 4] = [
+        &X86_64Linux,
+        &faun_aarch64_macos::Aarch64Macos,
+        &faun_wasm32_wasi::Wasm32Wasi,
+        &faun_mos6502_sim65::Mos6502Sim65,
+    ];
+    let mut known = BTreeMap::new();
+    for target in targets {
+        let mut program = faun::lower_to_barb(&package.entry(), target).unwrap();
+        barb::canonical(&mut program);
+        for (float, format) in FLOATS {
+            for (method, operation) in OPERATIONS {
+                let name = format!("{float}.{method}");
+                let id = (0..program.functions().len())
+                    .map(FnId::at)
+                    .find(|&id| program.name(program.function(id).name) == name)
+                    .unwrap_or_else(|| panic!("the standard has no `{name}`"));
+                let print = barb::fingerprint(&program, id)
+                    .unwrap_or_else(|| panic!("`{name}` has no fingerprint"));
+                known.insert(print, (operation, format));
+            }
+        }
+    }
+    known
+}
+
+/// The table Barb recognizes float operations by, as Rust.
+fn reference_table() -> String {
+    let mut table = String::from(
+        "//! Written by `FAUN_BLESS=1 cargo nextest run -p faun-cli --test barb_recognition`\n\
+         //! from the standard's float operations, as the code of each comes to after\n\
+         //! canonicalizing. Do not edit by hand.\n\n\
+         use crate::float::{Float, Format, Operation};\n\n\
+         pub(super) const KNOWN: &[(u128, Float)] = &[\n",
+    );
+    for (print, (operation, format)) in reference_fingerprints() {
+        let digits = format!("{print:032x}");
+        let print = digits
+            .as_bytes()
+            .chunks(4)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect::<Vec<_>>()
+            .join("_");
+        writeln!(
+            table,
+            "    (\n        0x{print},\n        Float {{\n            operation: Operation::{operation},\n            format: Format::{format},\n        }},\n    ),"
+        )
+        .unwrap();
+    }
+    table.push_str("];\n");
+    table
+}
+
+#[test]
+fn the_reference_float_table_is_the_standards_code() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src/barb/floats/known.rs");
+    let table = reference_table();
+    if std::env::var_os("FAUN_BLESS").is_some_and(|value| value != "0") {
+        std::fs::write(&path, &table).unwrap();
+        return;
+    }
+    assert!(
+        std::fs::read_to_string(&path).unwrap() == table,
+        "the standard's float code changed: run `just bless` and read the diff"
+    );
+}
+
+#[test]
+fn every_float_operation_is_recognized_by_its_code() {
+    let program = optimized(&every_float_operation());
+    let facts = with_floats(&program);
+    for (float, format) in FLOATS {
+        for (method, operation) in OPERATIONS {
+            let name = format!("{float}.{method}");
+            let id = (0..program.functions().len())
+                .map(FnId::at)
+                .find(|&id| program.name(program.function(id).name) == name)
+                .unwrap_or_else(|| panic!("`{name}` was swept"));
+            let recognized = facts
+                .float(id)
+                .unwrap_or_else(|| panic!("`{name}` is not recognized"));
+            assert_eq!(format!("{:?}", recognized.operation), operation, "{name}");
+            assert_eq!(format!("{:?}", recognized.format), format, "{name}");
+        }
+    }
 }

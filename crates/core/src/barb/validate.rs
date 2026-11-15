@@ -82,7 +82,6 @@ pub fn validate(program: &Program) -> Result<(), Refusal> {
     }
     for at in 0..program.functions().len() {
         let id = FnId::at(at);
-        super::claim::check(program, id).map_err(|message| Refusal::of_function(message, id))?;
         let Some(body) = program.function(id).body() else {
             continue;
         };
