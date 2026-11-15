@@ -318,9 +318,6 @@ Barb.
 Pure work may be dropped or moved. Calls reaching a bodyless declaration
 keep their order, count and path.
 
-How each stage works, its budgets, and a map of the code are in
-[INTERNALS](INTERNALS.md).
-
 ## Why this over LLVM
 
 - LLVM makes a frontend choose a representation before it knows the
