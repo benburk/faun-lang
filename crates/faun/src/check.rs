@@ -210,10 +210,20 @@ struct Bound {
     bare: bool,
     /// The alias whose application wrote it, where one of one parameter did.
     through: Option<Symbol>,
-    /// Whether a numeral of the type asks it, its `of_nat`, `of_decimal`
-    /// or `neg`: where a use leaves the type undecided, the numeral takes
-    /// its default there.
-    numeral: bool,
+    /// What a numeral of the type asks of it, where one does: where a use
+    /// leaves the type undecided, the numeral takes its default there.
+    numeral: Option<Asked>,
+}
+
+/// What a numeral asks of its type: to be built from a natural, to be built
+/// from a decimal, or to be negated. A numeral is syntax blessed to call
+/// those methods, so what a call is for is recorded where it is made,
+/// never read back off its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Asked {
+    Natural,
+    Decimal,
+    Negation,
 }
 
 impl Bound {
@@ -265,8 +275,8 @@ struct PendingMethod {
     owed: Option<(Symbol, Option<Symbol>)>,
     /// The pending method whose implementation owes this, where one does.
     owing: Option<usize>,
-    /// Whether a numeral of the receiver asks it; see [`Bound::numeral`].
-    numeral: bool,
+    /// What a numeral of the receiver asks of it; see [`Bound::numeral`].
+    numeral: Option<Asked>,
     /// Where a written call's parts are, which says which does not fit.
     places: Option<Places>,
 }

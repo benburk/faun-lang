@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use super::unify::{Scheme, Ty, free_variables, replaced, show, ty_embeds};
 use super::{
-    Bound, Checker, Finish, Marks, MethodImpl, Misfit, PendingMethod, PendingNumeral, PendingTag,
-    Places, Reach, Reading, apply_signature, failure,
+    Asked, Bound, Checker, Finish, Marks, MethodImpl, Misfit, PendingMethod, PendingNumeral,
+    PendingTag, Places, Reach, Reading, apply_signature, failure,
 };
 use crate::blessed::{self, NumeralType};
 use crate::diagnostic::{Advised, Refusal, counted};
@@ -133,7 +133,7 @@ impl Checker<'_> {
             resolved: false,
             owed: None,
             owing: None,
-            numeral: false,
+            numeral: None,
             places,
         });
         result
@@ -364,9 +364,9 @@ impl Checker<'_> {
             let owed = |negative: bool| {
                 (method_start..self.pending_methods.len()).find(|&index| {
                     let pending = &self.pending_methods[index];
-                    pending.numeral
+                    pending.numeral.is_some()
                         && !pending.resolved
-                        && (self.symbols.text(pending.name) == "neg") == negative
+                        && (pending.numeral == Some(Asked::Negation)) == negative
                         && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_))
                         && !is_generic(self, &generic, &pending.receiver)
                 })
@@ -440,8 +440,7 @@ impl Checker<'_> {
     fn owes_decimal(&self, start: usize, receiver: &Ty) -> bool {
         let receiver = self.infer.resolve(receiver);
         self.pending_methods[start..].iter().any(|pending| {
-            pending.numeral
-                && self.symbols.text(pending.name) == "of_decimal"
+            pending.numeral == Some(Asked::Decimal)
                 && self.infer.resolve(&pending.receiver) == receiver
         })
     }
@@ -647,10 +646,10 @@ impl Checker<'_> {
     /// and `neg` where it is negated, at each specialization: the component
     /// owes both as bounds, and the numeral waits for its type.
     fn defer_numeral(&mut self, numeral: &PendingNumeral) -> Result<(), Refusal> {
-        let builder = if numeral.scale.is_some() {
-            "of_decimal"
+        let (builder, asked) = if numeral.scale.is_some() {
+            ("of_decimal", Asked::Decimal)
         } else {
-            "of_nat"
+            ("of_nat", Asked::Natural)
         };
         let builder = self.method_symbol(numeral.module, numeral.span, builder)?;
         let nat = Ty::Named(self.prelude.nat, Rc::default());
@@ -671,7 +670,7 @@ impl Checker<'_> {
             resolved: false,
             owed: None,
             owing: None,
-            numeral: true,
+            numeral: Some(asked),
             places: None,
         });
         if numeral.negative {
@@ -688,7 +687,7 @@ impl Checker<'_> {
                 resolved: false,
                 owed: None,
                 owing: None,
-                numeral: true,
+                numeral: Some(Asked::Negation),
                 places: None,
             });
         }
@@ -730,7 +729,7 @@ impl Checker<'_> {
                     && self.infer.resolve(&bound.owner) == owner
             }) {
                 Some(at) => {
-                    bounds[at].numeral |= pending.numeral;
+                    bounds[at].numeral = bounds[at].numeral.or(pending.numeral);
                     let existing = bounds[at].ty.clone();
                     self.unify_at(pending.module, pending.span, &ty, &existing)?;
                 }
@@ -1384,18 +1383,25 @@ impl Checker<'_> {
                 .collect(),
             _ => return Ok(Some(false)),
         };
+        // Which of the members a structural type has is asked, by the
+        // symbols the prelude resolved; the spelling is only for messages.
+        let is = |member: Option<Symbol>| member == Some(pending.name);
         let spelled = self.symbols.text(pending.name);
         // `hash_into` feeds each component to a hasher and answers it fed:
         // what it answers is whatever hasher it was handed.
-        let hashing = spelled == "hash_into"
+        let hashing = is(self.prelude.hash_into)
             && matches!(receiver, Ty::Tuple(_) | Ty::Record(..))
             && pending.arguments.len() == 1;
-        let answer = match (spelled, &receiver) {
-            ("equals", _) => Ty::Named(self.prelude.bool_, Rc::default()),
-            ("cmp", Ty::Tuple(_)) => Ty::Named(self.prelude.order, Rc::default()),
-            ("to_str", _) => Ty::Named(self.prelude.str_, Rc::default()),
-            _ if hashing => pending.arguments[0].clone(),
-            _ => return Ok(Some(false)),
+        let answer = if is(self.prelude.equals) {
+            Ty::Named(self.prelude.bool_, Rc::default())
+        } else if is(self.prelude.cmp) && matches!(receiver, Ty::Tuple(_)) {
+            Ty::Named(self.prelude.order, Rc::default())
+        } else if is(self.prelude.to_str) {
+            Ty::Named(self.prelude.str_, Rc::default())
+        } else if hashing {
+            pending.arguments[0].clone()
+        } else {
+            return Ok(Some(false));
         };
         if let Ty::Record(_, Some(tail)) = &receiver {
             if !final_pass && matches!(**tail, Ty::Var(_)) {
@@ -1427,7 +1433,7 @@ impl Checker<'_> {
         }
         // `to_str` takes the value alone, `hash_into` a hasher, and the
         // others a second like it.
-        let unary = spelled == "to_str";
+        let unary = is(self.prelude.to_str);
         match pending.arguments.as_slice() {
             [] if unary => {}
             [_] if hashing => {}
@@ -1455,7 +1461,7 @@ impl Checker<'_> {
                 resolved: false,
                 owed: None,
                 owing: None,
-                numeral: false,
+                numeral: None,
                 places: None,
             });
         }
