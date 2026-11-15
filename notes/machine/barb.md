@@ -82,8 +82,10 @@ switches.
 
 Shape the program:
 
-1. **Structural normalization.** Substitute aliases and take records apart
-   once, so inlining prices helpers fairly.
+1. **Canonicalization.** Substitute aliases, take records apart once, and
+   take decided matches, in every body before recognition and again after
+   it. Recognition sees code as it comes to, not as the frontend wrote it,
+   and inlining prices helpers fairly.
 2. **Building forward.** A walk like `map` builds its list front to back,
    so its recursive calls are tail calls.
 3. **Descent.** A definition taking two numbers down together becomes its

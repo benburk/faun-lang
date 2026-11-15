@@ -548,6 +548,16 @@ The stages fall into four groups:
    stage a helper reading several fields looks several times its size, the
    per-definition budget runs out sooner, and less is inlined, which leaves a
    smaller program that does more calling.
+
+   Before anything is recognized, the same rules run once over every body,
+   a recognizable one too, reading nothing recognized (`canonical`).
+   Recognition then reads each definition as its own body comes to, not as
+   the frontend happened to write it, so a step that boxes a value and takes
+   it straight out again does not hide a reversal. Each body is rewritten
+   alone, so what it comes to never depends on budgets or the rest of the
+   program. That walk leaves questions of tags uncomposed: the walk after
+   recognition may first ask `a < b` then `a == b` as one comparison, which
+   composing them earlier would hide.
 2. Building forward: a walk answering `[f(x), *walk(rest)]`, or its list so
    beside a state, carries what it has built and appends each element, so it
    calls itself only in tail position.
