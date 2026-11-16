@@ -2,7 +2,9 @@
 # element constructors. `dangerously_raw` is the only unescaped boundary.
 
 package {
-  html_lib: "../src/html"
+  uses: {
+    html_lib: "../src/html"
+  }
 }
 
 import html_lib {Html, Attribute}

@@ -4,7 +4,9 @@
 # library and is checked against RFC vectors there.
 
 package {
-  md5: "../libraries/md5/src/md5"
+  uses: {
+    md5: "../libraries/md5/src/md5"
+  }
 }
 
 import md5 {md5_hash}

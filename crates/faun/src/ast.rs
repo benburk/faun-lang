@@ -106,8 +106,11 @@ pub enum HeaderKind {
     Package,
 }
 
-/// A package root, `package {}`, and the packages it depends on,
-/// `package {md5: "../md5/src/md5"}`.
+/// A package root's header, `package {}`, and its fields.
+///
+/// `package {faun: "0.1", uses: {md5: "../md5/src/md5"}}` names the
+/// language version the package is read by and the packages it depends on.
+/// Which names a field may have, and what each holds, the loader decides.
 ///
 /// Whether a package builds a binary is whether its entry defines `main!`,
 /// not its header.
@@ -115,7 +118,23 @@ pub enum HeaderKind {
 pub struct HeaderDecl {
     pub span: Span,
     pub kind: HeaderKind,
-    pub dependencies: Vec<Dependency>,
+    pub fields: Vec<HeaderField>,
+}
+
+/// `name: "text"` or `name: {…}`, one field of a header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeaderField {
+    pub span: Span,
+    pub name: Name,
+    pub value: HeaderValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HeaderValue {
+    /// A string's text, as written, escapes and all.
+    Text(Vec<Span>),
+    /// Packages, each by the name it is imported as.
+    Packages(Vec<Dependency>),
 }
 
 /// `name: "path"`: the package whose root module is at `path`, a module

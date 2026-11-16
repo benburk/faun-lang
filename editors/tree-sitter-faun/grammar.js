@@ -105,7 +105,15 @@ module.exports = grammar({
 
     // Directives.
 
-    package: $ => seq('package', '{', commaSep($.dependency), '}'),
+    package: $ => seq('package', '{', commaSep($.header_field), '}'),
+
+    header_field: $ => seq(
+      field('name', $.identifier),
+      ':',
+      field('value', choice($.string, $.dependencies)),
+    ),
+
+    dependencies: $ => seq('{', commaSep($.dependency), '}'),
 
     dependency: $ => seq(
       field('name', $.identifier),

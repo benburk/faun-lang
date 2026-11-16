@@ -24,6 +24,9 @@
 (dependency
   name: (identifier) @namespace)
 
+(header_field
+  name: (identifier) @variable.other.member)
+
 ; Fields
 
 (field_expression

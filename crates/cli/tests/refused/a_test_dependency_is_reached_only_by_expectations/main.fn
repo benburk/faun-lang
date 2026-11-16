@@ -1,0 +1,15 @@
+package {
+  test_uses: {shapes: "vendor/shapes/shapes"},
+}
+
+import shapes {double_square}
+
+export {area}
+
+area : Nat -> Nat
+area(n) -> scaled(n)
+
+scaled : Nat -> Nat
+scaled(n) -> double_square(n)
+
+expect scaled(1) == 2

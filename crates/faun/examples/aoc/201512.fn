@@ -13,7 +13,9 @@
 # red-handed rule is the clause `total(Object(members) Net) if red_handed(members) -> 0`.
 
 package {
-  json: "../libraries/json/src/json"
+  uses: {
+    json: "../libraries/json/src/json"
+  }
 }
 
 import json {

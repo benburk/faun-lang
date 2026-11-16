@@ -13,8 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::ast::{
-    AliasDecl, ConstraintAliasDecl, DataDecl, DataRepresentation, Export, Item, MethodItem, Module,
-    Name, Span,
+    AliasDecl, ConstraintAliasDecl, DataDecl, DataRepresentation, Dependency, Export, HeaderDecl,
+    HeaderValue, Item, MethodItem, Module, Name, Span,
 };
 use super::diagnostic::Diagnostic;
 use super::{ParseError, Source, SourceId, Sources, Symbol, Symbols, parse_in};
@@ -112,6 +112,9 @@ pub struct LoadedProgram {
     pub prelude: ModuleId,
     /// The target-selected module mounted at `std.host`.
     pub host: ModuleId,
+    /// The root modules of the packages the entry's package imports, each
+    /// with whether its header names it in `test_uses`.
+    pub dependencies: Vec<(ModuleId, bool)>,
 }
 
 impl LoadedProgram {
@@ -132,12 +135,15 @@ impl LoadedProgram {
 /// virtual path `std.host` rather than its disk location.
 ///
 /// A package's root module may name the packages it depends on in its header,
-/// `package {md5: "../md5/src/md5"}`, each a module base relative to the
-/// header's file. Every module of the package may then `import md5`, which is
-/// that package's root, and not its inner modules, which are its own. A
+/// `package {uses: {md5: "../md5/src/md5"}}`, each a module base relative to
+/// the header's file, and those only its expectations need in `test_uses`.
+/// Every module of the package may then `import md5`, which is that
+/// package's root, and not its inner modules, which are its own. A
 /// dependency's modules resolve their imports from its root, with its own
-/// header's dependencies. Only a root module has a header. The entry's
-/// package is the modules loaded from the entry's root, not its dependencies'.
+/// header's dependencies. Only a root module has a header, and its `faun`
+/// field names the language version it is written for, which may not be
+/// newer than this compiler's. The entry's package is the modules loaded
+/// from the entry's root, not its dependencies'.
 ///
 /// # Errors
 ///
@@ -167,7 +173,8 @@ pub fn load_program(
 #[derive(Clone, Debug)]
 struct Root {
     directory: PathBuf,
-    dependencies: HashMap<String, PathBuf>,
+    /// Each dependency's root module, and whether it is in `test_uses`.
+    dependencies: HashMap<String, (PathBuf, bool)>,
     package: usize,
 }
 
@@ -206,6 +213,9 @@ struct Loader {
     standard_root: Option<PathBuf>,
     /// How many packages have been given a root.
     packages: usize,
+    /// Each package's imported dependencies: the package, the dependency's
+    /// root module, and whether it is in `test_uses`.
+    imported: Vec<(usize, ModuleId, bool)>,
 }
 
 impl Loader {
@@ -229,6 +239,14 @@ impl Loader {
         host: ModuleId,
     ) -> LoadedProgram {
         let own = self.pending[entry.index()].package;
+        let mut dependencies: Vec<(ModuleId, bool)> = self
+            .imported
+            .iter()
+            .filter(|&&(package, ..)| package == own)
+            .map(|&(_, module, test)| (module, test))
+            .collect();
+        dependencies.sort_unstable();
+        dependencies.dedup();
         let package = self
             .pending
             .iter()
@@ -256,6 +274,7 @@ impl Loader {
             package,
             prelude,
             host,
+            dependencies,
         }
     }
 
@@ -363,7 +382,7 @@ impl Loader {
                     Diagnostic::new("the host module cannot import `std.host`, which is itself")
                         .at(&file, span)
                 })?
-            } else if let Some(dependency) = root.dependencies.get(&path_parts[0]) {
+            } else if let Some((dependency, for_tests)) = root.dependencies.get(&path_parts[0]) {
                 if path_parts.len() > 1 {
                     let package = &path_parts[0];
                     let message = format!(
@@ -375,9 +394,11 @@ impl Loader {
                         .note("a package this one depends on keeps its modules its own")
                         .help(format!("import `{package}` itself")));
                 }
-                let dependency = dependency.clone();
+                let (dependency, for_tests) = (dependency.clone(), *for_tests);
                 let package = self.package_at(&dependency);
-                self.load_module(&dependency, Loading::Package(package), false)?
+                let module = self.load_module(&dependency, Loading::Package(package), false)?;
+                self.imported.push((root.package, module, for_tests));
+                module
             } else {
                 let module = module_path(&root.directory, &path_parts).map_err(|diagnostic| {
                     if diagnostic.location().is_some() {
@@ -506,16 +527,9 @@ impl Loader {
             .label("this module is inside its package")),
             (Loading::Package(mut root), Some(header)) => {
                 let directory = path.parent().unwrap_or_else(|| Path::new("."));
-                for dependency in &header.dependencies {
+                for (dependency, for_tests) in header_fields(header, text)? {
                     let name = dependency.name.text(text.text()).to_owned();
-                    let written: String = dependency
-                        .path
-                        .iter()
-                        .map(|part| {
-                            crate::literal::decode_text(part.text(text.text()))
-                                .map(std::borrow::Cow::into_owned)
-                        })
-                        .collect::<Result<_, _>>()
+                    let written = decoded(&dependency.path, text)
                         .map_err(|message| Diagnostic::new(message).at(text, dependency.span))?;
                     if let Some(scheme) = url_scheme(&written) {
                         return Err(Diagnostic::new(format!(
@@ -530,7 +544,11 @@ impl Loader {
                             Diagnostic::new(format!("dependency `{name}` {}", error.message))
                                 .at(text, dependency.span)
                         })?;
-                    if root.dependencies.insert(name.clone(), module).is_some() {
+                    if root
+                        .dependencies
+                        .insert(name.clone(), (module, for_tests))
+                        .is_some()
+                    {
                         return Err(Diagnostic::new(format!(
                             "the package depends on `{name}` more than once"
                         ))
@@ -569,6 +587,103 @@ impl Loader {
         }
         format!("M{}", id.0)
     }
+}
+
+/// The language version this compiler reads, `MAJOR.MINOR`: its own.
+fn language_version() -> (u64, u64) {
+    let part = |text: &str| {
+        text.parse()
+            .expect("Cargo writes a version's parts as numbers")
+    };
+    (
+        part(env!("CARGO_PKG_VERSION_MAJOR")),
+        part(env!("CARGO_PKG_VERSION_MINOR")),
+    )
+}
+
+/// A header's dependencies, each with whether it is in `test_uses`, once
+/// its fields are each known and written once, and its `faun` version is
+/// one this compiler reads.
+fn header_fields<'a>(
+    header: &'a HeaderDecl,
+    file: &Source,
+) -> Result<Vec<(&'a Dependency, bool)>, Diagnostic> {
+    let text = file.text();
+    let mut seen = Vec::new();
+    let mut dependencies = Vec::new();
+    for field in &header.fields {
+        let name = field.name.text(text);
+        if seen.contains(&name) {
+            return Err(
+                Diagnostic::new(format!("the header names `{name}` more than once"))
+                    .at(file, field.span),
+            );
+        }
+        seen.push(name);
+        match (name, &field.value) {
+            ("faun", HeaderValue::Text(written)) => {
+                let written = decoded(written, file)
+                    .map_err(|message| Diagnostic::new(message).at(file, field.span))?;
+                let wanted = written
+                    .split_once('.')
+                    .and_then(|(major, minor)| {
+                        let number = |part: &str| {
+                            (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+                                .then(|| part.parse::<u64>().ok())
+                                .flatten()
+                        };
+                        Some((number(major)?, number(minor)?))
+                    })
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!("`{written}` is not a language version"))
+                            .at(file, field.span)
+                            .help("write a version as `MAJOR.MINOR`, as `faun: \"0.1\"`")
+                    })?;
+                let (major, minor) = language_version();
+                if wanted > (major, minor) {
+                    return Err(Diagnostic::new(format!(
+                        "the package is written for Faun {written}, newer than this compiler's {major}.{minor}"
+                    ))
+                    .at(file, field.span)
+                    .help(format!("build it with a compiler for Faun {written} or later")));
+                }
+            }
+            ("uses" | "test_uses", HeaderValue::Packages(packages)) => {
+                let for_tests = name == "test_uses";
+                dependencies.extend(packages.iter().map(|dependency| (dependency, for_tests)));
+            }
+            ("faun", HeaderValue::Packages(_)) => {
+                return Err(
+                    Diagnostic::new("`faun` is a language version, not packages")
+                        .at(file, field.span)
+                        .help("write it as a string, as `faun: \"0.1\"`"),
+                );
+            }
+            ("uses" | "test_uses", HeaderValue::Text(_)) => {
+                return Err(Diagnostic::new(format!("`{name}` holds packages, not a string"))
+                    .at(file, field.span)
+                    .help(format!(
+                        "name each package and its path, as `{name}: {{md5: \"../md5/src/md5\"}}`"
+                    )));
+            }
+            _ => {
+                return Err(Diagnostic::new(format!("a header has no field `{name}`"))
+                    .at(file, field.span)
+                    .note("a header's fields are `faun`, `uses` and `test_uses`"));
+            }
+        }
+    }
+    Ok(dependencies)
+}
+
+/// A string's text, its escapes decoded.
+fn decoded(parts: &[Span], file: &Source) -> Result<String, String> {
+    parts
+        .iter()
+        .map(|part| {
+            crate::literal::decode_text(part.text(file.text())).map(std::borrow::Cow::into_owned)
+        })
+        .collect()
 }
 
 fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, Diagnostic> {

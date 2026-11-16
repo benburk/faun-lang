@@ -5,7 +5,9 @@
 # well, which an undirected graph does, lets it be split into components.
 
 package {
-  graph: "../src/graph"
+  uses: {
+    graph: "../src/graph"
+  }
 }
 
 import graph {Edge, bfs, dfs, components, dijkstra}

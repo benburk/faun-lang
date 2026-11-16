@@ -67,91 +67,95 @@ list is the prelude.
 ## Packages
 
 A package is its root module's directory and every module it imports from
-there. Its root may name the packages it depends on in a header, each by a
-module base relative to the header's file:
+there. Its root may begin with a header, a record of fields, each optional:
 
 ```ruby
 package {
-  md5: "../libraries/md5/src/md5"
+  faun: "0.1",
+  uses: {
+    md5: "../libraries/md5/src/md5",
+  },
+  test_uses: {
+    proptest: "../libraries/proptest/src/proptest",
+  },
 }
 
 import md5 {md5_hash}
 ```
 
-That is `examples/aoc/201504.fn`. The name on the left is the depending
-package's choice: the arena calls the random-number library `pcg`. Any
-module of the package may then import that name, which is the dependency's
-root module.
+- `uses` names the packages it depends on, each by a module base relative
+  to the header's file.
+- `test_uses` names those only its expectations need, in the same way.
+- `faun` is the language version it is written for, `MAJOR.MINOR`.
+
+A field the header does not have, one written twice, or one holding the
+wrong kind of value is refused. A file needs no header at all: a script
+with no dependencies is a file and nothing more.
+
+The name on the left of a dependency is the depending package's choice: the
+arena calls the random-number library `pcg`. Any module of the package may
+then import that name, which is the dependency's root module.
 
 - A dependency's inner modules are its own: `import shapes.area {square}`
   is refused, saying to import `shapes` itself.
 - A dependency's modules resolve their imports from its own root, with its
   own header's dependencies, wherever it sits on disk.
 - Only a package's root module has a header; one in an inner module is
-  refused, and so is a name depended on twice.
+  refused, and so is a name depended on twice, in one field or across
+  `uses` and `test_uses`.
 - A dependency is a path that must name a module: there is no fetching, no
-  version and no lock file. A URL is refused as one: a dependency is a path to a package's root module.
+  version and no lock file. A URL is refused as one.
   [URL dependencies](#url-dependencies-not-built) are planned.
 
 Whether a package is an application is whether its entry defines `main!`.
 
-### Header fields (not built)
+### Language versions
 
-This section is a plan, not the compiler. The header becomes a record of
-named fields, each optional, so a field can be added later without
-reserving a name no dependency may take:
-
-```ruby
-package {
-  faun: "0.4"
-  uses: {
-    pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst"
-    text: "../text/main"
-  }
-  test_uses: {
-    proptest: "../libraries/proptest/src/proptest"
-  }
-}
-```
-
-- `uses` is today's dependency map, moved under a name.
-- `test_uses` names the packages only the package's expectations need. A
-  name may be in one of `uses` and `test_uses`, not both.
-- `faun` is the language version the package was written for,
-  `MAJOR.MINOR`, read the way Rust reads an edition and Go its `go` line:
-  the compiler reads each package by its own version's rules, so one build
-  mixes packages written for different versions. A version newer than the
-  compiler knows is refused, saying so.
-
-A file needs no header at all: a script with no dependencies is a file
-and nothing more.
-
-#### Language versions
+`faun` is read the way Rust reads an edition and Go its `go` line: each
+package is read by its own version's rules, so one build mixes packages
+written for different versions. A version newer than the compiler's own,
+the major and minor of its release, is refused, saying so.
 
 A header without `faun` is read by the running compiler's own version, so
 a script or a project of one's own always has the current language and is
-fixed by hand when the language changes. `faun bundle` writes the version
-into the bundled header when the source has none, so a bundle, which never
-changes, always says which rules it was written for. A language change
-that would break a package, a name added to the prelude among them, applies
-only to packages whose version is new enough.
+fixed by hand when the language changes. A language change that would
+break a package, a name added to the prelude among them, applies only to
+packages whose version is new enough. No change has needed one yet, so
+today every version up to the compiler's is read alike.
 
 The version is a request to whichever compiler runs, not a pin of one:
 fetching and running a compiler is left to the tools that install it, a
 Nix flake among them.
 
-#### Test dependencies
+### Test dependencies
 
-A package's real code is what its exports, or its `main!`, reach; its test
-code is what only its expectations reach, a helper they share included.
-Only test code may reach a name imported from a `test_uses` package. Real
-code that does is refused, showing the chain from the definition to the
-import, with the advice to move the dependency to `uses`. A `uses`
-dependency only test code reaches gets a warning suggesting `test_uses`.
+A package's test code is its expectations and what only they reach, a
+helper they share included. Its real code is the rest: what its root
+exports and its `main!` reach, and any definition nothing reaches. Real
+code that names something only a `test_uses` package gives is refused, at
+that name, with the chain real code reaches it by, and the advice to move
+the dependency to `uses`:
 
-When a package is checked as another's dependency, its expectations are
-not checked, so its `test_uses` packages are not fetched, are not shown by
-`faun uses`, and mention no version when the build chooses versions.
+```text
+error: `double_square` is from a test dependency, and real code uses it
+  --> main.fn:13:14
+   |
+13 | scaled(n) -> double_square(n)
+   |              ^^^^^^^^^^^^^ `scaled` uses it
+   |
+   = note: only expectations, and what only they reach, may use a package in `test_uses`
+   = note: real code reaches it: `area` calls `scaled`
+```
+
+A definition reaches the globals, constructors and types it names, and,
+since a method is found by its receiver's type, every method of the
+package spelled as a member it asks for.
+
+Planned, not built: a `uses` dependency only test code reaches gets a
+warning suggesting `test_uses`, and a package checked as another's
+dependency has its expectations left unchecked, so its `test_uses`
+packages are not fetched, not shown by `faun uses`, and mention no version
+when the build chooses versions.
 
 ### URL dependencies (not built)
 
@@ -162,9 +166,9 @@ work this way today. A dependency may be an `https` URL to a bundle, a
 ```ruby
 package {
   uses: {
-    pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst"
-    md5: "../libraries/md5/src/md5"
-  }
+    pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst",
+    md5: "../libraries/md5/src/md5",
+  },
 }
 ```
 
@@ -174,7 +178,9 @@ package {
   same contents, whatever the server does later.
 - `faun bundle PATH` makes the bundle of the package at `PATH`: its root
   module, as `main.fn` at the bundle's top, and every module it imports, at
-  their paths from the root. It writes the file under its hash, to be
+  their paths from the root, with the compiler's language version written
+  into the root's header where it has none. It writes the file under its
+  hash, to be
   uploaded anywhere that serves static files over `https`. The bundle is
   what is hashed, so what a dependency names is the file its author made,
   never an archive a forge generates.
@@ -232,10 +238,6 @@ naming both URLs.
 - `faun uses PATH` prints the dependency graph as a tree, each dependency
   by the URL or path its header wrote, marking a package shown before and a
   version chosen in place of the one written.
-- `--replace-dep OLD NEW`, given to a build, a check or a test, uses `NEW`,
-  a URL or a path, wherever any header names exactly `OLD`, for that one
-  command. It edits no file and no cached package. It is how a fork, a
-  local change or a fix not yet taken by the packages between is tried.
 - `faun bump PATH` compares a package's exported interface with its
   previous version's and says whether the change is major, minor or patch.
 
@@ -364,11 +366,6 @@ Upgrading stays an edit to a header, which a tool can make by reading a
 library's releases; the compiler never chooses a version newer than one
 some header wrote.
 
-`--replace-dep` exists for the fix that cannot wait: a security patch deep
-in the graph, which the packages between have not taken, is tried or
-shipped without forking them. It lasts for one command, so a header stays
-the whole truth of what a package depends on.
-
 Fetching runs nothing. A Faun package has no build script, so fetching one
 is reading bytes, and a hash that matches says only that they are the bytes
 the header's author chose, not that they are safe.
@@ -402,10 +399,11 @@ chosen, its version mentions would change their builds, with nothing
 saying so. Listed, that is a refusal, and changing what a package asks of
 the packages depending on it is always an edit to its header.
 
-A lasting override, Cargo's `[patch]` or Go's `replace`, is left out. A
+Overriding a dependency deep in the graph, Cargo's `[patch]` or Go's
+`replace`, is left out, both as a field and as a flag for one command. A
 newer version is taken by mentioning it, since the highest mentioned is
-used, a fix is tried with `--replace-dep`, and a fork kept is a vendored
-copy. An `overrides` field can come when a case needs it.
+used, and a fork is a vendored copy, with the packages between it and the
+root vendored too. An override can come when a case needs it.
 
 ### Why are tests `expect`s in the module?
 

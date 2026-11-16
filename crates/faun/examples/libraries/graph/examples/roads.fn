@@ -4,7 +4,9 @@
 # caller names them.
 
 package {
-  graph: "../src/graph"
+  uses: {
+    graph: "../src/graph"
+  }
 }
 
 import graph {UnGraph, bfs, dfs, components, dijkstra}

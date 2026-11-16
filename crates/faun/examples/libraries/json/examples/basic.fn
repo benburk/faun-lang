@@ -7,7 +7,9 @@
 # field in Faun does not change the format.
 
 package {
-  json: "../src/json"
+  uses: {
+    json: "../src/json"
+  }
 }
 
 import json {

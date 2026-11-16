@@ -42,10 +42,14 @@ after-type        = "=" ( constraints | type )
 (* A clause's guard and body. *)
 clause            = [ "if" expr ] "->" expr ;
 
-directive         = "package" "{" [ dependencies ] "}"
+directive         = "package" "{" [ header-fields ] "}"
                   | "import" NAME { "." NAME } "{" [ exposures ] "}"
                   | "export" "{" [ exported ] "}" ;
-dependencies      = NAME ":" STR_START { STR_TEXT } STR_END [ "," [ dependencies ] ] ;
+(* Which names a header's fields have, and what each holds, the loader
+   decides: `faun` a string, `uses` and `test_uses` packages. *)
+header-fields     = NAME ":" ( text | "{" [ dependencies ] "}" ) [ "," [ header-fields ] ] ;
+dependencies      = NAME ":" text [ "," [ dependencies ] ] ;
+text              = STR_START { STR_TEXT } STR_END ;
 exposures         = any-name [ ".*" ] [ ":" any-name ] [ "," [ exposures ] ] ;
 exported          = any-name [ ".*" ] [ "," [ exported ] ] ;
 any-name          = NAME | EFFECT | TYPE ;

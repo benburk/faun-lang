@@ -756,7 +756,9 @@ module base relative to the header's file, as Ori's `app {}` and `lib {}` do:
 
 ```
 package {
-  md5: "../libraries/md5/src/md5"
+  uses: {
+    md5: "../libraries/md5/src/md5"
+  }
 }
 
 import md5 {md5_hash}

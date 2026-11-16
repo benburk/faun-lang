@@ -314,7 +314,7 @@ fn wide_words_work_bit_by_bit() {
 fn a_dependency_is_called_and_its_expectations_are_its_own() {
     let package = Package::new(
         "with-dependency",
-        "package {shapes: \"vendor/shapes\"}
+        "package {uses: {shapes: \"vendor/shapes\"}}
 
          import shapes {double_square}
 

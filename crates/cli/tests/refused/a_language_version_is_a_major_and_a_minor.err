@@ -1,0 +1,7 @@
+error: `0.1.0` is not a language version
+ --> a_language_version_is_a_major_and_a_minor.fn:1:10
+  |
+1 | package {faun: "0.1.0"}
+  |          ^^^^^^^^^^^^^
+  |
+  = help: write a version as `MAJOR.MINOR`, as `faun: "0.1"`

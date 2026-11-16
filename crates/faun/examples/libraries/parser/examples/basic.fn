@@ -1,7 +1,9 @@
 # Parse every line as two natural numbers separated by `x`.
 
 package {
-  parser: "../src/parser"
+  uses: {
+    parser: "../src/parser"
+  }
 }
 
 import parser {Input}

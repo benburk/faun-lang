@@ -1,5 +1,7 @@
 package {
-  memoize: "../src/memoize"
+  uses: {
+    memoize: "../src/memoize"
+  }
 }
 
 import memoize {Memo}

@@ -1,0 +1,7 @@
+error: a header has no field `version`
+ --> a_header_field_is_one_it_has.fn:1:10
+  |
+1 | package {version: "0.1"}
+  |          ^^^^^^^^^^^^^^
+  |
+  = note: a header's fields are `faun`, `uses` and `test_uses`

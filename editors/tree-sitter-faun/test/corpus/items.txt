@@ -4,7 +4,7 @@ Directives
 
 import std.host {Host, List.*, x: y}
 export {f, Host.*}
-package {md5: "../md5"}
+package {faun: "0.1", uses: {md5: "../md5"}, test_uses: {}}
 
 ---
 
@@ -26,10 +26,20 @@ package {md5: "../md5"}
     (exposure
       (type_identifier)))
   (package
-    (dependency
+    (header_field
       (identifier)
       (string
-        (string_content)))))
+        (string_content)))
+    (header_field
+      (identifier)
+      (dependencies
+        (dependency
+          (identifier)
+          (string
+            (string_content)))))
+    (header_field
+      (identifier)
+      (dependencies))))
 
 ========================================
 A signature with constraints

@@ -1,0 +1,7 @@
+error: `uses` holds packages, not a string
+ --> a_header_field_holds_what_it_is_for.fn:1:10
+  |
+1 | package {uses: "vendor/shapes"}
+  |          ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: name each package and its path, as `uses: {md5: "../md5/src/md5"}`

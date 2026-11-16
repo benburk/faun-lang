@@ -4,7 +4,9 @@
 # values through the record-builder syntax.
 
 package {
-  clap_lib: "../src/clap"
+  uses: {
+    clap_lib: "../src/clap"
+  }
 }
 
 import clap_lib {Args, Match, ArgError}

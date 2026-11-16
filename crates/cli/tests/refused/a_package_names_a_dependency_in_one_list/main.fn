@@ -1,0 +1,4 @@
+package {
+  uses: {shapes: "vendor/shapes/shapes"},
+  test_uses: {shapes: "vendor/shapes/shapes"},
+}

@@ -13,8 +13,8 @@
 
 use super::ast::{
     Align, Arm, BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl,
-    Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span,
-    StringPart, Type, UnaryOp, Width,
+    Exposure, Expr, ExprKind, HeaderDecl, HeaderField, HeaderKind, HeaderValue, ImportDecl, Name,
+    Numeral, NumeralKind, Span, StringPart, Type, UnaryOp, Width,
 };
 use super::diagnostic::{Advice, Advised};
 use super::lex::{Kind, Token};
@@ -604,32 +604,64 @@ impl Parser<'_> {
     fn package(&mut self) -> Parsed<HeaderDecl> {
         let start = self.bump();
         self.expect(Kind::LBrace, "`{`")?;
-        let (dependencies, _) = self.separated(
+        let (fields, _) = self.separated(
             false,
             |kind| kind == Kind::Ident,
             "a name",
-            |parser| {
-                let named = parser.bump();
-                parser.expect(Kind::Colon, "`:`")?;
-                parser.expect(Kind::StrStart, "a path")?;
-                let mut path = Vec::new();
-                while let Some(text) = parser.eat(Kind::StrText) {
-                    path.push(text.span());
-                }
-                let close = parser.expect(Kind::StrEnd, "the path's closing quote")?;
-                Ok(Dependency {
-                    span: named.span().through(close.span()),
-                    name: name(named),
-                    path,
-                })
-            },
+            Self::header_field,
         )?;
         let close = self.expect(Kind::RBrace, "`}`")?;
         Ok(HeaderDecl {
             span: start.span().through(close.span()),
             kind: HeaderKind::Package,
-            dependencies,
+            fields,
         })
+    }
+
+    /// `name: "text"`, or `name: {…}` of packages, each `name: "path"`.
+    fn header_field(&mut self) -> Parsed<HeaderField> {
+        let named = self.bump();
+        self.expect(Kind::Colon, "`:`")?;
+        let (value, close) = if self.eat(Kind::LBrace).is_some() {
+            let (dependencies, _) = self.separated(
+                false,
+                |kind| kind == Kind::Ident,
+                "a name",
+                |parser| {
+                    let named = parser.bump();
+                    parser.expect(Kind::Colon, "`:`")?;
+                    let (path, close) = parser.text("a path")?;
+                    Ok(Dependency {
+                        span: named.span().through(close),
+                        name: name(named),
+                        path,
+                    })
+                },
+            )?;
+            let close = self.expect(Kind::RBrace, "`}`")?;
+            (HeaderValue::Packages(dependencies), close.span())
+        } else {
+            self.note("`{`");
+            let (text, close) = self.text("a string")?;
+            (HeaderValue::Text(text), close)
+        };
+        Ok(HeaderField {
+            span: named.span().through(close),
+            name: name(named),
+            value,
+        })
+    }
+
+    /// A string of plain text, no splices: its text's spans, and where it
+    /// closes.
+    fn text(&mut self, what: &'static str) -> Parsed<(Vec<Span>, Span)> {
+        self.expect(Kind::StrStart, what)?;
+        let mut text = Vec::new();
+        while let Some(part) = self.eat(Kind::StrText) {
+            text.push(part.span());
+        }
+        let close = self.expect(Kind::StrEnd, "the string's closing quote")?;
+        Ok((text, close.span()))
     }
 
     fn import(&mut self) -> Parsed<ImportDecl> {

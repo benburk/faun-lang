@@ -3,7 +3,9 @@
 # four distinct numbers is a hit, anything older was evicted.
 
 package {
-  lru: "../src/lru"
+  uses: {
+    lru: "../src/lru"
+  }
 }
 
 import lru {Lru}

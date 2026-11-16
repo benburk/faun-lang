@@ -8,7 +8,9 @@
 # argv[0] is the element count, argv[1] the seed.
 
 package {
-  random: "../src/random"
+  uses: {
+    random: "../src/random"
+  }
 }
 
 import random {Random}

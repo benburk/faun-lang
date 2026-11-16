@@ -1,1 +1,1 @@
-package {shapes: "vendor/shapes/nowhere"}
+package {uses: {shapes: "vendor/shapes/nowhere"}}
