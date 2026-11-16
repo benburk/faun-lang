@@ -103,9 +103,8 @@ then import that name, which is the dependency's root module.
 - Only a package's root module has a header; one in an inner module is
   refused, and so is a name depended on twice, in one field or across
   `uses` and `test_uses`.
-- A dependency is a path that must name a module: there is no fetching, no
-  version and no lock file. A URL is refused as one.
-  [URL dependencies](#url-dependencies-not-built) are planned.
+- A dependency is a path that must name a module, or a
+  [URL](#url-dependencies) that names a bundle.
 
 Whether a package is an application is whether its entry defines `main!`.
 
@@ -151,17 +150,19 @@ A definition reaches the globals, constructors and types it names, and,
 since a method is found by its receiver's type, every method of the
 package spelled as a member it asks for.
 
+A dependency's own `test_uses` that are URLs are fetched as written and
+take no part in choosing versions, so its test tooling never changes what
+the packages depending on it build with.
+
 Planned, not built: a `uses` dependency only test code reaches gets a
 warning suggesting `test_uses`, and a package checked as another's
 dependency has its expectations left unchecked, so its `test_uses`
-packages are not fetched, not shown by `faun uses`, and mention no version
-when the build chooses versions.
+packages are not fetched at all.
 
-### URL dependencies (not built)
+### URL dependencies
 
-This section is a plan, not the compiler. It follows Roc's packages, which
-work this way today. A dependency may be an `https` URL to a bundle, a
-`.tar.zst` file named by the BLAKE3 hash of its bytes:
+This follows Roc's packages. A dependency may be an `https` URL to a
+bundle, a `.tar.zst` file named by the BLAKE3 hash of its bytes:
 
 ```ruby
 package {
@@ -175,31 +176,39 @@ package {
 - The URL's last segment, before `.tar.zst`, is the hash in base58. A URL
   without one is refused. After downloading, the compiler hashes the bytes
   it read and refuses the bundle if they differ, so a URL always names the
-  same contents, whatever the server does later.
+  same contents, whatever the server does later. A URL with a query or a
+  fragment is refused.
 - `faun bundle PATH` makes the bundle of the package at `PATH`: its root
   module, as `main.fn` at the bundle's top, and every module it imports, at
   their paths from the root, with the compiler's language version written
-  into the root's header where it has none. It writes the file under its
-  hash, to be
-  uploaded anywhere that serves static files over `https`. The bundle is
-  what is hashed, so what a dependency names is the file its author made,
-  never an archive a forge generates.
+  into the root's header where it has none. Every entry is written alike,
+  owned by no one and dated to the epoch, so bundling a package twice
+  writes the same bytes. It writes the file under its hash, `-o DIR` saying
+  where, to be uploaded anywhere that serves static files over `https`. The
+  bundle is what is hashed, so what a dependency names is the file its
+  author made, never an archive a forge generates. A package depending on
+  another by a path is refused, since the bundle cannot hold it: each is
+  bundled, and named by its URL.
 - Plain `http` is allowed only to `localhost`, for testing. A redirect is
   followed at most three times, and each place it leads must keep the same
   rule.
-- A bundle may unpack to at most 10 megabytes, and a dependency with
-  everything it depends on to at most 100; a flag raises either.
+- A bundle may unpack to at most 10 megabytes, and everything one command
+  fetches to at most 100, and holds only files and directories, each inside
+  it. A flag to raise the limits is planned.
 - A fetched package is kept in the user's cache, `$XDG_CACHE_HOME/faun/`
-  (`~/.cache/faun/` when that is unset), under its hash, read-only and
+  (`~/.cache/faun/` when that is unset, and `$FAUN_CACHE` where that is
+  set), under `packages/` and its hash, read-only and
   shared by every project on the computer. A bundle is unpacked into a
   staging directory and moved into place with a rename, so a directory
   named by a hash always holds a whole package; a staging directory a day
-  old is left from a killed process and is removed. Beside each package, a
-  small file records its dependencies, so a build whose packages are all
-  cached reaches no network and reads no headers to find them.
+  old is left from a killed process and is removed. A build whose packages
+  are all cached reaches no network.
 - A fetched package is a package like any other: its imports read from its
   own root, its inner modules are its own, and its own header names its own
   dependencies, which may be paths within it or URLs.
+- The `faun` command fetches what a package needs before it checks, builds,
+  runs or tests it. The compiler itself only reads the cache: fetching is
+  the command's.
 
 #### Versions
 
@@ -228,18 +237,19 @@ this rule decide every package a build reads.
 
 Two packages that are used side by side, two majors of one library or two
 URLs without versions, have two sets of types: a `Random` from one is not a
-`Random` from the other. Passing one where the other is wanted is refused,
-naming both URLs.
+`Random` from the other, and passing one where the other is wanted is a
+type error.
 
 #### Commands
 
 - `faun fetch PATH` downloads every dependency of the package at `PATH`, so
   a later build can be offline.
 - `faun uses PATH` prints the dependency graph as a tree, each dependency
-  by the URL or path its header wrote, marking a package shown before and a
-  version chosen in place of the one written.
-- `faun bump PATH` compares a package's exported interface with its
-  previous version's and says whether the change is major, minor or patch.
+  by the URL or path its header wrote, marking a package shown before, a
+  test dependency, and a version chosen in place of the one written.
+- Planned, not built: `faun bump PATH` compares a package's exported
+  interface with its previous version's and says whether the change is
+  major, minor or patch.
 
 Vendoring a dependency is unpacking its bundle beside the package and
 writing its path in place of the URL. A path dependency is read as it is,
@@ -326,10 +336,10 @@ copied beside a program, or under it, without a line inside it changing.
 The depending package names each dependency, so two libraries with one
 name, or a library under a shorter name, need no change to either.
 
-Dependencies are local paths because fetching, hashing, locking and
-choosing versions are a package manager's work, and there is none. The
-cost is that a path's surroundings are part of the package: moving a
-library moves the paths of everything that depends on it.
+A path dependency is read as it is, with nothing fetched, hashed or
+chosen. The cost is that a path's surroundings are part of the package:
+moving a library moves the paths of everything that depends on it, which
+is what a URL dependency is for.
 
 ### Why URLs named by hash, and Roc's versions?
 
@@ -361,7 +371,8 @@ cannot meet.
 
 The cost is that versions are read by the compiler, not only by people,
 and a library that breaks its interface in a minor release breaks the
-packages that depend on it. `faun bump` is the check against that.
+packages that depend on it. `faun bump`, when it is built, is the check
+against that.
 Upgrading stays an edit to a header, which a tool can make by reading a
 library's releases; the compiler never chooses a version newer than one
 some header wrote.

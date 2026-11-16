@@ -1,0 +1,5 @@
+error: dependency `shapes` names no bundle: its last segment, `shapes`, is not a BLAKE3 hash in base58 followed by `.tar.zst`
+ --> a_url_dependency_names_its_bundle_by_hash/main.fn:1:17
+  |
+1 | package {uses: {shapes: "https://example.com/shapes"}}
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

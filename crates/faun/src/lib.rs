@@ -39,6 +39,7 @@ use faun_core::targets::{Favour, SymbolTable, Target};
 use context::Context;
 use host::Main;
 use modules::LoadedProgram;
+use packages::Packages;
 
 pub mod ast;
 mod barb_lower;
@@ -63,6 +64,7 @@ mod linearity;
 mod lines;
 pub mod literal;
 pub mod modules;
+pub mod packages;
 mod parse;
 mod pattern_compile;
 pub mod resolve;
@@ -107,7 +109,20 @@ pub enum Package {
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
 pub fn check_package(source: &Path, target: &dyn Target) -> Result<Package, Diagnostic> {
-    let loaded = load(source, target)?;
+    check_package_using(source, target, &Packages::default())
+}
+
+/// [`check_package`], reading each URL dependency from where `packages`
+/// says.
+///
+/// # Errors
+/// Reports loading, resolution, checking or lowering errors.
+pub fn check_package_using(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+) -> Result<Package, Diagnostic> {
+    let loaded = load(source, target, packages)?;
     let main = Main::find_in(&loaded)?;
     let facts = test_uses::Facts::of(&loaded);
     let (program, cx) = resolve(loaded)?;
@@ -123,7 +138,21 @@ pub fn check_package(source: &Path, target: &dyn Target) -> Result<Package, Diag
 /// Reports a library, which has no `main!` to lower, and loading,
 /// resolution, checking or lowering errors.
 pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
-    match check_package(source, target)? {
+    lower_to_barb_using(source, target, &Packages::default())
+}
+
+/// [`lower_to_barb`], reading each URL dependency from where `packages`
+/// says.
+///
+/// # Errors
+/// Reports a library, which has no `main!` to lower, and loading,
+/// resolution, checking or lowering errors.
+pub fn lower_to_barb_using(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+) -> Result<barb::Program, Diagnostic> {
+    match check_package_using(source, target, packages)? {
         Package::Application(barb) => Ok(*barb),
         Package::Library => Err(Diagnostic::new("a library has no `main!` to build")
             .help("write `main! : Host -> []` and a clause `main!(host) -> ...`")),
@@ -150,7 +179,20 @@ pub struct Tests {
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
 pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, Diagnostic> {
-    let mut loaded = load(source, target)?;
+    lower_tests_to_barb_using(source, target, &Packages::default())
+}
+
+/// [`lower_tests_to_barb`], reading each URL dependency from where
+/// `packages` says.
+///
+/// # Errors
+/// Reports loading, resolution, checking or lowering errors.
+pub fn lower_tests_to_barb_using(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+) -> Result<Tests, Diagnostic> {
+    let mut loaded = load(source, target, packages)?;
     let application = Main::find_in(&loaded)?;
     let main = expectations::main(&mut loaded);
     let facts = test_uses::Facts::of(&loaded);
@@ -169,8 +211,43 @@ pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, 
 
 /// Read the package at `source`, beside the standard package and `target`'s
 /// host.
-fn load(source: &Path, target: &dyn Target) -> Result<LoadedProgram, Diagnostic> {
-    modules::load_program(source, standard_path(), &host_path(target)?)
+fn load(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+) -> Result<LoadedProgram, Diagnostic> {
+    modules::load_program_using(source, standard_path(), &host_path(target)?, packages)
+}
+
+/// The modules of the package at `source`, its root first, each with its
+/// text: what `faun bundle` writes.
+///
+/// # Errors
+/// Reports loading errors.
+///
+/// # Panics
+/// Never: every loaded module has its source.
+pub fn package_modules(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+) -> Result<Vec<(PathBuf, String)>, Diagnostic> {
+    let loaded = load(source, target, packages)?;
+    let mut modules = vec![loaded.entry];
+    modules.extend(loaded.package.iter().filter(|&&id| id != loaded.entry));
+    Ok(modules
+        .into_iter()
+        .map(|id| {
+            let module = loaded.module(id);
+            let text = loaded
+                .sources
+                .get(module.source)
+                .expect("a loaded module has its source")
+                .text()
+                .to_owned();
+            (module.path.clone(), text)
+        })
+        .collect())
 }
 
 /// Name every global and local `loaded` writes, and write its record
