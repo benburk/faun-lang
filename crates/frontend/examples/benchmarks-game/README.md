@@ -59,8 +59,8 @@ startup through hex output, run the probe on a symbolized build. The probe
 requires GDB on native x86-64 Linux.
 
 ```console
-$ target/release/faun build --backend=x86-lab --symbols crates/faun/examples/benchmarks-game/md5/main.fn -o target/md5-profile
-$ python3 crates/faun/examples/benchmarks-game/md5/allocations.py target/md5-profile
+$ target/release/faun build --backend=x86-lab --symbols crates/frontend/examples/benchmarks-game/md5/main.fn -o target/md5-profile
+$ python3 crates/frontend/examples/benchmarks-game/md5/allocations.py target/md5-profile
 ```
 
 The probe checks the digest and requires zero heap calls for each input,
@@ -72,7 +72,7 @@ same lowercase digest and newline. Build it with the locked shell's GCC
 and compare both digests on the same file.
 
 ```console
-$ nix develop -c gcc -std=c11 -O3 -fomit-frame-pointer -s crates/faun/examples/benchmarks-game/md5/main.c -o target/md5-c
+$ nix develop -c gcc -std=c11 -O3 -fomit-frame-pointer -s crates/frontend/examples/benchmarks-game/md5/main.c -o target/md5-c
 $ target/md5-c < input.dat
 $ target/md5-profile < input.dat
 ```

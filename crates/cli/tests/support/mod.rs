@@ -93,7 +93,7 @@ pub(crate) fn run_failing(
     input: &[u8],
     errno: Option<u64>,
 ) -> (u32, String) {
-    let barb = faun::lower_to_barb(entry, &X86_64Linux)
+    let barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
         .unwrap_or_else(|error| panic!("{}", error.message));
     run_barb(barb, input, errno)
 }
@@ -104,7 +104,7 @@ pub(crate) type Directory = BTreeMap<String, Vec<u8>>;
 /// The same, run where `files` lie: the status, what it wrote to standard
 /// output, and the files as it left them.
 pub(crate) fn run_among(entry: &std::path::Path, files: Directory) -> (u32, String, Directory) {
-    let mut barb = faun::lower_to_barb(entry, &X86_64Linux)
+    let mut barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
         .unwrap_or_else(|error| panic!("{}", error.message));
     let mut streams = Streams {
         files,
@@ -129,7 +129,7 @@ pub(crate) struct Handled {
 /// Run the program at `entry` as [`run_among`] does, among no files: the
 /// status it exits with, and what it did with the files it opened.
 pub(crate) fn run_handling(entry: &std::path::Path) -> (u32, Handled) {
-    let mut barb = faun::lower_to_barb(entry, &X86_64Linux)
+    let mut barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
         .unwrap_or_else(|error| panic!("{}", error.message));
     let mut streams = Streams::default();
     let status = run_on(&mut barb, &mut streams, 100_000_000);
@@ -143,7 +143,7 @@ pub(crate) fn run_handling(entry: &std::path::Path) -> (u32, Handled) {
 /// Build the package at `entry` as `faun test` does and run it: the lines,
 /// `path:line`, of the expectations that do not hold, and how many there are.
 pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
-    let tests = faun::lower_tests_to_barb(entry, &X86_64Linux)
+    let tests = faun_frontend::lower_tests_to_barb(entry, &X86_64Linux)
         .unwrap_or_else(|error| panic!("{}", error.message));
     let count = tests.expectations.len();
     let (status, written) = run_barb(tests.barb, &[], None);
@@ -166,7 +166,7 @@ pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
 /// rather than by the host's instruction: the standard's own arithmetic,
 /// asked the same questions.
 pub(crate) fn test_file_by_definitions(entry: &std::path::Path) -> (Vec<String>, usize) {
-    let mut tests = faun::lower_tests_to_barb(entry, &X86_64Linux)
+    let mut tests = faun_frontend::lower_tests_to_barb(entry, &X86_64Linux)
         .unwrap_or_else(|error| panic!("{}", error.message));
     tests.barb.walk_floats();
     let count = tests.expectations.len();

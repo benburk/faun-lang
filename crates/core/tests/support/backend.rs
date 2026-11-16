@@ -1500,7 +1500,7 @@ fn it_is_handed_strings_beside_a_list_of_numbers() {
 #[test]
 fn a_long_walk_goes_round_rather_than_down() {
     let steps = if TARGET.word() == 16 { 300 } else { 20_000 };
-    let path = crates().join("faun/examples/aoc/201501.fn");
+    let path = crates().join("frontend/examples/aoc/201501.fn");
     let text = fs::read_to_string(&path).expect("the day one example");
     let program = read(&text).expect("the day one example compiles");
     let program = TARGET
@@ -1675,7 +1675,7 @@ fn a_walk_inside_another_goes_round_rather_than_down() {
     reason = "one example's kernel, expectations and stdin cases, with a smaller fixture for sim65"
 )]
 fn the_animated_lights_run_on_each_target() {
-    let text = include_str!("../../../faun/examples/aoc/201518.fn");
+    let text = include_str!("../../../frontend/examples/aoc/201518.fn");
     let kernel = text.replace(
         "main!(host) -> host.run_stdin!(app)",
         "main!(host) -> (
@@ -1699,7 +1699,7 @@ fn the_animated_lights_run_on_each_target() {
         return;
     }
 
-    let path = crates().join("faun/examples/aoc/201518.fn");
+    let path = crates().join("frontend/examples/aoc/201518.fn");
     let program = faun::expectations_at(&path, &TARGET).expect("the day 18 expectations compile");
     let program = TARGET
         .prepare(&program)
@@ -1733,7 +1733,7 @@ fn the_animated_lights_run_on_each_target() {
     reason = "one example's replacement kernel, expectations and stdin cases, scaled for sim65"
 )]
 fn the_medicine_replacements_run_on_each_target() {
-    let text = include_str!("../../../faun/examples/aoc/201519.fn");
+    let text = include_str!("../../../frontend/examples/aoc/201519.fn");
     let kernel = text.replace(
         "main!(host) -> host.run_stdin!(app)",
         "main!(host) -> (
@@ -1756,7 +1756,7 @@ fn the_medicine_replacements_run_on_each_target() {
         return;
     }
 
-    let path = crates().join("faun/examples/aoc/201519.fn");
+    let path = crates().join("frontend/examples/aoc/201519.fn");
     let program = faun::expectations_at(&path, &TARGET).expect("the day 19 expectations compile");
     let program = TARGET
         .prepare(&program)
@@ -1808,7 +1808,7 @@ fn the_medicine_replacements_run_on_each_target() {
 /// three targets, including sim65 where the complete search cannot fit.
 #[test]
 fn the_medicine_queue_orders_estimated_costs() {
-    let text = include_str!("../../../faun/examples/aoc/201519.fn").replace(
+    let text = include_str!("../../../frontend/examples/aoc/201519.fn").replace(
         "main!(host) -> host.run_stdin!(app)",
         "ordered : (Work, Nat, Nat) -> Bool
          ordered(Empty, _, 0) -> True
@@ -1891,7 +1891,7 @@ fn generated_callbacks_keep_their_identities() {
 /// the target.
 #[test]
 fn the_standard_library_holds_its_expectations() {
-    let program = faun::expectations_at(::faun::standard_path(), &TARGET)
+    let program = faun::expectations_at(::faun_frontend::standard_path(), &TARGET)
         .expect("the standard expectations compile");
     let program = TARGET
         .prepare(&program)

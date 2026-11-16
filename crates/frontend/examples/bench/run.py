@@ -71,7 +71,7 @@ def inputs(directory):
     log = directory / "log.txt"
     write_log(log, 30000)
     words = directory / "words.txt"
-    chapter = (REPOSITORY / "crates/faun/standard/README.md").read_bytes()
+    chapter = (REPOSITORY / "crates/frontend/standard/README.md").read_bytes()
     words.write_bytes((chapter + b"\n") * 16)
     binary = directory / "binary.dat"
     binary.write_bytes(random.Random(19).randbytes(256 * 1024))

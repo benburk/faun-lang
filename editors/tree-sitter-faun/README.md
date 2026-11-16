@@ -3,7 +3,7 @@
 A tree-sitter grammar for Faun, for editors: Helix highlights, indents, and
 selects by it.
 
-`grammar.js` ports `crates/faun/src/grammar.ebnf` rule for rule. What the
+`grammar.js` ports `crates/frontend/src/grammar.ebnf` rule for rule. What the
 compiler's lexer reads by looking past a token, `src/scanner.c` reads here:
 where a line ends, and whether a name's `!` makes it an effect's. Lines stay
 flat, as in the EBNF, so a clause's body is the lines after it rather than a

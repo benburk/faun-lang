@@ -287,7 +287,7 @@ fn a_failing_expectation_is_told_as_a_diagnostic() {
 /// expects of itself.
 #[test]
 fn the_standard_library_holds_its_expectations() {
-    let (failed, count) = support::test_file(faun::standard_path());
+    let (failed, count) = support::test_file(faun_frontend::standard_path());
     assert!(count > 0);
     assert_eq!(failed, Vec::<String>::new());
 }
@@ -439,13 +439,13 @@ fn a_float_is_read_from_standard_input() {
 /// machine as `faun test` does, and asked again of the standard's own
 /// definitions on the reference interpreter. The definitions take several
 /// times the rest of the suite, so they are asked with
-/// `cargo nextest run -p faun-cli --test expectations --run-ignored only`.
+/// `cargo nextest run -p faun --test expectations --run-ignored only`.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[test]
 #[ignore = "longer than the rest of the suite; run with --run-ignored only"]
 fn floats_keep_the_ieee_contract() {
     let floats =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/floats");
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/examples/floats");
     for (entry, count) in [("f32.fn", 105), ("f64.fn", 75)] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
             .arg("test")

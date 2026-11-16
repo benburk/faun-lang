@@ -2,7 +2,7 @@
 
 **Status: brainstorm.** What exists today is `Host : {args: List(Str)}` with
 `exit!`, `stdin`, `stdout`, `stderr`, `print!`, `println!`, `run!` and
-`run_stdin!` (`crates/faun/standard/hosts/*.fn`).
+`run_stdin!` (`crates/frontend/standard/hosts/*.fn`).
 
 ## Startup values
 

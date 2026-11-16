@@ -24,7 +24,7 @@ Node's 26.1 ms, which pay more to start; serde_json takes 2.4 ms.
 
 ## The benchmark
 
-`crates/faun/examples/libraries/json/bench/` holds it:
+`crates/frontend/examples/libraries/json/bench/` holds it:
 
 - `generate.py` writes an array of user records, the same text for the same
   count: integers up to 10^12, floats with two decimals, strings with

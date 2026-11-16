@@ -6,7 +6,7 @@ and JSON parsing from 2.39 G to 2.19 G, 221 ms to 191 ms. `faun build
 --small` and the size ratchets build exactly what they built before, and
 the 6502 is unchanged.
 
-Measured 2026-11-06 with `just bench` (`crates/faun/examples/bench/run.py
+Measured 2026-11-06 with `just bench` (`crates/frontend/examples/bench/run.py
 --cpu 30 --runs 5`), on a machine other work was also running on: the
 instruction counts are the steady measure, and times move by a few percent
 between runs. Each row is built by the compiler after that step; size is the
@@ -133,7 +133,7 @@ there already.
 
 ## Benchmarks game
 
-[`examples/benchmarks-game`](../crates/faun/examples/benchmarks-game)
+[`examples/benchmarks-game`](../crates/frontend/examples/benchmarks-game)
 scores eight of the game's programs against its C ones, by time, memory and
 compressed source. The programs are written plainly rather than tuned, so
 each slow one says what the compiler has yet to learn; its README lists

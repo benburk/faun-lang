@@ -13,7 +13,7 @@ use faun_core::targets::Target;
 /// optimized, then to machine IR.
 pub(crate) fn lower(text: &str, target: &dyn Target) -> Result<Program, String> {
     let (dir, path) = source_file(text);
-    let barb = ::faun::lower_to_barb(&path, target);
+    let barb = ::faun_frontend::lower_to_barb(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
     let mut barb = barb?;
     faun_core::barb::optimize(&mut barb);
@@ -42,7 +42,7 @@ pub(crate) fn expectations_at(
     path: &std::path::Path,
     target: &dyn Target,
 ) -> Result<Program, String> {
-    let mut barb = ::faun::lower_tests_to_barb(path, target)?.barb;
+    let mut barb = ::faun_frontend::lower_tests_to_barb(path, target)?.barb;
     faun_core::barb::optimize(&mut barb);
     faun_core::lower_to_machine_ir(&barb, &target.routines())
 }
@@ -55,7 +55,7 @@ pub(crate) fn expectations_at(
 )]
 pub(crate) fn unoptimized(text: &str, target: &dyn Target) -> Result<Program, String> {
     let (dir, path) = source_file(text);
-    let barb = ::faun::lower_to_barb(&path, target);
+    let barb = ::faun_frontend::lower_to_barb(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
     faun_core::lower_to_machine_ir(&barb?, &target.routines())
 }

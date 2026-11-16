@@ -1,4 +1,4 @@
-//! Written by `FAUN_BLESS=1 cargo nextest run -p faun-cli --test barb_recognition`
+//! Written by `FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition`
 //! from the standard's float operations, as the code of each comes to after
 //! canonicalizing. Do not edit by hand.
 

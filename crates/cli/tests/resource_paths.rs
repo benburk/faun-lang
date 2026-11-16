@@ -651,7 +651,7 @@ fn opening(files: usize) -> String {
 /// What checking says of the program at `entry`: `None` where it accepts,
 /// and otherwise what it said, or what the compiler said where it broke.
 fn refusal(entry: &std::path::Path) -> Option<String> {
-    match std::panic::catch_unwind(|| faun::lower_to_barb(entry, &X86_64Linux)) {
+    match std::panic::catch_unwind(|| faun_frontend::lower_to_barb(entry, &X86_64Linux)) {
         Ok(Ok(_)) => None,
         Ok(Err(error)) => Some(error.message),
         Err(_) => Some("the compiler broke".to_owned()),

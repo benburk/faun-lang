@@ -1,7 +1,7 @@
 # Host effects: brainstorm
 
 **Status: brainstorm.** Nothing here is implemented beyond what
-[host-effects.md](../host-effects.md) and `crates/faun/standard/hosts/*.fn`
+[host-effects.md](../host-effects.md) and `crates/frontend/standard/hosts/*.fn`
 already describe. The notes sketch which host modules Faun should have, what
 their APIs could look like, and how to choose semantics that stay portable and
 still compile to the platform's cheapest primitive.

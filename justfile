@@ -31,7 +31,7 @@ check:
 
 # Run the test suite: every test at once, the doc tests nextest skips, then the tree-sitter grammar's
 test:
-    python3 -B crates/faun/examples/benchmarks-game/test_lab.py
+    python3 -B crates/frontend/examples/benchmarks-game/test_lab.py
     python3 -B eval/test_ratchet.py
     cargo nextest run --workspace
     cargo test --workspace --doc
@@ -69,17 +69,17 @@ helix:
 
 # Score the benchmarks-game programs against the game's C programs; `--game` measures at its sizes
 benchmarks-game *args:
-    cargo build --release -q -p faun-cli
-    python3 crates/faun/examples/benchmarks-game/run.py {{ args }}
+    cargo build --release -q -p faun
+    python3 crates/frontend/examples/benchmarks-game/run.py {{ args }}
 
 # Verify and compare x86 compilers and sources; run from the trusted prep tree
 codegen-lab *args:
-    python3 -B crates/faun/examples/benchmarks-game/lab.py {{ args }}
+    python3 -B crates/frontend/examples/benchmarks-game/lab.py {{ args }}
 
 # Time the benchmark programs pinned to `cpu`; `--faun LABEL=PATH` compares compilers
 bench cpu *args:
-    cargo build --release -q -p faun-cli
-    python3 crates/faun/examples/bench/run.py --cpu {{ cpu }} {{ args }}
+    cargo build --release -q -p faun
+    python3 crates/frontend/examples/bench/run.py --cpu {{ cpu }} {{ args }}
 
 # Score this checkout (or a revision) against the incumbent: the branch's last accepted commit, or origin/main; see RATCHET.md
 eval *args:
@@ -95,8 +95,8 @@ standings:
 
 # Write every refused program's .err, and Barb's table of the standard's float code, from what the compiler says now; read the diff
 bless:
-    FAUN_BLESS=1 cargo nextest run -p faun-cli --test refused
-    FAUN_BLESS=1 cargo nextest run -p faun-cli --test barb_recognition the_reference_float_table
+    FAUN_BLESS=1 cargo nextest run -p faun --test refused
+    FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition the_reference_float_table
 
 # Build the release binary
 build:

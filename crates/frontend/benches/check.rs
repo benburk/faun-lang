@@ -12,7 +12,7 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use faun::modules;
+use faun_frontend::modules;
 
 const RUNS: usize = 5;
 
@@ -189,13 +189,14 @@ fn print_statements(count: usize) -> String {
 
 /// Time each phase at its best of several runs, and print them.
 fn benchmark(name: &str, entry: &Path) {
-    let host = faun::standard_path().with_file_name("hosts/x86_64-linux.fn");
-    let load = || modules::load_program(entry, faun::standard_path(), &host);
+    let host = faun_frontend::standard_path().with_file_name("hosts/x86_64-linux.fn");
+    let load = || modules::load_program(entry, faun_frontend::standard_path(), &host);
     if let Err(diagnostic) = load()
         .map_err(|error| error.to_string())
         .and_then(|loaded| {
-            let (program, mut cx) = faun::resolve(loaded).map_err(|error| error.to_string())?;
-            faun::checked(program, &mut cx)
+            let (program, mut cx) =
+                faun_frontend::resolve(loaded).map_err(|error| error.to_string())?;
+            faun_frontend::checked(program, &mut cx)
                 .map(drop)
                 .map_err(|error| error.to_string())
         })
@@ -207,9 +208,9 @@ fn benchmark(name: &str, entry: &Path) {
         let started = Instant::now();
         let loaded = load().expect("loaded before");
         let loaded_at = Instant::now();
-        let (program, mut cx) = faun::resolve(loaded).expect("resolved before");
+        let (program, mut cx) = faun_frontend::resolve(loaded).expect("resolved before");
         let resolved_at = Instant::now();
-        let checked = faun::checked(program, &mut cx);
+        let checked = faun_frontend::checked(program, &mut cx);
         let checked_at = Instant::now();
         black_box(checked.expect("checked before"));
         loading = loading.min(loaded_at - started);

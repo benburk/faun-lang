@@ -10,8 +10,8 @@ num-bigint = "0.4.8"
 num-traits = "0.2"
 
 [dev-dependencies]
-faun.workspace = true
 faun-core = { workspace = true, features = ["backend-tests"] }
+faun-frontend.workspace = true
 faun-x86-64-linux.workspace = true
 
 [lints]

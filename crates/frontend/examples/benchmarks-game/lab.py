@@ -180,7 +180,10 @@ def benchmark(work, args, compilers, name, checked, size, fasta):
             cmd.append(f"--backend={backend}")
         subprocess.run(
             [*cmd, src, "-o", image],
-            env={**os.environ, "FAUN_STD": str(REPOSITORY / "crates/faun/standard")},
+            env={
+                **os.environ,
+                "FAUN_STD": str(REPOSITORY / "crates/frontend/standard"),
+            },
             check=True,
             timeout=120,
             stdout=subprocess.DEVNULL,

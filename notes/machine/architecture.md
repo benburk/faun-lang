@@ -17,13 +17,13 @@ source      → frontend   names, types, coverage, specialization, resources
             → target     registers, calling convention, encoding, image
 ```
 
-**The frontend** (`crates/faun`) is a line of stages, each taking the
+**The frontend** (`crates/frontend`) is a line of stages, each taking the
 program as one tree: loading, resolution, type checking, specialization,
 callback lowering and pattern compilation, then Barb lowering for an
 application. It finds every error a programmer can cause, desugars all
 syntax into calls, constructors and matches, and hands Barb a typed,
 monomorphized, first-order program. A library stops before Barb. Its
-[README](../../crates/faun/README.md) is its contract, including what
+[README](../../crates/frontend/README.md) is its contract, including what
 syntax is blessed to.
 
 **Barb** (`crates/core/src/barb`) is a first-order language in A-normal
@@ -186,7 +186,7 @@ and walking every body to check them.
 
 The [experimental x86-64 backend](../../crates/targets/x86-lab/README.md) takes
 optimized Barb and starts with its own copy of x86 lowering and emission.
-Its machine IR can choose representation and placement independently. The [experiment contract](../../crates/faun/examples/benchmarks-game/LAB.md)
+Its machine IR can choose representation and placement independently. The [experiment contract](../../crates/frontend/examples/benchmarks-game/LAB.md)
 describes the boundary, the first milestones and how to compare results.
 
 ## Related

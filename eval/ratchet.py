@@ -83,7 +83,7 @@ SECONDS = 120  # one run's limit
 FUEL = 200_000_000_000
 CYCLES = 4_000_000_000
 
-GAME = ROOT / "crates/faun/examples/benchmarks-game"
+GAME = ROOT / "crates/frontend/examples/benchmarks-game"
 KERNELS = ROOT / "eval/workloads"
 
 
@@ -220,7 +220,7 @@ class Side:
         if cached and self.binary.exists():
             return
         subprocess.run(
-            ["cargo", "build", "--locked", "--release", "--quiet", "-p", "faun-cli"],
+            ["cargo", "build", "--locked", "--release", "--quiet", "-p", "faun"],
             cwd=self.path,
             env=os.environ | {"CARGO_TARGET_DIR": str(self.target)},
             check=True,

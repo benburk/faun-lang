@@ -1,4 +1,4 @@
-// What `crates/faun/src/lex.rs` reads by looking past a token: where a line
+// What `crates/frontend/src/lex.rs` reads by looking past a token: where a line
 // ends, and whether a name's `!` is its own.
 //
 // The grammar allows a line end only after what a line can end with, and

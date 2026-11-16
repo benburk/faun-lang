@@ -51,8 +51,8 @@ fn lab_runs_both_arms_on_wasm_and_6502() {
 
 #[test]
 fn apple_silicon_builds_the_greeting_on_each_backend() {
-    let source =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/minimal-hello.fn");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../frontend/examples/minimal-hello.fn");
     let dir = Package::new("lab-macho", "main!(host) -> host.exit!(0)");
     for backend in ["stock", "lab"] {
         let path = dir.entry().with_file_name(backend);
