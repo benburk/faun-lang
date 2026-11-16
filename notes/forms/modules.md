@@ -181,7 +181,9 @@ package {
 - `faun bundle PATH` makes the bundle of the package at `PATH`: its root
   module, as `main.fn` at the bundle's top, and every module it imports, at
   their paths from the root, with the compiler's language version written
-  into the root's header where it has none. Every entry is written alike,
+  into the root's header where it has none, and the package's license
+  files: those of the nearest directory holding any, from the root's up to
+  its repository's root. Every entry is written alike,
   owned by no one and dated to the epoch, so bundling a package twice
   writes the same bytes. It writes the file under its hash, `-o DIR` saying
   where, to be uploaded anywhere that serves static files over `https`. The

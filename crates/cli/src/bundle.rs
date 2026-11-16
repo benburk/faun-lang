@@ -6,7 +6,8 @@
 //! its path from the root. Each entry is written alike wherever it is made,
 //! in order, owned by no one and dated to the epoch, so a package bundled
 //! twice is the same bytes. The root's header gets the compiler's language
-//! version where it names none, since a bundle never changes.
+//! version where it names none, since a bundle never changes. Beside the
+//! modules go the package's license files, so its license travels with it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,7 +80,38 @@ fn files(modules: &[(PathBuf, String)]) -> Result<Vec<(String, String)>, Diagnos
         }
         files.push((relative, text.clone()));
     }
+    files.extend(licenses(base));
     Ok(files)
+}
+
+/// The license files of the package whose root module is in `base`: those
+/// of the nearest directory holding any, from `base` up to its repository's
+/// root, so a library in a repository of its own carries the repository's.
+fn licenses(base: &Path) -> Vec<(String, String)> {
+    for directory in base.ancestors() {
+        let mut found: Vec<(String, String)> = fs::read_dir(directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let upper = name.to_ascii_uppercase();
+                let licensing = ["LICENSE", "LICENCE", "COPYING"]
+                    .iter()
+                    .any(|prefix| upper.starts_with(prefix));
+                let text = fs::read_to_string(entry.path()).ok()?;
+                (licensing && entry.path().is_file()).then_some((name, text))
+            })
+            .collect();
+        if !found.is_empty() {
+            found.sort();
+            return found;
+        }
+        if directory.join(".git").exists() {
+            break;
+        }
+    }
+    Vec::new()
 }
 
 /// `text`, a root module, with the compiler's language version in its

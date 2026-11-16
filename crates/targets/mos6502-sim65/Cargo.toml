@@ -2,6 +2,7 @@
 name = "faun-mos6502-sim65"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "The mos6502-sim65 target for Faun"
 
 [dependencies]

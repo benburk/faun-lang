@@ -102,6 +102,7 @@ const AREA: &str = "export {square}\n\nsquare : Nat -> Nat\nsquare(n) -> n * n\n
 /// Bundle the library into `served/shapes/1.0.0/`, and answer the bundle's
 /// file name.
 fn bundled(scratch: &Scratch) -> String {
+    scratch.write("LICENSE", "Permission is hereby granted.\n");
     let root = scratch.write("library/shapes.fn", LIBRARY);
     scratch.write("library/area.fn", AREA);
     let into = scratch.0.join("served/shapes/1.0.0");
@@ -157,6 +158,10 @@ fn a_package_is_bundled_served_fetched_and_built_against() {
     let root = fs::read_to_string(cached.join("main.fn")).unwrap();
     assert!(root.starts_with("package {faun: \""), "{root}");
     assert!(cached.join("area.fn").is_file());
+    assert!(
+        cached.join("LICENSE").is_file(),
+        "the library's license travels with it"
+    );
     let used = scratch.faun(&["uses", entry]);
     let used = String::from_utf8_lossy(&used.stdout);
     assert!(used.contains(&format!("shapes: {url}")), "{used}");

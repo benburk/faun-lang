@@ -3,6 +3,7 @@ name = "faun"
 version.workspace = true
 default-run = "faun"
 edition.workspace = true
+license.workspace = true
 description = "The Faun compiler as commands"
 
 [[bin]]
