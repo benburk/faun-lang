@@ -12,6 +12,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+blake3 = "1.8.7"
 bpaf = "0.9"
 faun.workspace = true
 faun-aarch64-macos.workspace = true
@@ -20,6 +21,9 @@ faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true
 faun-x86-lab.workspace = true
+tar = { version = "0.4.46", default-features = false }
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
+zstd = "0.14.4"
 
 [dev-dependencies]
 libtest-mimic = "0.8"

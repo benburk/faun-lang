@@ -17,6 +17,7 @@ use super::ast::{
     HeaderValue, Item, MethodItem, Module, Name, Span,
 };
 use super::diagnostic::Diagnostic;
+use super::packages::{PackageUrl, Packages};
 use super::{ParseError, Source, SourceId, Sources, Symbol, Symbols, parse_in};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -154,7 +155,26 @@ pub fn load_program(
     prelude: &Path,
     host: &Path,
 ) -> Result<LoadedProgram, Diagnostic> {
-    let mut loader = Loader::default();
+    load_program_using(entry, prelude, host, &Packages::default())
+}
+
+/// [`load_program`], reading each URL dependency from where `packages`
+/// says.
+///
+/// # Errors
+///
+/// Reports what [`load_program`] does, and a URL dependency `packages`
+/// does not hold.
+pub fn load_program_using(
+    entry: &Path,
+    prelude: &Path,
+    host: &Path,
+    packages: &Packages,
+) -> Result<LoadedProgram, Diagnostic> {
+    let mut loader = Loader {
+        fetched: packages.clone(),
+        ..Loader::default()
+    };
     let root = loader.package_at(prelude);
     let prelude_id = loader.load_module(prelude, Loading::Package(root), true)?;
     loader.prelude = Some(loader.pending[prelude_id.index()].public.clone());
@@ -213,6 +233,8 @@ struct Loader {
     standard_root: Option<PathBuf>,
     /// How many packages have been given a root.
     packages: usize,
+    /// Which package each URL dependency is read from.
+    fetched: Packages,
     /// Each package's imported dependencies: the package, the dependency's
     /// root module, and whether it is in `test_uses`.
     imported: Vec<(usize, ModuleId, bool)>,
@@ -531,19 +553,25 @@ impl Loader {
                     let name = dependency.name.text(text.text()).to_owned();
                     let written = decoded(&dependency.path, text)
                         .map_err(|message| Diagnostic::new(message).at(text, dependency.span))?;
-                    if let Some(scheme) = url_scheme(&written) {
-                        return Err(Diagnostic::new(format!(
-                            "dependency `{name}` is a `{scheme}://` URL, not a path"
-                        ))
-                        .at(text, dependency.span)
-                        .note("a dependency is a path to a package's root module")
-                        .help("fetching packages is not supported: put the package beside this one and name its path"));
-                    }
-                    let module =
+                    let module = if url_scheme(&written).is_some() {
+                        PackageUrl::parse(&written).map_err(|message| {
+                            Diagnostic::new(format!("dependency `{name}` {message}"))
+                                .at(text, dependency.span)
+                        })?;
+                        self.fetched
+                            .root(&written)
+                            .ok_or_else(|| {
+                                Diagnostic::new(format!("dependency `{name}` is not fetched"))
+                                    .at(text, dependency.span)
+                                    .help("fetch it with `faun fetch`, or build with the `faun` command, which fetches")
+                            })?
+                            .to_path_buf()
+                    } else {
                         module_base(directory, &directory.join(&written)).map_err(|error| {
                             Diagnostic::new(format!("dependency `{name}` {}", error.message))
                                 .at(text, dependency.span)
-                        })?;
+                        })?
+                    };
                     if root
                         .dependencies
                         .insert(name.clone(), (module, for_tests))
@@ -604,7 +632,7 @@ fn language_version() -> (u64, u64) {
 /// A header's dependencies, each with whether it is in `test_uses`, once
 /// its fields are each known and written once, and its `faun` version is
 /// one this compiler reads.
-fn header_fields<'a>(
+pub(crate) fn header_fields<'a>(
     header: &'a HeaderDecl,
     file: &Source,
 ) -> Result<Vec<(&'a Dependency, bool)>, Diagnostic> {
@@ -677,7 +705,7 @@ fn header_fields<'a>(
 }
 
 /// A string's text, its escapes decoded.
-fn decoded(parts: &[Span], file: &Source) -> Result<String, String> {
+pub(crate) fn decoded(parts: &[Span], file: &Source) -> Result<String, String> {
     parts
         .iter()
         .map(|part| {
@@ -700,7 +728,7 @@ fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, Diagnostic> {
 /// The scheme of `written` where it is a URL, as `https` of
 /// `https://example.com/foo`: letters, then letters, digits, `+`, `-` or
 /// `.`, before `://`.
-fn url_scheme(written: &str) -> Option<&str> {
+pub(crate) fn url_scheme(written: &str) -> Option<&str> {
     let (scheme, _) = written.split_once("://")?;
     let mut characters = scheme.chars();
     let first = characters.next()?;
@@ -712,7 +740,7 @@ fn url_scheme(written: &str) -> Option<&str> {
 /// directory `joined`, where `name` is its last part, and not both. Where
 /// neither or both are there, they are named from `from`, the directory
 /// the base was written relative to.
-fn module_base(from: &Path, joined: &Path) -> Result<PathBuf, Diagnostic> {
+pub(crate) fn module_base(from: &Path, joined: &Path) -> Result<PathBuf, Diagnostic> {
     let flat = joined.with_extension("fn");
     let nested = joined
         .join(joined.file_name().unwrap_or_default())

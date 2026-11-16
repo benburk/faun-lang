@@ -5,7 +5,9 @@
 //! what the compiler makes. The compiler itself is the `faun` library.
 
 mod args;
+mod bundle;
 mod compiler;
+mod fetch;
 
 use std::fs;
 use std::io;
@@ -15,12 +17,14 @@ use std::process::{Command as Process, ExitCode};
 use args::{Command, Stage};
 use compiler::Compiler;
 use faun::diagnostic::{Diagnostic, Location};
+use faun::packages::Packages;
 use faun_aarch64_macos::Aarch64Macos;
 use faun_core::barb;
 use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
+use fetch::Fetcher;
 
 /// Every target this binary compiles for.
 const TARGETS: [&dyn Target; 4] = [&X86_64Linux, &Wasm32Wasi, &Mos6502Sim65, &Aarch64Macos];
@@ -72,6 +76,16 @@ fn answer(command: Command) -> ExitCode {
             stage,
             source,
         } => emit(stage, &source, compiler).map(|()| ExitCode::SUCCESS),
+        Command::Bundle {
+            target,
+            source,
+            output,
+        } => bundle::bundle(&source, &output, target).map(|written| {
+            println!("wrote {}", written.display());
+            ExitCode::SUCCESS
+        }),
+        Command::Fetch { source } => fetch(&source).map(|()| ExitCode::SUCCESS),
+        Command::Uses { source } => uses(&source).map(|()| ExitCode::SUCCESS),
     };
     match outcome {
         Ok(exit) => exit,
@@ -96,7 +110,7 @@ fn tell(diagnostic: Diagnostic) {
 /// Check a package against the target's host: a library by the frontend
 /// alone, an application by lowering it as far as Barb.
 fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
-    faun::check_package(source, target)?;
+    faun::check_package_using(source, target, &fetched(source)?)?;
     println!("checked {}", source.display());
     Ok(())
 }
@@ -112,7 +126,9 @@ fn build(
     symbols: SymbolTable,
 ) -> Result<(), Diagnostic> {
     let target = compiler.host();
-    let faun::Package::Application(barb) = faun::check_package(source, target)? else {
+    let faun::Package::Application(barb) =
+        faun::check_package_using(source, target, &fetched(source)?)?
+    else {
         println!(
             "checked {}, a library with no `main!` to build",
             source.display()
@@ -132,7 +148,7 @@ fn run(source: &Path, compiler: Compiler, args: &[String]) -> Result<ExitCode, D
     let target = compiler.host();
     let runner = runner(target)?;
     let image = compiler.compile(
-        faun::lower_to_barb(source, target)?,
+        faun::lower_to_barb_using(source, target, &fetched(source)?)?,
         Favour::Speed,
         SymbolTable::Omitted,
     )?;
@@ -168,7 +184,7 @@ fn stopping_signal(_status: std::process::ExitStatus) -> Option<i32> {
 fn test(source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
     let target = compiler.host();
     let runner = runner(target)?;
-    let tests = faun::lower_tests_to_barb(source, target)?;
+    let tests = faun::lower_tests_to_barb_using(source, target, &fetched(source)?)?;
     let count = tests.expectations.len();
     if count == 0 {
         println!("no expectations");
@@ -273,10 +289,52 @@ fn execute<T>(
 /// Print one stage of a program.
 fn emit(stage: Stage, source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
     let target = compiler.host();
-    let mut barb = faun::lower_to_barb(source, target)?;
+    let mut barb = faun::lower_to_barb_using(source, target, &fetched(source)?)?;
     barb::optimize(&mut barb);
     let text = compiler.render(stage, &barb).map_err(Diagnostic::new)?;
     print!("{text}");
+    Ok(())
+}
+
+/// Every URL dependency of the package at `source`, fetched where it is not
+/// cached, with the version each is read at.
+fn fetched(source: &Path) -> Result<Packages, Diagnostic> {
+    Fetcher::new()?.resolve(source)
+}
+
+/// Fetch every URL dependency of the package at `source`, and say how many
+/// were downloaded.
+fn fetch(source: &Path) -> Result<(), Diagnostic> {
+    let mut fetcher = Fetcher::new()?;
+    let packages = fetcher.resolve(source)?;
+    let urls = packages
+        .tree
+        .iter()
+        .filter(|used| !used.shown && faun::packages::PackageUrl::is_url(&used.written))
+        .count();
+    println!("{urls} URL dependencies, {} downloaded", fetcher.downloaded);
+    Ok(())
+}
+
+/// Print the packages the package at `source` uses, as a tree: each by the
+/// URL or path its header wrote, with the version chosen in its place where
+/// one was, and marked where it was shown before.
+fn uses(source: &Path) -> Result<(), Diagnostic> {
+    let packages = fetched(source)?;
+    println!("{}", source.display());
+    for used in &packages.tree {
+        let indent = "  ".repeat(used.depth + 1);
+        let tests = if used.for_tests { " (tests)" } else { "" };
+        let chosen = used
+            .chosen
+            .map(|version| format!(" (uses {version})"))
+            .unwrap_or_default();
+        let shown = if used.shown { " (shown above)" } else { "" };
+        println!(
+            "{indent}{}: {}{tests}{chosen}{shown}",
+            used.name, used.written
+        );
+    }
     Ok(())
 }
 

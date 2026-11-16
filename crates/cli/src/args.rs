@@ -37,6 +37,17 @@ pub(crate) enum Command {
         stage: Stage,
         source: PathBuf,
     },
+    Bundle {
+        target: &'static dyn Target,
+        source: PathBuf,
+        output: PathBuf,
+    },
+    Fetch {
+        source: PathBuf,
+    },
+    Uses {
+        source: PathBuf,
+    },
 }
 
 /// An intermediate stage `emit` prints.
@@ -57,6 +68,9 @@ pub(crate) fn parse() -> Command {
         run().boxed(),
         test().boxed(),
         emit().boxed(),
+        bundle().boxed(),
+        fetch().boxed(),
+        uses().boxed(),
     ])
     .to_options()
     .descr("The Faun compiler")
@@ -152,6 +166,41 @@ fn emit() -> impl Parser<Command> {
     .to_options()
     .descr("Print an intermediate stage of a Faun program")
     .command("emit")
+}
+
+fn bundle() -> impl Parser<Command> {
+    let target = target();
+    let output = short('o')
+        .long("output")
+        .help("The directory to write the bundle into")
+        .argument::<PathBuf>("DIR")
+        .fallback(PathBuf::from("."))
+        .debug_fallback();
+    let source = positional::<PathBuf>("PATH").help("The root module of the package to bundle");
+    construct!(Command::Bundle {
+        target,
+        output,
+        source,
+    })
+    .to_options()
+    .descr("Write a package as a bundle named by its hash, for a URL dependency to name")
+    .command("bundle")
+}
+
+fn fetch() -> impl Parser<Command> {
+    let source = positional::<PathBuf>("PATH").help("The root module of the package");
+    construct!(Command::Fetch { source })
+        .to_options()
+        .descr("Download every URL dependency of a package, so a later build is offline")
+        .command("fetch")
+}
+
+fn uses() -> impl Parser<Command> {
+    let source = positional::<PathBuf>("PATH").help("The root module of the package");
+    construct!(Command::Uses { source })
+        .to_options()
+        .descr("Print the packages a package uses, as a tree")
+        .command("uses")
 }
 
 fn compiler() -> impl Parser<Compiler> {
