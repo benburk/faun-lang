@@ -4,7 +4,7 @@ The ratchet improves the compiler: the frontend, Barb, the backends and the stan
 
 ## What is measured
 
-**The suite** is fourteen programs, each a `main.fn` beside a C twin `main.c`. Nine are in [`crates/faun/examples/benchmarks-game`](crates/faun/examples/benchmarks-game/README.md): the game's eight and MD5. Five small kernels are in [`eval/workloads`](eval/workloads): checksum, collatz, queens, sieve and sort, written without floats so that they fit the 6502 and cc65 can build their twins. Every program is plain Faun, written as one would teach the algorithm, and every twin is C as plain.
+**The suite** is fourteen programs, each a `main.fn` beside a C twin `main.c`. Nine are in [`crates/frontend/examples/benchmarks-game`](crates/frontend/examples/benchmarks-game/README.md): the game's eight and MD5. Five small kernels are in [`eval/workloads`](eval/workloads): checksum, collatz, queens, sieve and sort, written without floats so that they fit the 6502 and cc65 can build their twins. Every program is plain Faun, written as one would teach the algorithm, and every twin is C as plain.
 
 **A cell** is one program on one target with one backend. The targets are x86-64 Linux, wasm32 WASI and the 6502 under sim65; the backends are stock and lab. A cell has five measures, and lower is better in each:
 

@@ -11,10 +11,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use faun::ast::{HeaderValue, Item};
-use faun::diagnostic::Diagnostic;
-use faun::packages::{self, PackageUrl};
 use faun_core::targets::Target;
+use faun_frontend::ast::{HeaderValue, Item};
+use faun_frontend::diagnostic::Diagnostic;
+use faun_frontend::packages::{self, PackageUrl};
 
 use crate::fetch::Fetcher;
 
@@ -28,7 +28,7 @@ pub(crate) fn bundle(
     target: &dyn Target,
 ) -> Result<PathBuf, Diagnostic> {
     let packages = Fetcher::new()?.resolve(source)?;
-    let modules = faun::package_modules(source, target, &packages)?;
+    let modules = faun_frontend::package_modules(source, target, &packages)?;
     for (name, written, _, _) in packages::dependencies(&modules[0].0)? {
         if !PackageUrl::is_url(&written) {
             return Err(Diagnostic::new(format!(
@@ -85,7 +85,7 @@ fn files(modules: &[(PathBuf, String)]) -> Result<Vec<(String, String)>, Diagnos
 /// `text`, a root module, with the compiler's language version in its
 /// header where it names none.
 fn versioned(text: &str) -> Result<String, Diagnostic> {
-    let module = faun::parse(text).map_err(|error| Diagnostic::new(error.message))?;
+    let module = faun_frontend::parse(text).map_err(|error| Diagnostic::new(error.message))?;
     let header = module.items.iter().find_map(|item| match item {
         Item::Header(header) => Some(header),
         _ => None,

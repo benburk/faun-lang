@@ -17,13 +17,13 @@ allocator and general utilities with the stock compiler.
 From the implementation worktree:
 
 ```sh
-nix develop -c cargo build --locked --release -p faun-cli
-target/release/faun build --backend=x86-lab crates/faun/examples/hello.fn -o target/hello-lab
-target/release/faun emit --backend=x86-lab machine crates/faun/examples/hello.fn
+nix develop -c cargo build --locked --release -p faun
+target/release/faun build --backend=x86-lab crates/frontend/examples/hello.fn -o target/hello-lab
+target/release/faun emit --backend=x86-lab machine crates/frontend/examples/hello.fn
 ```
 
 Measure future changes from the prep worktree with the
-[experiment contract](../../faun/examples/benchmarks-game/LAB.md).
+[experiment contract](../../frontend/examples/benchmarks-game/LAB.md).
 
 ## Shared recognition benchmark, 2026-11-14
 

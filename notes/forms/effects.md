@@ -52,7 +52,7 @@ main!(host) -> (
 )
 ```
 
-(`crates/faun/examples/files/copy.fn`.) `copy!` can open files and write
+(`crates/frontend/examples/files/copy.fn`.) `copy!` can open files and write
 to standard output, and nothing else. A definition with no clauses, whose
 answer the target supplies, may be written only in a host module.
 

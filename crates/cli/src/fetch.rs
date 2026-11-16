@@ -11,8 +11,8 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use faun::diagnostic::Diagnostic;
-use faun::packages::{self, Fetch, PackageUrl, Packages};
+use faun_frontend::diagnostic::Diagnostic;
+use faun_frontend::packages::{self, Fetch, PackageUrl, Packages};
 
 /// The most a bundle may unpack to.
 const BUNDLE_LIMIT: u64 = 10 << 20;

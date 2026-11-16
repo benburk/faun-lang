@@ -9,8 +9,8 @@ inference on `.fn` source. The primary `faun` crate supplies its standard packag
 so commands need no environment setup:
 
 ```sh
-cargo run -- check crates/faun/examples/literals.fn
-cargo run -- check crates/faun/examples/utilities.fn
+cargo run -- check crates/frontend/examples/literals.fn
+cargo run -- check crates/frontend/examples/utilities.fn
 ```
 
 The accepted language remains a subset of Ori, but now includes:
@@ -23,7 +23,7 @@ The accepted language remains a subset of Ori, but now includes:
 - records, field projection, lists, lambdas in call arguments, calls, static members, methods, and operators.
 
 The grammar follows Ori's source language, while Faun source and package files
-use the `.fn` extension. `crates/faun/standard/` supplies a bootstrap
+use the `.fn` extension. `crates/frontend/standard/` supplies a bootstrap
 prelude with
 `Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
 arithmetic, Boolean, collection, and result utilities that avoid hashing,
@@ -180,6 +180,6 @@ cargo run --bin faun-simple -- inspect --emit barb crates/simple/examples/expres
 
 The library crate is `faun-simple`; it owns this syntax, its pipeline entry
 points, and `crates/simple/standard/`. The primary syntax and
-`crates/faun/standard/` belong to the `faun` crate. Both frontends depend on
+`crates/frontend/standard/` belong to the `faun` crate. Both frontends depend on
 the shared `faun-core` compiler core; the separate `faun-driver` crate composes
 the primary frontend with whichever targets an executable registers.

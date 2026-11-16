@@ -51,12 +51,12 @@ Compilation targets
 `--backend lab` selects the experimental lowering and storage passes on any target. Word size governs which layouts are available. On x86-64 Linux this also selects the experimental x86 emitter (`--backend x86-lab` is its existing spelling). `--backend stock` is the default. In the development shell, `faun run` and `faun test` can execute Wasm with Wasmtime and 6502 images with sim65.
 
 ```sh
-faun run --target wasm32-wasi --backend lab crates/faun/examples/minimal-hello.fn
-faun run --target mos6502-sim65 --backend lab crates/faun/examples/minimal-hello.fn
-faun build --target aarch64-macos --backend lab crates/faun/examples/minimal-hello.fn -o hello
+faun run --target wasm32-wasi --backend lab crates/frontend/examples/minimal-hello.fn
+faun run --target mos6502-sim65 --backend lab crates/frontend/examples/minimal-hello.fn
+faun build --target aarch64-macos --backend lab crates/frontend/examples/minimal-hello.fn -o hello
 ```
 
-Programs, in [`crates/faun/examples`](crates/faun/examples)
+Programs, in [`crates/frontend/examples`](crates/frontend/examples)
 
 - Advent of Code 2015, days 1 to 19
 - n-body and spectral norm benchmarks
@@ -70,7 +70,7 @@ Editors
 
 ## Examples
 
-Newton's method, from [`newton.fn`](crates/faun/examples/newton.fn): functions passed by name, a guard, and a failure that is a value
+Newton's method, from [`newton.fn`](crates/frontend/examples/newton.fn): functions passed by name, a guard, and a failure that is a value
 
 ```ruby
 Func = F64 -> F64
@@ -92,7 +92,7 @@ expect newton(f, df, 2.0, 50).ok_or(0.0).to_fixed(12) == "1.414213562373"
 expect newton(f, df, 0.0, 50) == Err(NoConvergence)
 ```
 
-Quicksort, from [`quicksort.fn`](crates/faun/examples/quicksort.fn): a generic function over any ordered type, list patterns, and lambdas
+Quicksort, from [`quicksort.fn`](crates/frontend/examples/quicksort.fn): a generic function over any ordered type, list patterns, and lambdas
 
 ```ruby
 sort : List(a) -> List(a) where Ordered(a)

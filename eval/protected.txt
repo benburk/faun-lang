@@ -6,5 +6,5 @@ RATCHET.md
 justfile
 flake.nix
 flake.lock
-crates/faun/examples/benchmarks-game/
-crates/faun/examples/libraries/md5/
+crates/frontend/examples/benchmarks-game/
+crates/frontend/examples/libraries/md5/

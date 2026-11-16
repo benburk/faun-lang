@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cli", "crates/core", "crates/faun", "crates/targets/*"]
+members = ["crates/cli", "crates/core", "crates/frontend", "crates/targets/*"]
 default-members = ["crates/cli"]
 resolver = "3"
 
@@ -8,9 +8,9 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-faun = { path = "crates/faun", version = "0.1.0" }
 faun-aarch64-macos = { path = "crates/targets/aarch64-macos", version = "0.1.0" }
 faun-core = { path = "crates/core", version = "0.1.0" }
+faun-frontend = { path = "crates/frontend", version = "0.1.0" }
 faun-mos6502-sim65 = { path = "crates/targets/mos6502-sim65", version = "0.1.0" }
 faun-wasm32-wasi = { path = "crates/targets/wasm32-wasi", version = "0.1.0" }
 faun-x86-64-linux = { path = "crates/targets/x86-64-linux", version = "0.1.0" }

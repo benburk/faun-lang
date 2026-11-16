@@ -42,7 +42,7 @@ merge([x, *xt], [y, *yt]) -> [y, *merge([x, *xt], yt)]
 Space never chooses between two readings. A prefix `-` or `!` and a rest's
 `*` touch what they take, and an infix `-` or `*` is spaced or touching on
 both sides alike, so `[a -b]`, `x -3` and `a *b` are refused rather than
-read one way. The [grammar](../../crates/faun/src/grammar.ebnf) states the
+read one way. The [grammar](../../crates/frontend/src/grammar.ebnf) states the
 exact rules.
 
 ## Rationale

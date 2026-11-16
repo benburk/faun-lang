@@ -10,7 +10,7 @@ use faun_x86_64_linux::X86_64Linux;
 use support::Package;
 
 fn optimized(package: &Package) -> barb::Program {
-    let mut program = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let mut program = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     barb::optimize(&mut program);
     barb::validate(&program).unwrap();
     program
@@ -79,8 +79,8 @@ fn floating_sign_recognition_preserves_the_signed_zero_exception() {
 #[test]
 fn final_tree_facts_identify_the_builder_and_reader_before_lowering() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../faun/examples/benchmarks-game/binary-trees/main.fn");
-    let mut program = faun::lower_to_barb(&path, &X86_64Linux).unwrap();
+        .join("../frontend/examples/benchmarks-game/binary-trees/main.fn");
+    let mut program = faun_frontend::lower_to_barb(&path, &X86_64Linux).unwrap();
     barb::optimize(&mut program);
     let facts = program.analyze();
     let roles: Vec<_> = (0..program.functions().len())
@@ -181,7 +181,7 @@ fn reference_fingerprints() -> BTreeMap<u128, (&'static str, &'static str)> {
     ];
     let mut known = BTreeMap::new();
     for target in targets {
-        let mut program = faun::lower_to_barb(&package.entry(), target).unwrap();
+        let mut program = faun_frontend::lower_to_barb(&package.entry(), target).unwrap();
         barb::canonical(&mut program);
         for (float, format) in FLOATS {
             for (method, operation) in OPERATIONS {
@@ -202,7 +202,7 @@ fn reference_fingerprints() -> BTreeMap<u128, (&'static str, &'static str)> {
 /// The table Barb recognizes float operations by, as Rust.
 fn reference_table() -> String {
     let mut table = String::from(
-        "//! Written by `FAUN_BLESS=1 cargo nextest run -p faun-cli --test barb_recognition`\n\
+        "//! Written by `FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition`\n\
          //! from the standard's float operations, as the code of each comes to after\n\
          //! canonicalizing. Do not edit by hand.\n\n\
          use crate::float::{Float, Format, Operation};\n\n\

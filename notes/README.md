@@ -95,7 +95,7 @@ not needed.
   `## Rationale` of `### Why …?` and `### Why not …?` questions. Each answer
   gives the reason, the cost accepted and, where there is one, the recourse.
 - **The source is authoritative for mechanics.** The
-  [standard library README](../crates/faun/standard/README.md), the
-  [grammar](../crates/faun/src/grammar.ebnf) and the refused programs in
+  [standard library README](../crates/frontend/standard/README.md), the
+  [grammar](../crates/frontend/src/grammar.ebnf) and the refused programs in
   `crates/cli/tests/refused/` say exactly what is accepted. Where a note and
   the compiler disagree, the note is wrong.

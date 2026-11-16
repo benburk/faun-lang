@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 fn example(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../faun/examples")
+        .join("../frontend/examples")
         .join(name)
 }
 

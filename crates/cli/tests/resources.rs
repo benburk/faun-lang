@@ -10,7 +10,7 @@ use support::{Directory, Package};
 
 fn example(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../faun/examples/files")
+        .join("../frontend/examples/files")
         .join(name)
 }
 

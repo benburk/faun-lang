@@ -31,7 +31,7 @@ expect newton(f, df, 2.0, 2).is_err()
 # iteration never settles: the fuel runs out and the failure is reported.
 expect newton(f, df, 0.0, 50) == Err(NoConvergence)
 
-# `faun run crates/faun/examples/newton.fn` prints the square root of two.
+# `faun run crates/frontend/examples/newton.fn` prints the square root of two.
 app : {args: List(Str)} -> Result(F64, [NoConvergence])
 app(_) -> root_two
 

@@ -5,7 +5,7 @@ the ordered `SortedMap` and `SortedSet`, and how a key says what it is made
 of through `hash_into`. Each container is ordinary Faun in the standard
 library (`list.fn`, `map.fn`, `set.fn`, `sorted_map.fn`, `sorted_set.fn`);
 none is built into the compiler. The full list of methods is in the
-[standard library README](../../crates/faun/standard/README.md).
+[standard library README](../../crates/frontend/standard/README.md).
 
 ## Lists
 

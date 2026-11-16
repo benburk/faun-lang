@@ -1,5 +1,5 @@
 [package]
-name = "faun-cli"
+name = "faun"
 version.workspace = true
 default-run = "faun"
 edition.workspace = true
@@ -8,15 +8,15 @@ description = "The Faun compiler as commands"
 [[bin]]
 name = "faun"
 path = "src/main.rs"
-# The command and library share a name; only the library has an API to document.
+# Only the libraries have an API to document.
 doc = false
 
 [dependencies]
 blake3 = "1.8.7"
 bpaf = "0.9"
-faun.workspace = true
 faun-aarch64-macos.workspace = true
 faun-core.workspace = true
+faun-frontend.workspace = true
 faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true

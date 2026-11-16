@@ -33,7 +33,7 @@ const RUNGS: [(&str, &str); 5] = [
     ),
     (
         "a greeting",
-        include_str!("../../faun/examples/minimal-hello.fn"),
+        include_str!("../../frontend/examples/minimal-hello.fn"),
     ),
 ];
 

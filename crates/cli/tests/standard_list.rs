@@ -195,7 +195,7 @@ fn taking_a_lists_first_elements_is_a_view_of_it() {
             "{input}"
         );
     }
-    let mut barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     faun_core::barb::optimize(&mut barb);
     let machine = faun_core::lower_to_machine_ir(&barb, &X86_64Linux.routines()).unwrap();
     assert!(!machine.render().contains("take_into"));

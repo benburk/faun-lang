@@ -9,7 +9,7 @@ own sizes on an idle machine.
 **Prompt for a future iteration:**
 
 > Improve Faun's x86 code generation by one verifiable step. Follow
-> `crates/faun/examples/benchmarks-game/LAB.md`.
+> `crates/frontend/examples/benchmarks-game/LAB.md`.
 
 The long-term target is to beat the eight checked-in, single-threaded C
 programs on executable bytes, elapsed time, peak resident memory and
@@ -58,7 +58,7 @@ log. A scoring-policy change starts a new measurement series.
 
 Use native x86-64 Linux, the locked Nix shell, and the same idle logical
 CPU for the whole comparison. In each compiler checkout, build the exact
-clean revision with `nix develop -c cargo build --locked --release -p faun-cli`.
+clean revision with `nix develop -c cargo build --locked --release -p faun`.
 The runner hashes the compiler it actually uses; it does not rebuild it.
 Run these commands from the prep worktree:
 

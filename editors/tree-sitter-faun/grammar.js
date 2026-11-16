@@ -1,6 +1,6 @@
 /**
  * @file Faun's grammar for tree-sitter, ported from
- * `crates/faun/src/grammar.ebnf`.
+ * `crates/frontend/src/grammar.ebnf`.
  *
  * The compiler's lexer decides what a line break and adjacency mean; here
  * `src/scanner.c` says where a line ends and whether a name's `!` is its

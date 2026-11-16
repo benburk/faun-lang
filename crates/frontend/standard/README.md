@@ -189,8 +189,8 @@ rather than from nothing, so it takes no `where` bounds. `_` stands for a
 type nowhere else: a data declaration or an alias says its type in full.
 
 ```sh
-cargo run -- check crates/faun/examples/utilities.fn
-cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn
+cargo run -- check crates/frontend/examples/utilities.fn
+cargo run -- emit --target x86_64-linux barb crates/frontend/examples/main.fn
 ```
 
 A key says what it is made of through `hash_into : (T, h) -> h`, generic over
@@ -796,7 +796,7 @@ of each that does not hold.
 The standard library is a package too, and holds expectations of its own.
 It is built into the compiler; `FAUN_STD` names a directory to read it from
 instead, so the copy being edited is the one asked:
-`FAUN_STD=crates/faun/standard faun test crates/faun/standard/standard.fn`.
+`FAUN_STD=crates/frontend/standard faun test crates/frontend/standard/standard.fn`.
 `faun test` runs that for the machine it is on and says where each failing
 expectation was written; what the compiler settled while compiling, it
 settled before the program ran.

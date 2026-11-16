@@ -60,7 +60,7 @@ entering `kick`, and writes every element without asking, at 309 cycles.
 
 ## Comparison with C
 
-[`reference.c`](../crates/faun/examples/benchmarks-game/n-body/reference.c) uses a five-element
+[`reference.c`](../crates/frontend/examples/benchmarks-game/n-body/reference.c) uses a five-element
 array and ordinary nested loops. It preserves Faun's pair order, expression
 grouping, momentum offset and right-associated energy sum. It has no hand-written
 SIMD, approximate reciprocal square root, FMA or reassociation. It updates the
@@ -245,7 +245,7 @@ have not changed.
 
 ## Float lowering
 
-`crates/faun/standard/README.md` documents the claims for `F64.add`, `sub`, `mul`,
+`crates/frontend/standard/README.md` documents the claims for `F64.add`, `sub`, `mul`,
 `div` and `sqrt`. Machine IR contains `binary64` operations for all five.
 `RawEncoder::float` in `crates/targets/x86-64-linux/src/encode.rs` emits `addsd`, `subsd`,
 `mulsd`, `divsd` and `sqrtsd`; executable disassembly confirms those instructions
@@ -361,13 +361,13 @@ Build the C controls and inspect the scalar compiler's assembly:
 ```sh
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -fno-tree-vectorize -Wall -Wextra -Werror \
-  crates/faun/examples/benchmarks-game/n-body/reference.c -lm -o /tmp/nbody-c-scalar
+  crates/frontend/examples/benchmarks-game/n-body/reference.c -lm -o /tmp/nbody-c-scalar
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -Wall -Wextra -Werror \
-  crates/faun/examples/benchmarks-game/n-body/reference.c -lm -o /tmp/nbody-c-auto
+  crates/frontend/examples/benchmarks-game/n-body/reference.c -lm -o /tmp/nbody-c-auto
 gcc -std=c11 -O3 -march=x86-64 -mtune=generic -ffp-contract=off \
   -fno-math-errno -fno-tree-vectorize -S -masm=intel -fverbose-asm \
-  crates/faun/examples/benchmarks-game/n-body/reference.c -o /tmp/nbody-c.s
+  crates/frontend/examples/benchmarks-game/n-body/reference.c -o /tmp/nbody-c.s
 ```
 
 Build once in each revision, preserving binaries under distinct names. For
@@ -375,15 +375,15 @@ the changed revision:
 
 ```sh
 nix develop --command cargo build --release
-target/release/faun build crates/faun/examples/benchmarks-game/n-body/main.fn -o /tmp/nbody-after
-target/release/faun emit machine crates/faun/examples/benchmarks-game/n-body/main.fn > /tmp/nbody.ir
+target/release/faun build crates/frontend/examples/benchmarks-game/n-body/main.fn -o /tmp/nbody-after
+target/release/faun emit machine crates/frontend/examples/benchmarks-game/n-body/main.fn > /tmp/nbody.ir
 objdump -D -b binary -m i386:x86-64 -M intel /tmp/nbody-after > /tmp/nbody.asm
 ```
 
 Compare energy text before timing, preserving the raw timing samples as JSON:
 
 ```sh
-python3 crates/faun/examples/compare.py --cpu 10 --argument 1000000 \
+python3 crates/frontend/examples/compare.py --cpu 10 --argument 1000000 \
   --check 0,1,10,1000,10000,100000 \
   /tmp/nbody-before /tmp/nbody-after /tmp/nbody-c-scalar /tmp/nbody-c-auto
 ```

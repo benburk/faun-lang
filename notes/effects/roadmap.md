@@ -1,7 +1,7 @@
 # Roadmap: from today's host modules to the mature shape
 
 **Status: proposal.** How the current host modules
-(`crates/faun/standard/hosts/*.fn`) compare with the other notes, the small
+(`crates/frontend/standard/hosts/*.fn`) compare with the other notes, the small
 fixes worth making now, and the order to add effects in.
 
 ## Where we are
@@ -14,7 +14,7 @@ The foundation is sound. The hardest pieces already exist:
 - **Weak primitives in the host, loops in Faun.** Four descriptor routines
   plus `exit!`. `write_all!`, `read_to_end!` and the runners are Faun
   code.
-- **Linearity.** `crates/faun/src/linearity.rs` infers borrow and consume,
+- **Linearity.** `crates/frontend/src/linearity.rs` infers borrow and consume,
   and refuses drops, double use, and `?` while a resource is held.
 - **Bytes handed over without copying.** `Takes::Bytes` and
   `Returns::Filled`.

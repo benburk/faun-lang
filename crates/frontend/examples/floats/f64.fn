@@ -2,7 +2,7 @@
 # notes/values/floats.md, demonstrated for binary64: each block is one
 # of its rules, and the patterns are the host FPU's answers, taken from
 # Ori's oracle harness. `faun test` asks them, and so does
-# `cargo test --release -p faun-cli --test expectations -- --ignored`.
+# `cargo test --release -p faun --test expectations -- --ignored`.
 
 import helpers {f, f64, is_unordered, is_eq}
 

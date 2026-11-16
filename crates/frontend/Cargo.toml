@@ -1,5 +1,5 @@
 [package]
-name = "faun"
+name = "faun-frontend"
 version.workspace = true
 edition.workspace = true
 description = "The primary Faun source frontend"
