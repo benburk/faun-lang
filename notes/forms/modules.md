@@ -180,8 +180,7 @@ naming both URLs.
 
 Vendoring a dependency is unpacking its bundle beside the package and
 writing its path in place of the URL. A path dependency is read as it is,
-never fetched, cached or versioned, and its expectations are tested with
-the package that names it.
+never fetched, cached or versioned.
 
 ## Expectations
 
