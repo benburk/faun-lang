@@ -96,68 +96,92 @@ Whether a package is an application is whether its entry defines `main!`.
 
 ### URL dependencies (not built)
 
-This section is a plan, not the compiler. A dependency may be an `https`
-URL to an archive, pinned by the BLAKE3 hash of what it holds:
+This section is a plan, not the compiler. It follows Roc's packages, which
+work this way today. A dependency may be an `https` URL to a bundle, a
+`.tar.zst` file named by the BLAKE3 hash of its bytes:
 
 ```ruby
 package {
-  pcg: "https://example.com/pcg-1.2.0.tar.gz#blake3=9f2c…e41a"
+  pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst"
   md5: "../libraries/md5/src/md5"
 }
 ```
 
-- The hash is written in the URL's fragment, so a dependency stays one
-  string, and upgrading one is changing that string. A URL without a
-  `blake3` is refused, saying to add the hash the fetch found.
-- The archive is a `.tar.gz` or a `.zip`. A single directory at its top,
-  as GitHub's archives have, is stripped. Its root module is the one `.fn`
-  file left at its top, or the module base `root=` names in the fragment,
-  `#blake3=…&root=src/pcg`, read as a path is in a header.
-- The hash is of the unpacked files, not the archive's bytes: every file's
-  path, from the stripped top, and contents, in path order. Recompressing
-  the same files keeps the hash, and so does a mirror serving them from
-  another URL. Directories, timestamps and permissions are not hashed; a
-  link is refused.
+- The URL's last segment, before `.tar.zst`, is the hash in base58. A URL
+  without one is refused. After downloading, the compiler hashes the bytes
+  it read and refuses the bundle if they differ, so a URL always names the
+  same contents, whatever the server does later.
+- `faun bundle PATH` makes the bundle of the package at `PATH`: its root
+  module, as `main.fn` at the bundle's top, and every module it imports, at
+  their paths from the root. It writes the file under its hash, to be
+  uploaded anywhere that serves static files over `https`. The bundle is
+  what is hashed, so what a dependency names is the file its author made,
+  never an archive a forge generates.
+- Plain `http` is allowed only to `localhost`, for testing. A redirect is
+  followed at most three times, and each place it leads must keep the same
+  rule.
+- A bundle may unpack to at most 10 megabytes, and a dependency with
+  everything it depends on to at most 100; a flag raises either.
 - A fetched package is kept in the user's cache, `$XDG_CACHE_HOME/faun/`
-  (`~/.cache/faun/` when that is unset), under its hash, and is read-only
-  there. Every project on the computer shares it. A build whose
-  dependencies are all cached reaches no network, and a cached hash is
-  never fetched again, since its contents cannot change.
-- A fetch unpacks into a temporary directory beside the cache, hashes it,
-  and moves it into place only when the hash matches. A mismatch is
-  refused with both hashes, and nothing is kept.
+  (`~/.cache/faun/` when that is unset), under its hash, read-only and
+  shared by every project on the computer. A bundle is unpacked into a
+  staging directory and moved into place with a rename, so a directory
+  named by a hash always holds a whole package; a staging directory a day
+  old is left from a killed process and is removed. Beside each package, a
+  small file records its dependencies, so a build whose packages are all
+  cached reaches no network and reads no headers to find them.
 - A fetched package is a package like any other: its imports read from its
-  own root, its inner modules are its own, and its own header pins its own
-  dependencies, by path within it or by URL.
-- `faun fetch PATH` fetches every dependency of the package at `PATH`,
-  through its dependencies' headers, so a later build can be offline.
-  Vendoring a dependency is unpacking it beside the package and writing its
-  path in place of the URL.
+  own root, its inner modules are its own, and its own header names its own
+  dependencies, which may be paths within it or URLs.
 
-Two dependencies pinning one hash share one copy. Two pinning different
-hashes of one library are two packages, and their types are two types: a
-`Random` from one is not a `Random` from the other. Passing one where the
-other is wanted is refused, naming both packages' hashes, so the message
-says which dependency to upgrade.
+#### Versions
 
-There is no lock file and no version. The headers are the lock: each
-package pins each of its dependencies to exact contents, so the root
-package's own files and the hashes they name decide every byte a build
-reads. A version is a name in a URL, read by people and by tools, never by
-the compiler.
+A URL may hold one version, `MAJOR.MINOR.PATCH`, anywhere before the hash,
+as `1.2.0` above. More than one is refused. Two URLs that differ only in
+their version and hash are versions of one package, and where a build's
+packages depend on one package more than once, versions choose which copy
+is used:
 
-Upgrading is a tool's work, outside the language. One that lists a
-library's releases can choose the newest that semantic versioning says is
-compatible, fetch it, and rewrite the URL and its hash; `faun bump` is the
-planned one. The compiler only checks that what was fetched is what the
-header names.
+- Versions with different majors, `1.4.0` and `2.0.0`, are different
+  packages, and both are used.
+- Versions with one major, `2.1.0` and `2.3.1`, are compatible, and the
+  build uses the highest the dependency graph mentions, everywhere.
+- Below `1.0.0` the minor is the major: `0.3.0` and `0.4.0` are different,
+  and `0.3.0` and `0.3.5` compatible.
+- The package being built uses its own dependencies as written. A higher
+  version wanted deeper in the graph is refused, showing the chain of
+  dependencies that wants it, rather than upgraded silently.
+- A URL with no version is its own package, never merged with another.
 
-Open questions:
+Choosing is a fixed point, not a search: follow only the chosen versions'
+dependencies, take each group's highest mentioned version, and repeat
+until nothing changes. A version mentioned only by a package that was not
+chosen no longer counts. There is no lock file, because the headers and
+this rule decide every package a build reads.
 
-- Whether the root package may replace a dependency's dependency, for a
-  security fix that the packages between have not yet taken, or must wait
-  for each to upgrade.
-- Whether the cache is ever cleaned, or left to the user to delete.
+Two packages that are used side by side, two majors of one library or two
+URLs without versions, have two sets of types: a `Random` from one is not a
+`Random` from the other. Passing one where the other is wanted is refused,
+naming both URLs.
+
+#### Commands
+
+- `faun fetch PATH` downloads every dependency of the package at `PATH`, so
+  a later build can be offline.
+- `faun deps PATH` prints the dependency graph as a tree, each dependency
+  by the URL or path its header wrote, marking a package shown before and a
+  version chosen in place of the one written.
+- `--replace-dep OLD NEW`, given to a build, a check or a test, uses `NEW`,
+  a URL or a path, wherever any header names exactly `OLD`, for that one
+  command. It edits no file and no cached package. It is how a fork, a
+  local change or a fix not yet taken by the packages between is tried.
+- `faun bump PATH` compares a package's exported interface with its
+  previous version's and says whether the change is major, minor or patch.
+
+Vendoring a dependency is unpacking its bundle beside the package and
+writing its path in place of the URL. A path dependency is read as it is,
+never fetched, cached or versioned, and its expectations are tested with
+the package that names it.
 
 ## Expectations
 
@@ -245,33 +269,45 @@ choosing versions are a package manager's work, and there is none. The
 cost is that a path's surroundings are part of the package: moving a
 library moves the paths of everything that depends on it.
 
-### Why URLs pinned by hash, and no lock file?
+### Why URLs named by hash, and Roc's versions?
 
 A path dependency means the same wherever its package is copied, but only
-on a computer that has the library at that path. A URL pinned by a hash
-keeps that promise everywhere: the header names exact contents, the cache
-holds them by that name, and whichever server answers, what is read is
-what the hash says. Hashing the unpacked files rather than the archive is
-because archives are not stable bytes: GitHub's changed compression in
-2023 and broke every pinned hash of its archives.
+on a computer that has the library at that path. A URL named by a hash
+keeps the promise everywhere: the header names exact bytes, the cache holds
+them by that name, and whatever server answers, what is read is what the
+hash says. Roc has shipped this design, and following it borrows the
+answers to questions a first design gets wrong: which bytes to hash, how a
+shared cache survives two builds at once, how big a download may be, and
+where a redirect may lead.
 
-A lock file is needed when a manifest asks for a range, `^1.2`, and a
-resolver chooses one version to satisfy every package's range at once,
-which is a search over constraints that is in general NP-complete and in
-practice a SAT solver. With no ranges there is nothing to choose: every
-package already says exactly what it reads. The cost is duplication. Where
-a resolver would find one version both packages accept, Faun builds both,
-which is more code and two incompatible copies of the library's types, and
-a fix deep in the graph reaches the root only as each package between
-upgrades.
+The bundle is made by `faun bundle`, not by a forge, because archives a
+forge generates are not stable bytes: GitHub's changed compression in 2023
+and broke every pinned hash of them. Hashing a file its author uploaded
+makes hashing the bytes enough, and the hash is checked as the download
+streams in. Faun's bundle needs no list of files, since a package is its
+root and what that imports.
 
-Semantic versioning stays useful as advice to the tool that upgrades, which
-can be as clever as it likes because it only proposes an edit to a header.
-Choosing a version is then done once, by a person or a tool that can be
-read, and recorded as a hash, rather than redone on every build. Zig's
-`build.zig.zon` takes the same line, a URL and a hash of the unpacked
-files, and Deno and Go import by URL; Faun keeps the URL inside the root's
-header so that import lines still name packages, not servers.
+A lock file is needed where a manifest asks for a range, `^1.2`, and a
+resolver searches for one version that satisfies every range, a problem
+that is NP-complete in general and a SAT solver in practice. A URL names
+one version, so there is nothing to search: the highest mentioned in each
+compatible group is a rule anyone can apply by hand, and Go's minimal
+version selection showed that such a rule is enough. Merging compatible
+versions is what keeps one library's types one set of types across a
+program; keeping every version apart would build both, with types that
+cannot meet.
+
+The cost is that versions are read by the compiler, not only by people,
+and a library that breaks its interface in a minor release breaks the
+packages that depend on it. `faun bump` is the check against that.
+Upgrading stays an edit to a header, which a tool can make by reading a
+library's releases; the compiler never chooses a version newer than one
+some header wrote.
+
+`--replace-dep` exists for the fix that cannot wait: a security patch deep
+in the graph, which the packages between have not taken, is tried or
+shipped without forking them. It lasts for one command, so a header stays
+the whole truth of what a package depends on.
 
 Fetching runs nothing. A Faun package has no build script, so fetching one
 is reading bytes, and a hash that matches says only that they are the bytes
