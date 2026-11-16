@@ -111,3 +111,12 @@ expect sort(["pear", "fig", "apple"]) == ["apple", "fig", "pear"]
 
 - How to do FFI
 - How to do concurrency
+
+## License
+
+Faun, its standard library and its example libraries are under the
+[Zero-Clause BSD license](LICENSE): use them for anything, with no
+attribution required, so a compiled program carries no notice for the
+standard library inside it. Code adapted from elsewhere keeps its own
+license beside it: the `ansi` library's is roc-ansi's UPL-1.0, and the
+benchmarks game's C programs are under its revised BSD license.

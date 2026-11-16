@@ -1,6 +1,6 @@
 # ANSI terminal colors, styles, and cursor/display controls.
 # Adapted from lukewilliamboswell/roc-ansi under the UPL-1.0 license; see
-# LICENSE in this directory. The API keeps constructors private and exposes
+# LICENSE in the library's directory. The API keeps constructors private and exposes
 # qualified builders so terminal escape sequences are never assembled by hand.
 
 package {}

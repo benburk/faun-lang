@@ -6,6 +6,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "0BSD"
 
 [workspace.dependencies]
 faun-aarch64-macos = { path = "crates/targets/aarch64-macos", version = "0.1.0" }
