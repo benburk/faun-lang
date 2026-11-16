@@ -4,7 +4,9 @@
 # from its first member through friends of friends.
 
 package {
-  graph: "../src/graph"
+  uses: {
+    graph: "../src/graph"
+  }
 }
 
 import graph {UnGraph, Unweighted, components}

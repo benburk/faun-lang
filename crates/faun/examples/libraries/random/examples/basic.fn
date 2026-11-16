@@ -4,7 +4,9 @@
 # compiled arithmetic.
 
 package {
-  random: "../src/random"
+  uses: {
+    random: "../src/random"
+  }
 }
 
 import random {Random}

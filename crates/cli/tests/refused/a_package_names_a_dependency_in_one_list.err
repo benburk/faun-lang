@@ -1,0 +1,5 @@
+error: the package depends on `shapes` more than once
+ --> a_package_names_a_dependency_in_one_list/main.fn:3:15
+  |
+3 |   test_uses: {shapes: "vendor/shapes/shapes"},
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

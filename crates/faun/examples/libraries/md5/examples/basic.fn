@@ -1,7 +1,9 @@
 # Native smoke entry for MD5's block loop and U64 length encoding.
 
 package {
-  md5: "../src/md5"
+  uses: {
+    md5: "../src/md5"
+  }
 }
 
 import md5 {md5_hash}

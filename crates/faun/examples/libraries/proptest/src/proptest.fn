@@ -15,7 +15,9 @@
 # rather than going on forever.
 
 package {
-  random: "../../random/src/random"
+  uses: {
+    random: "../../random/src/random"
+  }
 }
 
 import random {Random}

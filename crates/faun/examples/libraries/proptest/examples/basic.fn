@@ -6,8 +6,10 @@
 # smallest witness of why.
 
 package {
-  proptest: "../src/proptest",
-  random: "../../random/src/random"
+  uses: {
+    proptest: "../src/proptest",
+    random: "../../random/src/random"
+  }
 }
 
 import proptest {Verdict, gen_nat, gen_list, shrink_nat, shrink_list}

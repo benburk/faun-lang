@@ -7,7 +7,9 @@ its type wherever a member of it is read, so codecs compose.
 
 ```ruby
 package {
-  json: "../src/json"
+  uses: {
+    json: "../src/json"
+  }
 }
 
 import json {Json, Decode, Fields}

@@ -4,7 +4,9 @@
 # the reference programs' and times each.
 
 package {
-  json: "../src/json"
+  uses: {
+    json: "../src/json"
+  }
 }
 
 import json {Json, Null, Bool, Int, Float, String, Array, Object}

@@ -3,7 +3,9 @@
 # tools/ori-template.fish handles those details for normal use.
 
 package {
-  template: "../src/template"
+  uses: {
+    template: "../src/template"
+  }
 }
 
 import template {compile_template}

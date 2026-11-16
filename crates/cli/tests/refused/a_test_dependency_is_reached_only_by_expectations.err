@@ -1,0 +1,9 @@
+error: `double_square` is from a test dependency, and real code uses it
+  --> a_test_dependency_is_reached_only_by_expectations/main.fn:13:14
+   |
+13 | scaled(n) -> double_square(n)
+   |              ^^^^^^^^^^^^^ `scaled` uses it
+   |
+   = note: only expectations, and what only they reach, may use a package in `test_uses`
+   = note: real code reaches it: `area` calls `scaled`
+   = help: move the package `double_square` comes from to `uses`, or keep `scaled` out of real code

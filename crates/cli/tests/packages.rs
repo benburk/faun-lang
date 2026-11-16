@@ -178,7 +178,24 @@ fn with_dependency(name: &str, entry: &str) -> Package {
 fn a_package_imports_the_root_of_one_it_depends_on() {
     let package = with_dependency(
         "dependency",
-        "package {\n  shapes: \"vendor/shapes/shapes\",\n}\n\nimport shapes {double_square}\n\neight : Nat\neight = double_square(2)\n\nexpect eight == 8\n",
+        "package {\n  uses: {\n    shapes: \"vendor/shapes/shapes\",\n  },\n}\n\nimport shapes {double_square}\n\neight : Nat\neight = double_square(2)\n\nexpect eight == 8\n",
+    );
+    faun::check_package(&package.entry(), &X86_64Linux).unwrap();
+    let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    assert_eq!(tests.expectations.len(), 1);
+}
+
+/// A package in `test_uses` may be reached by expectations, and by a helper
+/// only they reach, while the package's real code goes without it.
+#[test]
+fn a_test_dependency_is_reached_by_expectations_and_their_helpers() {
+    let package = with_dependency(
+        "test-dependency",
+        "package {\n  faun: \"0.1\",\n  test_uses: {shapes: \"vendor/shapes/shapes\"},\n}\n\n\
+         import shapes {double_square}\n\nexport {area}\n\n\
+         area : Nat -> Nat\narea(n) -> n * n\n\n\
+         doubled : Nat -> Nat\ndoubled(n) -> double_square(n)\n\n\
+         expect doubled(3) == area(3) * 2\n",
     );
     faun::check_package(&package.entry(), &X86_64Linux).unwrap();
     let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();

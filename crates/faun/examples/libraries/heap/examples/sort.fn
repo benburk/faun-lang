@@ -3,7 +3,9 @@
 # in order, and their sum.
 
 package {
-  heap: "../src/heap"
+  uses: {
+    heap: "../src/heap"
+  }
 }
 
 import heap {Heap}

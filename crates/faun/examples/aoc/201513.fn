@@ -16,7 +16,9 @@
 # answers come out of the same 5040 seatings.
 
 package {
-  combinatorics: "../libraries/combinatorics/src/combinatorics"
+  uses: {
+    combinatorics: "../libraries/combinatorics/src/combinatorics"
+  }
 }
 
 import combinatorics {permutations}

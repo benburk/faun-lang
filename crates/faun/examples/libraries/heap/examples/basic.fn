@@ -2,7 +2,9 @@
 # were queued, and a pop leaving the rest to queue onto again.
 
 package {
-  heap: "../src/heap"
+  uses: {
+    heap: "../src/heap"
+  }
 }
 
 import heap {Heap}

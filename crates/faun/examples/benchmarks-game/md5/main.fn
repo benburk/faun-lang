@@ -1,6 +1,8 @@
 # Hash standard input in chunks and print the 16-byte digest in lowercase hex.
 package {
-  md5: "../../libraries/md5/src/md5"
+  uses: {
+    md5: "../../libraries/md5/src/md5"
+  }
 }
 
 import std.host {Host}

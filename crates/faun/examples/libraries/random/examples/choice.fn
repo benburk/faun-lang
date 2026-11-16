@@ -9,7 +9,9 @@
 # argv[0] is the seed, argv[1..] the candidates.
 
 package {
-  random: "../src/random"
+  uses: {
+    random: "../src/random"
+  }
 }
 
 import random {Random}

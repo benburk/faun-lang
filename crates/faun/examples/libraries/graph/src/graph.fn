@@ -20,7 +20,9 @@
 # with `List.put`.
 
 package {
-  heap: "../../heap/src/heap"
+  uses: {
+    heap: "../../heap/src/heap"
+  }
 }
 
 import edge {Edge, Unweighted, Walkable}

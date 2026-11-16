@@ -434,7 +434,8 @@ fn literal_validation_reaches_every_syntactic_position() {
         r#"value = "${"\q"}""#,
         "T : Nat.(\n  value = \"\\q\"\n)",
         r#"expect "\q" == """#,
-        r#"package {dep: "\q"}"#,
+        r#"package {uses: {dep: "\q"}}"#,
+        r#"package {faun: "\q"}"#,
     ] {
         let error = parse(source).unwrap_err();
         assert!(

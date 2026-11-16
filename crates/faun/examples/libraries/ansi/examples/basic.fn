@@ -2,7 +2,9 @@
 # control builders.
 
 package {
-  ansi_lib: "../src/ansi"
+  uses: {
+    ansi_lib: "../src/ansi"
+  }
 }
 
 import ansi_lib {Ansi, Color, Style, Control}

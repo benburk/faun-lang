@@ -1,0 +1,10 @@
+package {}
+
+import area {square}
+
+export {double_square}
+
+double_square : Nat -> Nat
+double_square(n) -> square(n) * 2
+
+expect double_square(3) == 18

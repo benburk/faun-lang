@@ -5,7 +5,9 @@
 # permutation is honest, and the combinatorics library generates them.
 
 package {
-  combinatorics: "../libraries/combinatorics/src/combinatorics"
+  uses: {
+    combinatorics: "../libraries/combinatorics/src/combinatorics"
+  }
 }
 
 import combinatorics {permutations}

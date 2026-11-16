@@ -536,7 +536,7 @@ fn the_grammar_reads_every_program_in_the_repository_as_the_parser_does() {
 
 /// Programs both read, one probing each rule.
 const READ: &[&str] = &[
-    "import std.host {Host, List.*, x: y}\nexport {f, Host.*}\npackage {md5: \"../md5\"}\n",
+    "import std.host {Host, List.*, x: y}\nexport {f, Host.*}\npackage {faun: \"0.1\", uses: {md5: \"../md5\"}, test_uses: {}}\n",
     "f : (List(a), a -> b) -> {x: a, *} where Show(a), Eq(a), a.show : a -> Str\n",
     "sum : List(a) -> a where\n  a.zero : a,\n  a.add : (a, a) -> a\n",
     "f : a -> a where a.zero : a, Show(a), a.add : (a, a) -> a\n",

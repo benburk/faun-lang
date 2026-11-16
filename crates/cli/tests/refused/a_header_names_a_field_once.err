@@ -1,0 +1,5 @@
+error: the header names `faun` more than once
+ --> a_header_names_a_field_once.fn:1:23
+  |
+1 | package {faun: "0.1", faun: "0.1"}
+  |                       ^^^^^^^^^^^

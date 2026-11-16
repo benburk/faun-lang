@@ -1,7 +1,9 @@
 # The four familiar ways to select two values from a small input.
 
 package {
-  combinatorics: "../src/combinatorics"
+  uses: {
+    combinatorics: "../src/combinatorics"
+  }
 }
 
 import combinatorics {

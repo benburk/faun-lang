@@ -9,7 +9,9 @@
 # Usage: main SEED [ROUNDS]
 
 package {
-  pcg: "../libraries/random/src/random"
+  uses: {
+    pcg: "../libraries/random/src/random"
+  }
 }
 
 import std.host {Host}

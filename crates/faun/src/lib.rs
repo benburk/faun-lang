@@ -71,6 +71,7 @@ pub mod source;
 mod specialize;
 mod standard;
 pub mod symbol;
+mod test_uses;
 pub mod typed;
 
 pub use diagnostic::Diagnostic;
@@ -108,7 +109,9 @@ pub enum Package {
 pub fn check_package(source: &Path, target: &dyn Target) -> Result<Package, Diagnostic> {
     let loaded = load(source, target)?;
     let main = Main::find_in(&loaded)?;
+    let facts = test_uses::Facts::of(&loaded);
     let (program, cx) = resolve(loaded)?;
+    test_uses::check(&program, &cx, &facts)?;
     let program = host::sign_main(program, &cx, main.as_ref());
     lower(program, cx, main.as_ref(), target)
 }
@@ -150,7 +153,9 @@ pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, 
     let mut loaded = load(source, target)?;
     let application = Main::find_in(&loaded)?;
     let main = expectations::main(&mut loaded);
+    let facts = test_uses::Facts::of(&loaded);
     let (program, mut cx) = resolve(loaded)?;
+    test_uses::check(&program, &cx, &facts)?;
     let program = host::sign_main(program, &cx, application.as_ref());
     let (program, expectations) = expectations::enter(program, &mut cx, &main);
     let Package::Application(barb) = lower(program, cx, Some(&main), target)? else {
