@@ -34,9 +34,10 @@ under another name.
 
 The prelude, the standard library's exports, is seen by every module
 without an import: `Bool`, `Nat`, `List`, `Str`, `Map` and the rest. A
-module may not declare a type the prelude has. The standard library's own
-modules are not imported by name; `std.host`, the target's host module, is
-the one standard module a program imports.
+module may not declare a type the prelude has, so a name added to the
+prelude is one a [language version](#header-fields-not-built) admits. The
+standard library's own modules are not imported by name; `std.host`, the
+target's host module, is the one standard module a program imports.
 
 Imports form no cycle. A module importing one that imports it back, directly
 or through others, is refused: "import cycle through …".
@@ -94,6 +95,64 @@ root module.
 
 Whether a package is an application is whether its entry defines `main!`.
 
+### Header fields (not built)
+
+This section is a plan, not the compiler. The header becomes a record of
+named fields, each optional, so a field can be added later without
+reserving a name no dependency may take:
+
+```ruby
+package {
+  faun: "0.4"
+  uses: {
+    pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst"
+    text: "../text/main"
+  }
+  test_uses: {
+    proptest: "../libraries/proptest/src/proptest"
+  }
+}
+```
+
+- `uses` is today's dependency map, moved under a name.
+- `test_uses` names the packages only the package's expectations need. A
+  name may be in one of `uses` and `test_uses`, not both.
+- `faun` is the language version the package was written for,
+  `MAJOR.MINOR`, read the way Rust reads an edition and Go its `go` line:
+  the compiler reads each package by its own version's rules, so one build
+  mixes packages written for different versions. A version newer than the
+  compiler knows is refused, saying so.
+
+A file needs no header at all: a script with no dependencies is a file
+and nothing more.
+
+#### Language versions
+
+A header without `faun` is read by the running compiler's own version, so
+a script or a project of one's own always has the current language and is
+fixed by hand when the language changes. `faun bundle` writes the version
+into the bundled header when the source has none, so a bundle, which never
+changes, always says which rules it was written for. A language change
+that would break a package, a name added to the prelude among them, applies
+only to packages whose version is new enough.
+
+The version is a request to whichever compiler runs, not a pin of one:
+fetching and running a compiler is left to the tools that install it, a
+Nix flake among them.
+
+#### Test dependencies
+
+A package's real code is what its exports, or its `main!`, reach; its test
+code is what only its expectations reach, a helper they share included.
+Only test code may reach a name imported from a `test_uses` package. Real
+code that does is refused, showing the chain from the definition to the
+import, with the advice to move the dependency to `uses`. A `uses`
+dependency only test code reaches gets a warning suggesting `test_uses`.
+
+When a package is checked as another's dependency, its expectations are
+not checked, so its `test_uses` packages are not fetched, are not shown by
+`faun uses`, and mention no version when the build chooses versions.
+
 ### URL dependencies (not built)
 
 This section is a plan, not the compiler. It follows Roc's packages, which
@@ -102,8 +161,10 @@ work this way today. A dependency may be an `https` URL to a bundle, a
 
 ```ruby
 package {
-  pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst"
-  md5: "../libraries/md5/src/md5"
+  uses: {
+    pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst"
+    md5: "../libraries/md5/src/md5"
+  }
 }
 ```
 
@@ -168,7 +229,7 @@ naming both URLs.
 
 - `faun fetch PATH` downloads every dependency of the package at `PATH`, so
   a later build can be offline.
-- `faun deps PATH` prints the dependency graph as a tree, each dependency
+- `faun uses PATH` prints the dependency graph as a tree, each dependency
   by the URL or path its header wrote, marking a package shown before and a
   version chosen in place of the one written.
 - `--replace-dep OLD NEW`, given to a build, a check or a test, uses `NEW`,
@@ -311,6 +372,40 @@ the whole truth of what a package depends on.
 Fetching runs nothing. A Faun package has no build script, so fetching one
 is reading bytes, and a hash that matches says only that they are the bytes
 the header's author chose, not that they are safe.
+
+### Why a header of fields, with a language version?
+
+A bundle never changes, so every header ever bundled must be read by every
+later compiler: the header's shape is the one thing that cannot be changed
+later. A record of named fields leaves room, and a field added later is
+one a language version admits. The fields are few because Faun has no
+registry and no build steps: a package's name is its importer's choice, its
+version is in the URL, and what Cargo's features, profiles and build
+scripts do is not Faun's to do.
+
+The language version is what lets a frozen package outlive the language
+changing under it. Without one, a name added to the prelude breaks every
+package that declares its own, bundles nobody can edit among them, and an
+old package on a new compiler fails with an error from deep inside it
+rather than one saying which version it was written for. A missing version
+means the running one, unlike Rust, where a missing edition is the oldest,
+so a script never needs a header; `faun bundle` writing it is what keeps
+the bundles, the only packages that cannot be fixed, from going without.
+The cost is that every rule a version changes stays in the compiler for
+the packages written before it.
+
+`test_uses` is listed rather than inferred from what test code reaches,
+though the compiler computes the same thing either way. Inferred, a test
+helper called once from real code would become a dependency of every
+package depending on this one, and with the highest mentioned version
+chosen, its version mentions would change their builds, with nothing
+saying so. Listed, that is a refusal, and changing what a package asks of
+the packages depending on it is always an edit to its header.
+
+A lasting override, Cargo's `[patch]` or Go's `replace`, is left out. A
+newer version is taken by mentioning it, since the highest mentioned is
+used, a fix is tried with `--replace-dep`, and a fork kept is a vendored
+copy. An `overrides` field can come when a case needs it.
 
 ### Why are tests `expect`s in the module?
 
