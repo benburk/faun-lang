@@ -34,6 +34,7 @@ test:
     python3 -B crates/frontend/examples/benchmarks-game/test_lab.py
     python3 -B eval/test_ratchet.py
     cargo nextest run --workspace
+    just test-std
     cargo test --workspace --doc
     just tree-sitter
 
@@ -97,6 +98,10 @@ standings:
 bless:
     FAUN_BLESS=1 cargo nextest run -p faun --test refused
     FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition the_reference_float_table
+
+# Run the standard library's expectations, read from its source so an edit needs no rebuild
+test-std:
+    FAUN_STD=crates/frontend/standard cargo run -q -- test crates/frontend/standard/standard.fn
 
 # Build the release binary
 build:

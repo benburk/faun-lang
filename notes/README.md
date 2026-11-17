@@ -10,6 +10,11 @@ set of mechanisms goes toward C-like speed, Python-like concision and
 Rust-like safety. Most rationale here is an argument that some mechanism is
 not needed.
 
+Every `` ```ruby `` example in these notes and the READMEs is run as a
+program by the `docs` test, so what a note shows is what holds today. An
+example that is not a whole program, an excerpt or refused or historical
+syntax shown on purpose, marks its fence `` ```ruby ignore ``.
+
 ## Reading map
 
 ### The model

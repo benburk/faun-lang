@@ -723,7 +723,7 @@ step a path walks back through, `sorted` whether toposort ordered every
 node, and `climb_past`, `sink_past`, `cheaper` and `either` the heap's
 comparisons. Its answer was a value, then clauses in parentheses:
 
-```ruby
+```ruby ignore
 back(settled, node, route) -> (
   step = settled.get_or(node, Err(Unreachable))?
   walked = [node, *route]

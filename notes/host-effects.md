@@ -2,7 +2,7 @@
 
 faun has a nice abstraction over host effects
 
-```ruby
+```ruby ignore
 main! : Host -> []
 main!(host) -> ...
 ```

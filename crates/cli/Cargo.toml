@@ -35,5 +35,10 @@ num-bigint = "0.4.8"
 name = "refused"
 harness = false
 
+# Each documentation example is its own test, which libtest cannot list.
+[[test]]
+name = "docs"
+harness = false
+
 [lints]
 workspace = true

@@ -115,7 +115,7 @@ Clause heads and signatures take 43% of them in Ori and 59% in Faun, so
 pattern-matching code pays the most, and a clause group loses the look of
 a table:
 
-```ruby
+```ruby ignore
 merge([x *xt] [y *yt]) if x <= y -> [x *merge(xt [y *yt])]
 merge([x, *xt], [y, *yt]) if x <= y -> [x, *merge(xt, [y, *yt])]
 

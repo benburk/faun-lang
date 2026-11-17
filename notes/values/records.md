@@ -125,7 +125,7 @@ fixed, as `Result`'s error type does. `List.map2({x: xs, y: ys})` zips two
 lists into a list of records; the JSON and command-line libraries decode
 and parse a record's fields with their own `sequence`:
 
-```ruby
+```ruby ignore
 fields.finish(Decode.sequence({
   display_name: fields.string("name").required(),
   age: fields.nat("age").required(),
@@ -185,14 +185,14 @@ the CPU, an assembler in its cursor. Without paths, changing one field
 deep down names every record on the way twice, once to build it and once
 to keep its rest:
 
-```ruby
+```ruby ignore
 {asm: {macros, *cursor.asm}, lines: cursor.lines.drop(end + 1), *cursor}
 ```
 
 With them, the line says only what changes, as a read of the same field
 would name it:
 
-```ruby
+```ruby ignore
 {asm.macros: macros, lines: cursor.lines.drop(end + 1), *cursor}
 ```
 

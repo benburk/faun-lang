@@ -57,7 +57,7 @@ body builds that constructor again. So a sum whose methods forward to each
 payload's own writes one clause per method, from the arena example
 (`examples/rps-arena/main.fn`):
 
-```ruby
+```ruby ignore
 Bot : [
   AlwaysRock(AlwaysRock),
   BeatLast(BeatLast),

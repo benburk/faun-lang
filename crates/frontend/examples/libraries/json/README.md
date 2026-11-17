@@ -5,7 +5,7 @@ into your own types or build one from them. Codecs are written out, a line a
 member, and nothing is derived; a type with its own `from_json` is found by
 its type wherever a member of it is read, so codecs compose.
 
-```ruby
+```ruby ignore
 package {
   uses: {
     json: "../src/json"
@@ -97,7 +97,7 @@ own `from_str`.
 A tagged union reads its tag, then lets the tag choose the rest with
 `and_then`, handing the fields along:
 
-```ruby
+```ruby ignore
 from_json(value) -> (
   fields = Fields.of(value)
   fields.finish(fields.string("type").required().and_then(fields, body))
@@ -121,7 +121,7 @@ A codec names each wire key twice, once in each direction, and nothing
 checks that the two agree. An expectation that encodes a value and decodes
 it again catches a key misspelled one way:
 
-```ruby
+```ruby ignore
 expect User.from_json(ada.to_json()).result() == Ok(ada)
 ```
 

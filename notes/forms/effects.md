@@ -28,7 +28,7 @@ a guard or the right of `&`, so the order effects run in is the order of
 the lines. A line `call!()?` passes a failure on. Only an effect may stand
 alone on a line; any other value is bound to a name.
 
-```ruby
+```ruby ignore
 main! : Host -> []
 main!(host) -> (
   host.println!("Hello, world!")
@@ -45,7 +45,7 @@ a method of `Host` or of something reached from it: `host.stdout`,
 `host.stdin`, `host.stderr` and `host.files`, each a value of its own type
 that can be handed on alone. `host.args` is an ordinary field.
 
-```ruby
+```ruby ignore
 main!(host) -> (
   copied = copy!(host.files, host.stdout)
   host.exit!(status(copied))
@@ -77,7 +77,7 @@ one is held are each refused.
 `?` closes nothing, so a file is closed before `?` is asked of what reading
 it answered:
 
-```ruby
+```ruby ignore
 measure! : Files -> Result(Nat, IoError)
 measure!(files) -> (
   source = files.open!("input.txt", Read)?
@@ -93,7 +93,7 @@ Nothing is written to say what a function does with a file it is handed.
 One that only reads it, writes it, or hands it on to what does the same
 lends it, and may leave by `?`, since its caller still holds the file:
 
-```ruby
+```ruby ignore
 size! : File -> Result(Nat, IoError)
 size!(file) -> (
   bytes = file.read_to_end!()?
