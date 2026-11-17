@@ -1,7 +1,7 @@
-# DEFLATE (RFC 1951) decompression, and the two containers that wrap it:
-# zlib's (RFC 1950), checked by Adler-32, and gzip's (RFC 1952), checked by
-# CRC-32. Corrupt or cut-short input answers `Err` naming why; nothing
-# panics or reads past the end.
+# DEFLATE (RFC 1951) decompression and compression, and the two containers
+# that wrap it: zlib's (RFC 1950), checked by Adler-32, and gzip's (RFC
+# 1952), checked by CRC-32. Corrupt or cut-short input answers `Err` naming
+# why; nothing panics or reads past the end. Compression is `deflate.fn`'s.
 #
 # The reader is a bit position into the input, least significant bit
 # first, so nothing holds a bit buffer: a read of up to 17 bits takes the
@@ -15,8 +15,13 @@ package {
 }
 
 import crc {crc32, adler32}
+import symbols {Tables, tables, fixed_literal_lengths, first_codes, reversed}
+import deflate {deflate, Level}
 
-export {inflate, zlib_decompress, gzip_decompress, InflateError}
+export {
+  inflate, zlib_decompress, gzip_decompress, InflateError,
+  deflate, zlib_compress, gzip_compress, Level
+}
 
 # Every way a stream can be refused.
 InflateError = [
@@ -117,39 +122,35 @@ little_endian : (List(U8), Nat) -> Nat
 little_endian(input, at) ->
   byte(input, at) + byte(input, at + 1) * 256 + byte(input, at + 2) * 65536 + byte(input, at + 3) * 16777216
 
-# The tables a stream is read with, built once a stream, since a constant
-# is worked out again wherever it is named.
-Tables = {
-  # For each length symbol from 257, its base length times 16 plus how
-  # many extra bits follow it.
-  lengths: List(U32),
-  # For each distance symbol, its base distance times 16 plus its extra
-  # bits.
-  distances: List(U32),
-}
+# `input` as a zlib stream, its Adler-32 after it. The header's level is
+# zlib's word for how hard it looked, which nothing reading it needs.
+zlib_compress : (List(U8), Level) -> List(U8)
+zlib_compress(input, level) -> (
+  hint = level.to_nat() is (
+    0 | 1 then 0
+    2 | 3 | 4 | 5 then 1
+    6 then 2
+    _ then 3
+  )
+  flags = hint * 64
+  check = 31 - (0x78 * 256 + flags) % 31
+  (a, b, c, d) = adler32(input).le_bytes()
+  [0x78, U8.of_nat(flags + check)].concat(deflate(input, level)).concat([d, c, b, a])
+)
 
-tables : Tables
-tables = {
-  lengths: [
-    3 * 16, 4 * 16, 5 * 16, 6 * 16, 7 * 16, 8 * 16, 9 * 16, 10 * 16,
-    11 * 16 + 1, 13 * 16 + 1, 15 * 16 + 1, 17 * 16 + 1,
-    19 * 16 + 2, 23 * 16 + 2, 27 * 16 + 2, 31 * 16 + 2,
-    35 * 16 + 3, 43 * 16 + 3, 51 * 16 + 3, 59 * 16 + 3,
-    67 * 16 + 4, 83 * 16 + 4, 99 * 16 + 4, 115 * 16 + 4,
-    131 * 16 + 5, 163 * 16 + 5, 195 * 16 + 5, 227 * 16 + 5,
-    258 * 16,
-  ],
-  distances: List.range(30).map(distance_entry),
-}
-
-# Distances come in pairs per number of extra bits, from 1, 2, 3 and 4
-# with none, each pair's base past the last's span.
-distance_entry : Nat -> U32
-distance_entry(symbol) if symbol < 4 -> U32.of_nat((symbol + 1) * 16)
-distance_entry(symbol) -> (
-  extra = symbol / 2 - 1
-  base = 2.pow(extra + 1) + (symbol % 2) * 2.pow(extra) + 1
-  U32.of_nat(base * 16 + extra)
+# `input` as a gzip file of one member, with no name and no time, its
+# CRC-32 and length after it, as `gzip -n` writes one.
+gzip_compress : (List(U8), Level) -> List(U8)
+gzip_compress(input, level) -> (
+  # The header's extra flags say the slowest or the fastest level.
+  extra = level.to_nat() is (
+    9 then 2
+    1 then 4
+    _ then 0
+  )
+  (a, b, c, d) = crc32(input).le_bytes()
+  (e, f, g, h) = U32.of_nat(input.len()).le_bytes()
+  [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, extra, 255].concat(deflate(input, level)).concat([a, b, c, d, e, f, g, h])
 )
 
 # A position in the input, in bits. Positions are `U64` rather than `Nat`
@@ -186,10 +187,6 @@ block(input, total, t, bit, 2, out) -> (
   codes(input, total, t, literals, distances, start, out)
 )
 block(_, _, _, _, _, _) -> Err(BadBlockType)
-
-fixed_literal_lengths : List(Nat)
-fixed_literal_lengths =
-  List.repeat(8, 144).concat(List.repeat(9, 112)).concat(List.repeat(7, 24)).concat(List.repeat(8, 8))
 
 # A stored block: to the next byte, a length and its complement, and that
 # many bytes as they are.
@@ -242,18 +239,6 @@ unused(counts, length, left) -> (
   count = counts.get(length).ok_or(0)
   if count > room then Err(BadCode) else unused(counts, length + 1, room - count)
 )
-
-# Each length's first code, as RFC 1951 counts them out.
-first_codes : (List(Nat), Nat, Nat, List(Nat)) -> List(Nat)
-first_codes(_, 16, _, firsts) -> firsts
-first_codes(counts, length, code, firsts) -> (
-  next = (code + counts.get(length - 1).ok_or(0) * (length > 1).select(1, 0)) * 2
-  first_codes(counts, length + 1, next, firsts.append(next))
-)
-
-reversed : (Nat, Nat, Nat) -> Nat
-reversed(_, 0, done) -> done
-reversed(code, Succ(left), done) -> reversed(code / 2, left, done * 2 + code % 2)
 
 # Every index below `size` whose low bits are `index`'s, `step` apart.
 fill : (List(U16), Nat, Nat, Nat, U16) -> List(U16)
@@ -383,3 +368,26 @@ expect gzip_decompress([
   0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 2, 0xff, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00,
   0x86, 0xa6, 0x10, 0x36, 6, 0, 0, 0,
 ]) == Err(LengthMismatch)
+
+# Levels from each search read back as what they wrote, and each
+# container as what it wraps. The test of the gzip example tries every
+# level and container on larger inputs.
+expect (
+  inputs = [
+    [],
+    "a".to_utf8(),
+    "abcabcabcabcabcabcabcabc".to_utf8(),
+    List.range(300).map(|i| U8.of_nat(i * i % 251)),
+    List.repeat(U8.of_nat(7), 600),
+  ]
+  [0, 1, 6, 9].all(|n| inputs.all(|input| inflate(deflate(input, Level.of_nat(n))) == Ok(input)))
+)
+
+expect (
+  input = "abracadabra, abracadabra".to_utf8()
+  zlib_decompress(zlib_compress(input, Level.default)) == Ok(input)
+    & gzip_decompress(gzip_compress(input, Level.best)) == Ok(input)
+)
+
+# zlib's own stream for "a", fixed Huffman, three bytes.
+expect deflate("a".to_utf8(), Level.default) == [0x4b, 0x04, 0x00]
