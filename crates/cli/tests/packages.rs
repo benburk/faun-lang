@@ -64,6 +64,40 @@ fn an_application_builds_only_what_main_reaches() {
     faun_frontend::compile_barb_to_image(barb, &X86_64Linux).unwrap();
 }
 
+/// A checked constructor's guard bounds its field, though the guard is a
+/// `Bool` worked out before the match that builds the value: a number read
+/// back out of the wrapper is held as a word below the guard's bound, not as
+/// a natural of any size.
+#[test]
+fn a_guard_worked_out_into_a_bool_bounds_what_its_match_builds() {
+    let package = Package::new(
+        "guarded",
+        "import std.host {Host}\n\n\
+         Small : Nat.(\n\
+         \x20 from_nat : Nat -> Result(Small, [TooBig])\n\
+         \x20 from_nat(n) if fits(n) -> Ok(Small(n))\n\
+         \x20 from_nat(_) -> Err(TooBig)\n\n\
+         \x20 digits : Small -> Nat\n\
+         \x20 digits(Small(n)) -> count(n)\n\
+         )\n\n\
+         fits : Nat -> Bool\n\
+         fits(n) -> n >= 1 & n <= 3999\n\n\
+         count : Nat -> Nat\n\
+         count(0) -> 0\n\
+         count(n) -> 1 + count(n / 10)\n\n\
+         main! : Host -> []\n\
+         main!(host) -> (\n\
+         \x20 digits = Small.from_nat(host.args.len() * 1000).map_ok(|small| small.digits()).ok_or(0)\n\
+         \x20 host.exit!(U8.of_nat(digits))\n\
+         )\n",
+    );
+    let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    faun_core::barb::optimize(&mut barb);
+    let machine = faun_core::lower_to_machine_ir(&barb, &X86_64Linux.routines()).unwrap();
+    let rendered = machine.render();
+    assert!(rendered.contains("count(v0: 0..3999)"), "{rendered}");
+}
+
 /// A loop every caller hands the same string holds the string itself, and
 /// what it asks of the string is then answered before the program runs.
 #[test]

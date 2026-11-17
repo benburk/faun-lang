@@ -602,6 +602,8 @@ fn walk(
         built: Vec::new(),
         outside: Vec::new(),
         predicates: vec![None; params.len()],
+        implied: vec![None; params.len()],
+        answered_implied: None,
         exact: vec![None; params.len()],
         scope: params,
         terms,
@@ -690,6 +692,13 @@ struct FunctionWalk<'a> {
     /// What each level holds here, which arms take back as they end.
     scope: Vec<Bounds>,
     predicates: Vec<Option<(super::Operation, usize, usize)>>,
+    /// What each level being one tag says of the levels before it, where the
+    /// level is a match whose every arm answers a known tag: what held in the
+    /// arms answering that tag. A guard worked out into a `Bool` and matched
+    /// on later narrows what it compared there, as one matched at once does.
+    implied: Vec<Option<Implications>>,
+    /// What the term last worked out says, where it says anything.
+    answered_implied: Option<Implications>,
     /// The natural each level is known to be outright, where it is one a
     /// bound cannot say exactly: past what a `u64` holds, `2^64` among
     /// them, which a remainder below it needs to be known as.
@@ -742,9 +751,11 @@ impl FunctionWalk<'_> {
                 Expr::Atom(a) => self.predicates[a.0.index()],
                 _ => None,
             };
+            let implied = self.answered_implied.take();
             let exact = self.exact(binding);
             self.scope.push(held);
             self.predicates.push(predicate);
+            self.implied.push(implied);
             self.exact.push(exact);
         }
         self.expr(body.tail)
@@ -814,8 +825,13 @@ impl FunctionWalk<'_> {
     }
 
     fn worked(&mut self, id: ExprId) -> Bounds {
+        self.answered_implied = None;
         match self.program.expr(id) {
-            Expr::Atom(atom) => self.scope[atom.0.index()],
+            Expr::Atom(atom) => {
+                self.answered_implied
+                    .clone_from(&self.implied[atom.0.index()]);
+                self.scope[atom.0.index()]
+            }
             Expr::Static(value) => {
                 let value = self.program.constant(value);
                 self.constant_fields(value);
@@ -1002,17 +1018,23 @@ impl FunctionWalk<'_> {
         let mut answer = None;
         let outer = self.scope.clone();
         let predicates = self.predicates.clone();
+        let implied = self.implied.clone();
         let exact = self.exact.clone();
         let mut surviving: Option<Vec<Bounds>> = None;
+        // What each tag the match answers says of the levels before it, while
+        // every arm reached answers a tag it can say this of.
+        let mut implications: Option<Implications> = Some(Vec::new());
         for arm in self.program.arms(arms) {
             self.scope.clone_from(&outer);
             self.predicates.clone_from(&predicates);
+            self.implied.clone_from(&implied);
             self.exact.clone_from(&exact);
             let level = self.scope.len();
             if !self.enter(scrutinee, arm.ctor) {
                 continue;
             }
             let found = self.body(arm.body);
+            self.gather(&mut implications, found, &outer, level);
             answer = Some(answer.map_or(found, |held: Bounds| held.or(found)));
             if !found.is_nothing() {
                 let inner = &self.scope[..level];
@@ -1027,10 +1049,71 @@ impl FunctionWalk<'_> {
         }
         self.scope = surviving.unwrap_or(outer);
         self.predicates = predicates;
+        self.implied = implied;
         self.exact = exact;
+        self.answered_implied = implications.filter(|gathered| !gathered.is_empty());
         // Where no arm is reached, nothing is: a value nothing knows yet is
         // a value no constructor could have built.
         answer.unwrap_or(Bounds::NOTHING)
+    }
+
+    /// Add what the arm just walked, answering `found`, says to what every
+    /// tag says so far, or give up on saying anything where it says nothing.
+    /// An arm that answers nothing adds no tag.
+    fn gather(
+        &mut self,
+        implications: &mut Option<Implications>,
+        found: Bounds,
+        outer: &[Bounds],
+        level: usize,
+    ) {
+        let answered = self.answered_implied.take();
+        let Some(gathered) = implications else {
+            return;
+        };
+        if found.is_nothing() {
+            return;
+        }
+        match self.arm_implications(found, answered, outer, level) {
+            Some(arm) => join_implications(gathered, arm, outer),
+            None => *implications = None,
+        }
+    }
+
+    /// What an arm answering `found` says of the `level` levels before the
+    /// match, by the tag it answers: what the arm narrowed them to, and what
+    /// its own last term says besides. Nothing, where it answers more than
+    /// one tag with nothing to tell them apart.
+    fn arm_implications(
+        &self,
+        found: Bounds,
+        answered: Option<Implications>,
+        outer: &[Bounds],
+        level: usize,
+    ) -> Option<Implications> {
+        let narrowed = |extra: &[(usize, Bounds)]| -> Vec<(usize, Bounds)> {
+            let mut held: Vec<Bounds> = self.scope[..level].to_vec();
+            for &(at, bound) in extra {
+                if at < level {
+                    held[at] = held[at].and(bound);
+                }
+            }
+            held.iter()
+                .zip(outer)
+                .enumerate()
+                .filter(|(_, (held, outer))| held != outer)
+                .map(|(at, (held, _))| (at, *held))
+                .collect()
+        };
+        match answered {
+            Some(tags) => Some(
+                tags.into_iter()
+                    .map(|(tag, extra)| (tag, narrowed(&extra)))
+                    .collect(),
+            ),
+            None if found.high == Some(found.low) => Some(vec![(found.low, narrowed(&[]))]),
+            None => None,
+        }
     }
 
     fn enter(&mut self, scrutinee: usize, ctor: CtorId) -> bool {
@@ -1063,6 +1146,19 @@ impl FunctionWalk<'_> {
             }
         };
         self.bind_fields(ctor, binding);
+        if !self.narrowed_by(scrutinee, ctor, spine) {
+            return false;
+        }
+        self.predicates.resize(self.scope.len(), None);
+        self.implied.resize(self.scope.len(), None);
+        self.exact.resize(self.scope.len(), None);
+        true
+    }
+
+    /// Narrow what `scrutinee` being `ctor` says of other levels: the two
+    /// sides of the comparison it answers, and what held where it was built.
+    /// Answers whether the arm can be reached at all.
+    fn narrowed_by(&mut self, scrutinee: usize, ctor: CtorId, spine: Shape) -> bool {
         if let Some((op, left, right)) = self.predicates[scrutinee] {
             let (a, b) = refine(op, ctor, self.scope[left], self.scope[right]);
             self.scope[left] = a;
@@ -1071,8 +1167,32 @@ impl FunctionWalk<'_> {
                 return false;
             }
         }
-        self.predicates.resize(self.scope.len(), None);
-        self.exact.resize(self.scope.len(), None);
+        // A wrapper's bound is what it wraps, not which constructor it is,
+        // so only a value whose bound is its tag is told apart by one.
+        let owner = self.program.ctor(ctor).owner;
+        !matches!(spine, Shape::Tagged)
+            || single_field(self.program, owner).is_some()
+            || self.take_implied(scrutinee, ctor)
+    }
+
+    /// Narrow the levels before `scrutinee` to what held where it was built as
+    /// `ctor`, answering whether that arm can be reached at all. Every arm
+    /// answering a tag said what it held, so a tag none answered is one the
+    /// value is never.
+    fn take_implied(&mut self, scrutinee: usize, ctor: CtorId) -> bool {
+        let Some(implications) = self.implied[scrutinee].clone() else {
+            return true;
+        };
+        let tag = u64::from(self.program.tag(ctor));
+        let Some((_, held)) = implications.iter().find(|(answered, _)| *answered == tag) else {
+            return false;
+        };
+        for &(at, bound) in held {
+            self.scope[at] = self.scope[at].and(bound);
+            if self.scope[at].is_nothing() {
+                return false;
+            }
+        }
         true
     }
 
@@ -1100,6 +1220,33 @@ impl FunctionWalk<'_> {
                     })
                 }));
         }
+    }
+}
+
+/// What a value being each tag says of the levels before it: by tag, the
+/// levels narrower than where the match began, and what each held.
+type Implications = Vec<(u64, Vec<(usize, Bounds)>)>;
+
+/// Add one arm's `found` to `gathered`. A tag two arms answer holds what
+/// either held, so a level only one narrowed is as it was before the match.
+fn join_implications(gathered: &mut Implications, found: Implications, outer: &[Bounds]) {
+    for (tag, held) in found {
+        let Some((_, already)) = gathered.iter_mut().find(|(answered, _)| *answered == tag) else {
+            gathered.push((tag, held));
+            continue;
+        };
+        let joined: Vec<(usize, Bounds)> = already
+            .iter()
+            .filter_map(|&(at, bound)| {
+                let other = held
+                    .iter()
+                    .find(|(level, _)| *level == at)
+                    .map_or(outer[at], |&(_, other)| other);
+                let either = bound.or(other);
+                (either != outer[at]).then_some((at, either))
+            })
+            .collect();
+        *already = joined;
     }
 }
 
