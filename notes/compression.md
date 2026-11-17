@@ -250,20 +250,20 @@ input a second, with zlib's through Python at the same level:
 
 | Level | Faun      | zlib      | Faun's size | zlib's size |
 | ----- | --------- | --------- | ----------- | ----------- |
-| 1     | 44 MB/s   | 184 MB/s  | 16,147,261  | 16,285,456  |
-| 6     | 13.9 MB/s | 52.9 MB/s | 13,092,597  | 13,101,272  |
-| 9     | 3.6 MB/s  | 17.6 MB/s | 12,995,734  | 13,004,460  |
+| 1     | 44 MB/s   | 181 MB/s  | 16,019,810  | 16,285,456  |
+| 6     | 13.7 MB/s | 52.1 MB/s | 13,087,687  | 13,101,272  |
+| 9     | 3.6 MB/s  | 17.5 MB/s | 12,995,702  | 13,004,460  |
 
-The search and the codes are zlib's, its levels' table and its lazy
-matching, so sizes agree to a fraction of a percent; Faun's are a little
+The search is zlib's, its levels' table and its lazy matching, though its
+hash is not, so sizes agree to within a percent; Faun's are a little
 smaller because each block's code is a true Huffman code cut to 15 bits
 as miniz cuts it, and each block is written whichever of stored, fixed or
 its own code is smallest. On the fixtures, raw DEFLATE:
 
 | Input            | Level | Faun   | zlib   |
 | ---------------- | ----- | ------ | ------ |
-| text, 70 KB      | 1     | 26,394 | 26,475 |
-| text, 70 KB      | 6     | 22,468 | 22,473 |
+| text, 70 KB      | 1     | 26,408 | 26,475 |
+| text, 70 KB      | 6     | 22,469 | 22,473 |
 | text, 70 KB      | 9     | 22,368 | 22,377 |
 | repetitive, 68 K | 6     | 96     | 97     |
 | random, 70 KB    | 6     | 70,025 | 70,025 |
