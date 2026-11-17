@@ -1,0 +1,510 @@
+# PNG decoding (the W3C PNG specification, second edition): every colour
+# type at every bit depth it allows, with or without Adam7 interlacing,
+# into 8-bit red, green, blue and alpha. Corrupt or cut-short input
+# answers `Err` naming why; nothing panics or reads past the end.
+#
+# Every chunk's CRC-32 is checked. The image data is every IDAT joined
+# and inflated through the flate library's zlib reader; each row is then
+# unfiltered into one list holding every pass's rows, which the pixels are
+# read from. Ancillary chunks other than tRNS, such as gamma and colour
+# space, are skipped: the samples come back as the file holds them.
+
+package {
+  uses: {
+    crc: "../../crc/src/crc",
+    flate: "../../flate/src/flate"
+  }
+}
+
+import crc {Crc32, crc32, adler32}
+import flate {zlib_decompress}
+
+export {decode, decode_header, Header, Image, PngError}
+
+# The image header: its size, and how its samples are stored.
+Header = {
+  width: Nat,
+  height: Nat,
+  # Bits a sample: 1, 2, 4, 8 or 16, as the colour type allows.
+  depth: Nat,
+  # 0 grey, 2 red, green and blue, 3 palette indices, 4 grey and alpha,
+  # 6 red, green, blue and alpha.
+  colour: Nat,
+  interlaced: Bool,
+}
+
+# A decoded image: four bytes a pixel, red, green, blue and alpha, rows top
+# to bottom and each left to right. A 16-bit sample keeps its high byte,
+# as libpng's `png_set_strip_16` does; a sample of fewer than 8 bits is
+# scaled to the full range, so 1-bit white is 255.
+Image = {width: Nat, height: Nat, pixels: List(U8)}
+
+# Every way a file can be refused: PNG's own, and inflate's, which the
+# image data can fail with.
+PngError = [
+  # The first eight bytes are not PNG's signature.
+  NotPng,
+  # The file ends before a chunk or the image data does.
+  Truncated,
+  # A chunk's CRC-32 is not its type's and data's.
+  ChecksumMismatch,
+  # IHDR is missing or not first, or gives a size, colour type, bit depth,
+  # compression, filter or interlace method PNG does not have.
+  BadHeader,
+  # A chunk the decoder must understand, its type capitalised, is not one
+  # it knows.
+  UnknownCriticalChunk,
+  # A palette image has no PLTE, or a PLTE is longer than 256 entries or
+  # not whole entries.
+  BadPalette,
+  # A tRNS is longer than its image allows.
+  BadTransparency,
+  # There is no IDAT, or no IEND.
+  MissingData,
+  # A row's filter type is above 4.
+  BadFilter,
+  # The image data inflates to fewer bytes than its rows need.
+  ShortData,
+  BadBlockType,
+  BadStoredLength,
+  BadCode,
+  BadDistance,
+  LengthMismatch,
+]
+
+signature : List(U8)
+signature = [0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a]
+
+# The image a PNG file holds.
+decode : List(U8) -> Result(Image, PngError)
+decode(input) -> (
+  (header, after) = read_header(input)?
+  parts = chunks(input, after, header, {palette: [], transparency: [], data: [], seen_data: False})?
+  if !parts.seen_data return Err(MissingData)
+  format = format_of(header, parts.palette, parts.transparency)?
+  data = zlib_decompress(parts.data)?
+  passes = layout(header)
+  raw = unfilter_passes(data, passes, bits_per_pixel(header), 0, [])?
+  pixels = if header.interlaced then interlaced_pixels(raw, header, passes, format)
+    else straight_pixels(raw, header, passes, format)
+  Ok({width: header.width, height: header.height, pixels})
+)
+
+# Only the header of a PNG file: its signature and IHDR read and checked.
+decode_header : List(U8) -> Result(Header, PngError)
+decode_header(input) -> (
+  (header, _) = read_header(input)?
+  Ok(header)
+)
+
+# The header, and where the chunk after IHDR starts.
+read_header : List(U8) -> Result((Header, Nat), PngError)
+read_header(input) -> (
+  if input.take(8) != signature return Err(NotPng)
+  chunk = read_chunk(input, 8)?
+  if chunk.kind != "IHDR" | chunk.length != 13 return Err(BadHeader)
+  at = chunk.start
+  width = big_endian(input, at)
+  height = big_endian(input, at + 4)
+  depth = byte(input, at + 8)
+  colour = byte(input, at + 9)
+  interlace = byte(input, at + 12)
+  if width == 0 | height == 0 | width > 0x7fffffff | height > 0x7fffffff return Err(BadHeader)
+  if !allowed_depth(colour, depth) return Err(BadHeader)
+  # Compression, filtering and interlacing each have one or two methods.
+  if byte(input, at + 10) != 0 | byte(input, at + 11) != 0 | interlace > 1 return Err(BadHeader)
+  Ok(({width, height, depth, colour, interlaced: interlace == 1}, chunk.next))
+)
+
+allowed_depth : (Nat, Nat) -> Bool
+allowed_depth(0, depth) -> depth == 1 | depth == 2 | depth == 4 | depth == 8 | depth == 16
+allowed_depth(3, depth) -> depth == 1 | depth == 2 | depth == 4 | depth == 8
+allowed_depth(2, depth) -> depth == 8 | depth == 16
+allowed_depth(4, depth) -> depth == 8 | depth == 16
+allowed_depth(6, depth) -> depth == 8 | depth == 16
+allowed_depth(_, _) -> False
+
+# A chunk: its type, where its data starts and how long it is, and where
+# the next chunk starts. Its CRC-32 is checked here.
+Chunk = {kind: Str, start: Nat, length: Nat, next: Nat}
+
+read_chunk : (List(U8), Nat) -> Result(Chunk, PngError)
+read_chunk(input, at) -> (
+  if at + 12 > input.len() return Err(Truncated)
+  length = big_endian(input, at)
+  start = at + 8
+  next = start + length + 4
+  if next > input.len() return Err(Truncated)
+  kind = Str.from_ascii(input.drop(at + 4).take(4)).ok_or("")
+  checked = Crc32.empty.update(input.drop(at + 4).take(length + 4)).value()
+  if checked.to_nat() != big_endian(input, start + length) return Err(ChecksumMismatch)
+  Ok({kind, start, length, next})
+)
+
+# What the chunks after IHDR give: the palette and transparency as they
+# stand, and every IDAT's data joined.
+Parts = {palette: List(U8), transparency: List(U8), data: List(U8), seen_data: Bool}
+
+chunks : (List(U8), Nat, Header, Parts) -> Result(Parts, PngError)
+chunks(input, at, header, parts) -> (
+  chunk = read_chunk(input, at)?
+  body = input.drop(chunk.start).take(chunk.length)
+  next = chunk.next
+  chunk.kind is (
+    "IEND" then Ok(parts)
+    "IDAT" then chunks(input, next, header, {data: parts.data.concat(body), seen_data: True, *parts})
+    "PLTE" then chunks(input, next, header, {palette: body, *parts})
+    "tRNS" then chunks(input, next, header, {transparency: body, *parts})
+    "IHDR" then Err(BadHeader)
+    # A capital first letter marks a chunk no decoder may skip.
+    _ then if input.get(at + 4).ok_or(0).is_ascii_upper() then Err(UnknownCriticalChunk)
+      else chunks(input, next, header, parts)
+  )
+)
+
+# How a pixel's samples become red, green, blue and alpha: the header's
+# colour type and depth, the palette as four bytes an entry for every
+# index a byte can hold, and the samples tRNS marks transparent.
+Format = {colour: Nat, depth: Nat, palette: List(U8), key: List(Nat)}
+
+format_of : (Header, List(U8), List(U8)) -> Result(Format, PngError)
+format_of(header, palette, transparency) -> (
+  entries = palette.len() / 3
+  if palette.len() % 3 != 0 | entries > 256 return Err(BadPalette)
+  if header.colour == 3 & entries == 0 return Err(BadPalette)
+  key = header.colour is (
+    0 then if transparency.len() >= 2 then [big_endian2(transparency, 0)] else []
+    2 then if transparency.len() >= 6 then [big_endian2(transparency, 0), big_endian2(transparency, 2), big_endian2(transparency, 4)] else []
+    _ then []
+  )
+  if header.colour == 3 & transparency.len() > entries return Err(BadTransparency)
+  # An index past the palette reads as opaque black, as libpng reads it.
+  table = List.range(256).flat_map(|index| if index < entries then [
+    palette.get(index * 3).ok_or(0),
+    palette.get(index * 3 + 1).ok_or(0),
+    palette.get(index * 3 + 2).ok_or(0),
+    transparency.get(index).ok_or(255),
+  ] else [0, 0, 0, 255])
+  Ok({colour: header.colour, depth: header.depth, palette: table, key})
+)
+
+channels : Nat -> Nat
+channels(0) -> 1
+channels(2) -> 3
+channels(3) -> 1
+channels(4) -> 2
+channels(_) -> 4
+
+bits_per_pixel : Header -> Nat
+bits_per_pixel(header) -> channels(header.colour) * header.depth
+
+# A pass of the image: the pixels from column `x` and row `y` on, every
+# `dx` and `dy`, and how many columns and rows it has. A straight image is
+# one pass of every pixel; Adam7 is seven.
+Pass = {x: Nat, y: Nat, dx: Nat, dy: Nat, columns: Nat, rows: Nat}
+
+layout : Header -> List(Pass)
+layout(header) -> (
+  starts = if header.interlaced then [
+    (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2),
+  ] else [(0, 0, 1, 1)]
+  starts.map(|(x, y, dx, dy)| {
+    x, y, dx, dy,
+    columns: span(header.width, x, dx),
+    rows: span(header.height, y, dy),
+  })
+)
+
+# How many of `size` positions from `start` on, every `step`.
+span : (Nat, Nat, Nat) -> Nat
+span(size, start, step) -> if size > start then (size - start + step - 1) / step else 0
+
+# Every pass's rows unfiltered, one after another, each without its filter
+# byte. A pass with no columns or rows has no data at all.
+unfilter_passes : (List(U8), List(Pass), Nat, Nat, List(U8)) -> Result(List(U8), PngError)
+unfilter_passes(_, [], _, _, raw) -> Ok(raw)
+unfilter_passes(data, [pass, *rest], bits, at, raw) -> (
+  if pass.columns == 0 | pass.rows == 0 return unfilter_passes(data, rest, bits, at, raw)
+  stride = (pass.columns * bits + 7) / 8
+  # The bytes back to the same sample of the pixel before, at least one.
+  back = (bits + 7) / 8
+  if at + pass.rows * (stride + 1) > data.len() return Err(ShortData)
+  done = unfilter_rows(data, at, raw, stride, back, pass.rows, True)?
+  unfilter_passes(data, rest, bits, at + pass.rows * (stride + 1), done)
+)
+
+unfilter_rows : (List(U8), Nat, List(U8), Nat, Nat, Nat, Bool) -> Result(List(U8), PngError)
+unfilter_rows(_, _, raw, _, _, 0, _) -> Ok(raw)
+unfilter_rows(data, at, raw, stride, back, Succ(rows), first) -> (
+  filter = data.get(at).ok_or(0).to_nat()
+  if filter > 4 return Err(BadFilter)
+  row = data.drop(at + 1).take(stride)
+  done = unfilter_row(row, raw, stride, back, first, filter)
+  unfilter_rows(data, at + 1 + stride, done, stride, back, rows, False)
+)
+
+# One row's bytes reconstructed and appended to `raw`, whose last
+# `stride` bytes are the row before, unless this is a pass's first row.
+# Each filter adds to a byte some of `a`, the byte `back` before it in
+# this row, `b`, the one above, and `c`, the one above `a`, each nought
+# where there is none. A filter is chosen once a row, so the walk for
+# each knows which of them it needs; on a first row, where `b` and `c`
+# are nought, Up is None and Paeth is Sub.
+unfilter_row : (List(U8), List(U8), Nat, Nat, Bool, Nat) -> List(U8)
+unfilter_row(row, raw, _, _, True, 0) -> raw.concat(row)
+unfilter_row(row, raw, _, _, True, 2) -> raw.concat(row)
+unfilter_row(row, raw, _, back, True, 1) -> sub(row.drop(back), raw.concat(row.take(back)), back)
+unfilter_row(row, raw, _, back, True, 4) -> sub(row.drop(back), raw.concat(row.take(back)), back)
+unfilter_row(row, raw, _, back, True, _) -> average_first(row.drop(back), raw.concat(row.take(back)), back)
+unfilter_row(row, raw, _, _, False, 0) -> raw.concat(row)
+unfilter_row(row, raw, _, back, False, 1) -> sub(row.drop(back), raw.concat(row.take(back)), back)
+unfilter_row(row, raw, stride, _, False, 2) -> raw.concat(List.map2(row, raw.drop(raw.len() - stride), |x, b| x + b))
+unfilter_row(row, raw, stride, back, False, 3) -> average(row, raw, raw.len() - stride, back, 0)
+unfilter_row(row, raw, stride, back, False, _) -> paeth_row(row, raw, raw.len() - stride, back, 0)
+
+# Each byte plus `a`.
+sub : (List(U8), List(U8), Nat) -> List(U8)
+sub([], raw, _) -> raw
+sub([x, *rest], raw, back) -> sub(rest, raw.append(x + raw.get(raw.len() - back).ok_or(0)), back)
+
+# Each byte plus half of `a`, on a first row.
+average_first : (List(U8), List(U8), Nat) -> List(U8)
+average_first([], raw, _) -> raw
+average_first([x, *rest], raw, back) ->
+  average_first(rest, raw.append(x + raw.get(raw.len() - back).ok_or(0).shift_right(1)), back)
+
+# Each byte plus the mean of `a` and `b`, rounded down; `column` counts to
+# `back`, before which there is no `a`.
+average : (List(U8), List(U8), Nat, Nat, Nat) -> List(U8)
+average([], raw, _, _, _) -> raw
+average([x, *rest], raw, above, back, column) -> (
+  b = raw.get(above).ok_or(0).to_nat()
+  a = if column >= back then raw.get(raw.len() - back).ok_or(0).to_nat() else 0
+  average(rest, raw.append(x + U8.of_nat((a + b) / 2)), above + 1, back, column + 1)
+)
+
+paeth_row : (List(U8), List(U8), Nat, Nat, Nat) -> List(U8)
+paeth_row([], raw, _, _, _) -> raw
+paeth_row([x, *rest], raw, above, back, column) -> (
+  b = raw.get(above).ok_or(0)
+  predicted = if column < back then b else paeth(raw.get(raw.len() - back).ok_or(0), b, raw.get(above - back).ok_or(0))
+  paeth_row(rest, raw.append(x + predicted), above + 1, back, column + 1)
+)
+
+# Whichever of `a`, `b` and `c` is nearest `a + b - c`, ties going in
+# that order: the distances are `b`'s from `c`, `a`'s from `c`, and
+# `a + b`'s from twice `c`, so nothing goes below nought.
+paeth : (U8, U8, U8) -> U8
+paeth(a, b, c) -> (
+  (x, y, z) = (a.to_nat(), b.to_nat(), c.to_nat())
+  pa = distance(y, z)
+  pb = distance(x, z)
+  pc = distance(x + y, z * 2)
+  if pa <= pb & pa <= pc then a else if pb <= pc then b else c
+)
+
+distance : (Nat, Nat) -> Nat
+distance(x, y) -> if x > y then x - y else y - x
+
+# A straight image's pixels, row by row. Its rows hold no filter bytes
+# by now, so an image of 8-bit samples is read straight through rather
+# than pixel by pixel: one of red, green, blue and alpha already is its
+# pixels.
+straight_pixels : (List(U8), Header, List(Pass), Format) -> List(U8)
+straight_pixels(raw, _, _, {colour: 6, depth: 8, *}) -> raw
+straight_pixels(raw, _, _, {colour: 2, depth: 8, key: [], *}) -> opaque_rgb(raw, [])
+straight_pixels(raw, _, _, {colour: 0, depth: 8, key: [], *}) -> opaque_grey(raw, [])
+straight_pixels(raw, _, _, {colour: 4, depth: 8, *}) -> grey_alpha(raw, [])
+straight_pixels(raw, _, _, {colour: 3, depth: 8, palette, *}) -> indexed(raw, palette, [])
+straight_pixels(raw, header, _, format) -> (
+  stride = (header.width * bits_per_pixel(header) + 7) / 8
+  straight_rows(raw, header.width, stride, format, 0, header.height, [])
+)
+
+opaque_rgb : (List(U8), List(U8)) -> List(U8)
+opaque_rgb([red, green, blue, *rest], out) -> opaque_rgb(rest, out.append(red).append(green).append(blue).append(255))
+opaque_rgb(_, out) -> out
+
+opaque_grey : (List(U8), List(U8)) -> List(U8)
+opaque_grey([level, *rest], out) -> opaque_grey(rest, out.append(level).append(level).append(level).append(255))
+opaque_grey(_, out) -> out
+
+grey_alpha : (List(U8), List(U8)) -> List(U8)
+grey_alpha([level, alpha, *rest], out) -> grey_alpha(rest, out.append(level).append(level).append(level).append(alpha))
+grey_alpha(_, out) -> out
+
+indexed : (List(U8), List(U8), List(U8)) -> List(U8)
+indexed([index, *rest], palette, out) -> (
+  at = index.to_nat() * 4
+  entry = out.append(palette.get(at).ok_or(0)).append(palette.get(at + 1).ok_or(0))
+    .append(palette.get(at + 2).ok_or(0)).append(palette.get(at + 3).ok_or(0))
+  indexed(rest, palette, entry)
+)
+indexed(_, _, out) -> out
+
+straight_rows : (List(U8), Nat, Nat, Format, Nat, Nat, List(U8)) -> List(U8)
+straight_rows(_, _, _, _, _, 0, out) -> out
+straight_rows(raw, width, stride, format, row, Succ(rows), out) ->
+  straight_rows(raw, width, stride, format, row + stride, rows, row_pixels(raw, row, format, 0, width, out))
+
+row_pixels : (List(U8), Nat, Format, Nat, Nat, List(U8)) -> List(U8)
+row_pixels(raw, row, format, column, width, out) -> (
+  if column >= width return out
+  (red, green, blue, alpha) = colour_at(raw, row, column, format)
+  row_pixels(raw, row, format, column + 1, width, out.append(red).append(green).append(blue).append(alpha))
+)
+
+# An interlaced image's pixels: every pass's pixels written where they
+# fall in the whole image, which starts as nought and is written in place.
+interlaced_pixels : (List(U8), Header, List(Pass), Format) -> List(U8)
+interlaced_pixels(raw, header, passes, format) ->
+  scatter_passes(raw, passes, bits_per_pixel(header), header.width, format, 0, List.repeat(0, header.width * header.height * 4))
+
+scatter_passes : (List(U8), List(Pass), Nat, Nat, Format, Nat, List(U8)) -> List(U8)
+scatter_passes(_, [], _, _, _, _, out) -> out
+scatter_passes(raw, [pass, *rest], bits, width, format, at, out) -> (
+  if pass.columns == 0 | pass.rows == 0 return scatter_passes(raw, rest, bits, width, format, at, out)
+  stride = (pass.columns * bits + 7) / 8
+  done = scatter_rows(raw, pass, stride, width, format, at, 0, out)
+  scatter_passes(raw, rest, bits, width, format, at + pass.rows * stride, done)
+)
+
+scatter_rows : (List(U8), Pass, Nat, Nat, Format, Nat, Nat, List(U8)) -> List(U8)
+scatter_rows(raw, pass, stride, width, format, at, y, out) -> (
+  if y >= pass.rows return out
+  first = ((pass.y + y * pass.dy) * width + pass.x) * 4
+  row = scatter_row(raw, at + y * stride, format, 0, pass.columns, first, pass.dx * 4, out)
+  scatter_rows(raw, pass, stride, width, format, at, y + 1, row)
+)
+
+scatter_row : (List(U8), Nat, Format, Nat, Nat, Nat, Nat, List(U8)) -> List(U8)
+scatter_row(raw, row, format, column, columns, target, step, out) -> (
+  if column >= columns return out
+  (red, green, blue, alpha) = colour_at(raw, row, column, format)
+  written = out.put(target, red).put(target + 1, green).put(target + 2, blue).put(target + 3, alpha)
+  scatter_row(raw, row, format, column + 1, columns, target + step, step, written)
+)
+
+# The pixel at `column` of the row starting at `row`, as red, green,
+# blue and alpha.
+colour_at : (List(U8), Nat, Nat, Format) -> (U8, U8, U8, U8)
+colour_at(raw, row, column, format) -> format.colour is (
+  0 then (
+    grey = sample(raw, row, column, format.depth)
+    level = scaled(grey, format.depth)
+    hidden = format.key is (
+      [k] then k == grey
+      _ then False
+    )
+    (level, level, level, if hidden then 0 else 255)
+  )
+  2 then (
+    red = sample(raw, row, column * 3, format.depth)
+    green = sample(raw, row, column * 3 + 1, format.depth)
+    blue = sample(raw, row, column * 3 + 2, format.depth)
+    hidden = format.key is (
+      [r, g, b] then r == red & g == green & b == blue
+      _ then False
+    )
+    (scaled(red, format.depth), scaled(green, format.depth), scaled(blue, format.depth), if hidden then 0 else 255)
+  )
+  3 then (
+    entry = sample(raw, row, column, format.depth) * 4
+    palette = format.palette
+    (palette.get(entry).ok_or(0), palette.get(entry + 1).ok_or(0), palette.get(entry + 2).ok_or(0), palette.get(entry + 3).ok_or(0))
+  )
+  4 then (
+    level = scaled(sample(raw, row, column * 2, format.depth), format.depth)
+    (level, level, level, scaled(sample(raw, row, column * 2 + 1, format.depth), format.depth))
+  )
+  _ then (
+    scaled(sample(raw, row, column * 4, format.depth), format.depth),
+    scaled(sample(raw, row, column * 4 + 1, format.depth), format.depth),
+    scaled(sample(raw, row, column * 4 + 2, format.depth), format.depth),
+    scaled(sample(raw, row, column * 4 + 3, format.depth), format.depth),
+  )
+)
+
+# The `index`th sample of the row starting at `row`, as many bits as
+# `depth`, the first sample in a byte its most significant bits.
+sample : (List(U8), Nat, Nat, Nat) -> Nat
+sample(raw, row, index, 8) -> byte(raw, row + index)
+sample(raw, row, index, 16) -> big_endian2(raw, row + index * 2)
+sample(raw, row, index, depth) -> (
+  bit = index * depth
+  byte(raw, row + bit / 8) / 2.pow(8 - depth - bit % 8) % 2.pow(depth)
+)
+
+# A sample as eight bits: a 16-bit one's high byte, and a narrower one
+# scaled so its largest value is 255.
+scaled : (Nat, Nat) -> U8
+scaled(value, 16) -> U8.of_nat(value / 256)
+scaled(value, 8) -> U8.of_nat(value)
+scaled(value, 4) -> U8.of_nat(value * 17)
+scaled(value, 2) -> U8.of_nat(value * 85)
+scaled(value, _) -> U8.of_nat(value * 255)
+
+byte : (List(U8), Nat) -> Nat
+byte(input, at) -> input.get(at).ok_or(0).to_nat()
+
+big_endian2 : (List(U8), Nat) -> Nat
+big_endian2(input, at) -> byte(input, at) * 256 + byte(input, at + 1)
+
+big_endian : (List(U8), Nat) -> Nat
+big_endian(input, at) -> big_endian2(input, at) * 65536 + big_endian2(input, at + 2)
+
+expect paeth(10, 20, 15) == 15 & paeth(10, 20, 5) == 20 & paeth(10, 20, 30) == 10
+expect sample([0b10110100], 0, 1, 2) == 3 & sample([0b10110100], 0, 3, 2) == 0 & sample([0x12, 0x34], 0, 0, 16) == 0x1234
+expect scaled(1, 1) == 255 & scaled(2, 2) == 170 & scaled(0xabcd, 16) == 0xab
+expect decode([]) == Err(NotPng)
+expect decode(signature) == Err(Truncated)
+
+# A PNG file built for the expectations below: its chunks with their
+# CRC-32s, and its image data, `rows` with their filter bytes, as one
+# stored block of a zlib stream.
+built : (List(U8), List(List(U8))) -> List(U8)
+built(ihdr, rows) -> (
+  data = rows.flatten()
+  length = data.len()
+  stream = [0x78, 0x01, 1, U8.of_nat(length), U8.of_nat(length / 256), !U8.of_nat(length), !U8.of_nat(length / 256)]
+    .concat(data).concat(word(adler32(data).to_nat()))
+  signature.concat(chunk("IHDR", ihdr)).concat(chunk("IDAT", stream)).concat(chunk("IEND", []))
+)
+
+chunk : (Str, List(U8)) -> List(U8)
+chunk(kind, body) -> (
+  typed = kind.to_utf8().concat(body)
+  word(body.len()).concat(typed).concat(word(crc32(typed).to_nat()))
+)
+
+word : Nat -> List(U8)
+word(n) -> [U8.of_nat(n / 16777216), U8.of_nat(n / 65536), U8.of_nat(n / 256), U8.of_nat(n)]
+
+# The header of an 8-bit image `width` by `height` of `colour`.
+ihdr : (Nat, Nat, Nat) -> List(U8)
+ihdr(width, height, colour) -> word(width).concat(word(height)).concat([8, U8.of_nat(colour), 0, 0, 0])
+
+expect decode(built(ihdr(2, 1, 2), [[0, 1, 2, 3, 4, 5, 6]])) == Ok({width: 2, height: 1, pixels: [1, 2, 3, 255, 4, 5, 6, 255]})
+
+# Sub adds the pixel to the left; Up the row above; Average half of
+# both; Paeth the nearer.
+expect decode(built(ihdr(2, 1, 2), [[1, 1, 2, 3, 4, 5, 6]])).map_ok(|image| image.pixels) == Ok([1, 2, 3, 255, 5, 7, 9, 255])
+expect decode(built(ihdr(1, 2, 0), [[0, 10], [2, 5]])).map_ok(|image| image.pixels) == Ok([10, 10, 10, 255, 15, 15, 15, 255])
+expect decode(built(ihdr(2, 2, 0), [[0, 10, 20], [3, 1, 1]])).map_ok(|image| image.pixels)
+  == Ok([10, 10, 10, 255, 20, 20, 20, 255, 6, 6, 6, 255, 14, 14, 14, 255])
+expect decode(built(ihdr(2, 2, 0), [[0, 10, 20], [4, 1, 1]])).map_ok(|image| image.pixels)
+  == Ok([10, 10, 10, 255, 20, 20, 20, 255, 11, 11, 11, 255, 21, 21, 21, 255])
+
+expect decode(built(ihdr(1, 1, 0), [[5, 0]])) == Err(BadFilter)
+expect decode(built(ihdr(2, 2, 0), [[0, 1, 2]])) == Err(ShortData)
+expect decode(built(ihdr(1, 1, 3), [[0, 0]])) == Err(BadPalette)
+expect decode(built(word(1).concat(word(1)).concat([8, 1, 0, 0, 0]), [[0, 0]])) == Err(BadHeader)
+expect decode(built(word(1).concat(word(1)).concat([3, 0, 0, 0, 0]), [[0, 0]])) == Err(BadHeader)
+
+# A chunk no decoder may skip, and a CRC-32 a bit off.
+expect (
+  file = built(ihdr(1, 1, 0), [[0, 0]])
+  decode(file.take(33).concat(chunk("QQQQ", [])).concat(file.drop(33))) == Err(UnknownCriticalChunk)
+    & decode(file.take(33).concat(chunk("qqQQ", [1])).concat(file.drop(33))).is_ok()
+    & decode(file.put(32, file.get(32).ok_or(0) ^ 1)) == Err(ChecksumMismatch)
+)

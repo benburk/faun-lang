@@ -4,8 +4,7 @@ This note owns what writing checksums, DEFLATE and PNG in Faun taught: a
 large, exactly specified workload of bit-level work on `U8` and `U32`, big
 byte buffers and random access into a window, with outside programs as
 oracles. The libraries are in-tree under
-`crates/frontend/examples/libraries/`: `crc`, `flate`, and to come,
-`png`. Each finding is a workaround the code carries, an error that
+`crates/frontend/examples/libraries/`: `crc`, `flate` and `png`. Each finding is a workaround the code carries, an error that
 misled, or something the standard library lacked, with what it cost and
 where it stands.
 
@@ -39,7 +38,9 @@ finding the right Adler-32 of a test vector took a run of Python. A failed
 `==` could print both values, as Rust's `assert_eq!` does. Inflate's first
 fixed-Huffman test failed the same way, and finding that it answered
 `Err(BadDistance)` took a throwaway program that printed it with
-`faun run`.
+`faun run`. PNG's first Paeth expectation, and the PAM example's header
+length, failed the same way, each found by working the answer out by
+hand.
 
 ### A natural in a hot loop costs several times a word
 
@@ -115,7 +116,8 @@ is not there is `U16.of_nat(x.to_nat())`.
 The reference interpreter's test runner hands back standard output as a
 `String`, so a program writing bytes cannot be checked through it. The
 flate test builds its gzip example with `faun build` and runs that,
-which ties it to x86-64 Linux as the benchmark-game test is.
+which ties it to x86-64 Linux as the benchmark-game test is; the PNG test
+does the same with its PAM example.
 
 ### `just format` ends every text file with a newline
 
@@ -125,6 +127,14 @@ three of them read as text, so formatting changed them and every test of
 them failed, the test of a single byte reading two. An `.ignore` beside
 them, as the tree-sitter grammar's generated files have, keeps the recipe
 and searches away.
+
+### Positions want words outside inflate too
+
+The PNG decoder kept its positions and sample values as `Nat`, and
+`nat.to_word`, `nat.from_word` and `nat.mul` are 12% of decoding an
+interlaced image, where each pixel's place is worked out by
+multiplication. Inflate's workaround, `U64` positions, would serve here
+too; it is left undone, since inflate is most of the time.
 
 ### Profiling works
 
@@ -221,6 +231,84 @@ not kept", which says exactly what and why. The cost is small: the
 helpers deflate wanted inside one function, `bump`, `bases` and
 `symbol_at`, are top-level functions instead.
 
+### A row of tags cannot name another
+
+`png.fn` answers its own failures and every one inflate can give, since
+the image data is inflated with `?`. Its `PngError` alias has to list
+inflate's six tags again by hand: a row cannot take in another alias,
+and both `[NotPng, *InflateError]` and the same in a signature are
+refused with
+
+```text
+error: expected one of `]`, a type name, found `*`
+```
+
+Leaving inflate's tags out is refused at the `?`, with a message that
+says exactly which, "`A` and `B` are not among the tags of `[C]`, which
+admits no others", so the list is found quickly, but it is a copy that
+drifts when inflate gains a tag. A record already spreads, `{x: 1, *r}`;
+a row spreading an alias, `[NotPng, *InflateError]`, would be the same
+idea for tags. The alternative the tags note gives, wrapping inflate's
+failures in one tag with `map_err`, changes what callers match on.
+
+### A list built in a loop is built, even to be compared
+
+Interlaced decoding first read each pixel through `List.range(width).fold`
+a row, and asked whether a grey sample was tRNS's key with
+`format.key == [grey]`. Both allocate in the loop: a list of every column
+each row, and a one-element list each pixel, each freed at once. On a
+1024 by 1024 interlaced RGB image that took 1.02 s, three quarters of it in
+`seq.reserve`, `seq.release` and `nat.coalesce`. Counting columns by
+recursion, and matching the key, `format.key is ([k] then k == grey, …)`,
+took it to 0.12 s, with the scatter below.
+
+Nothing in the source says which of these allocates: `[grey]` reads as a
+value to compare, and `List.range(n).fold` as a loop. A list literal only
+compared and dropped, and a range only folded, could each be left
+unbuilt, as a cell whose fields are its only readers already is.
+
+### Writing in place makes a scatter cheap
+
+Adam7 stores an image as seven smaller ones. The decoder reads each pass
+in turn and writes each pixel where it falls in the whole image, four
+`put`s into a list of `width * height * 4` noughts. Nothing else holds
+that list, so every `put` writes where it lies; the scatter costs about
+what reading the pixels in order does. The first version, which read
+each pixel of the whole image from whichever pass held it, needed a pass
+table, a tuple of each pass's start and stride, and division a pixel.
+
+### Choosing once a row beats choosing once a byte
+
+Unfiltering first matched the filter type for every byte, and read the
+left, upper and upper-left bytes for every byte whether the filter needed
+them or not. Matching once a row, with a walk for each filter that reads
+only what it uses, and converting 8-bit rows straight through rather than
+pixel by pixel, took a 2048 by 2048 RGBA image from 0.77 s to 0.31 s; an
+image of 8-bit red, green, blue and alpha is its own pixels once
+unfiltered, and is answered as it is. A clause's head can match a
+record's fields against literals, `straight_pixels(raw, _, _, {colour: 6,
+depth: 8, *})`, which keeps each fast path to one line.
+
+Paeth's predictor first worked in `Int`, as the specification writes it,
+`p = a + b - c`. Each of its three distances is written without going
+below nought, `|b - c|`, `|a - c|` and `|a + b - 2c|`, so it stays in
+`Nat`.
+
+### A string can name a chunk
+
+A chunk's type is four ASCII bytes, read with `Str.from_ascii` and matched
+against string literals, `"IHDR" then …`, as the specification names
+them. Only a critical chunk's capital first letter needs the bytes
+themselves, `U8.is_ascii_upper`.
+
+### A slice to checksum is a copy
+
+`Crc32.update` takes a `List(U8)`, so the CRC-32 of a chunk, its type and
+data, is `input.drop(at + 4).take(length + 4)`: `drop` is free, but `take`
+copies. Over a 9 MB file that is a few milliseconds; a walk that took a
+start and a count, or a `List` slice that shares its buffer as `drop` does,
+would need none.
+
 ## Throughput
 
 On x86-64, release build, over 50 MB of random bytes read from standard
@@ -267,6 +355,20 @@ its own code is smallest. On the fixtures, raw DEFLATE:
 | text, 70 KB      | 9     | 22,368 | 22,377 |
 | repetitive, 68 K | 6     | 96     | 97     |
 | random, 70 KB    | 6     | 70,025 | 70,025 |
+
+PNG decoding, over images Pillow and pypng wrote, through the PAM
+example reading standard input and writing standard output, in megabytes
+of RGBA a second; Pillow, on libpng's zlib, for scale:
+
+| Image                    | Faun    | Pillow   |
+| ------------------------ | ------- | -------- |
+| 2048², 8-bit RGBA, noisy | 54 MB/s | 380 MB/s |
+| 1024², 8-bit RGB, Adam7  | 34 MB/s | 300 MB/s |
+| 1024², 16-bit RGB, Adam7 | 24 MB/s | 250 MB/s |
+
+Of the 0.31 s the RGBA image takes, inflate is 0.25 s, where zlib takes
+0.04 s; reading the chunks with their CRC-32s and writing the output take
+0.03 s, and unfiltering 0.03 s. PNG decoding is as fast as inflate is.
 
 ## Related
 
