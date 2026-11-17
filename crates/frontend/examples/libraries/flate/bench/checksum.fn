@@ -1,0 +1,24 @@
+# Prints one checksum of standard input, `crc32` or `adler32` as the
+# argument says, for the compression benchmark to time each alone.
+
+package {
+  uses: {
+    crc: "../../crc/src/crc"
+  }
+}
+
+import std.host {Host}
+import crc {crc32, adler32}
+
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.read_to_end!()
+  read is Ok(input) else return host.exit!(1)
+  sum = host.args.drop(1) is (
+    ["crc32"] then crc32(input)
+    ["adler32"] then adler32(input)
+    _ return host.exit!(2)
+  )
+  printed = host.println!("${sum}")
+  host.exit!(0)
+)
