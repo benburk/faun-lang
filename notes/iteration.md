@@ -29,7 +29,7 @@ summed([x, *xs], total) -> summed(xs, total + x)
 
   ```ruby
   walk(_, [], seen, order, _) -> (seen, order)
-  walk(graph, [node, *rest], seen, order, next) if seen.get_or(node, True) -> walk(graph, rest, seen, order, next)
+  walk(graph, [node, *rest], seen, order, next) if seen.get(node).ok_or(True) -> walk(graph, rest, seen, order, next)
   walk(graph, [node, *rest], seen, order, next) -> (
     found = targets(graph.edges_from(node))
     walk(graph, next(found, rest), seen.put(node, True), order.append(node), next)

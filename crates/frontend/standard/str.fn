@@ -196,7 +196,7 @@ literal_byte(byte, _) if byte < 32 | byte == 127 -> ['\\', 'u', '{', hex_digit(b
 literal_byte(byte, _) -> [byte]
 
 hex_digit : U8 -> U8
-hex_digit(digit) -> "0123456789abcdef".to_utf8().get_or(digit.to_nat(), 0)
+hex_digit(digit) -> "0123456789abcdef".to_utf8().get(digit.to_nat()).ok_or(0)
 
 space : U8 -> Bool
 space(' ' | '\t' | '\n' | '\r' | 11 | 12) -> True

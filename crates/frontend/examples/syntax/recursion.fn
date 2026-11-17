@@ -41,7 +41,7 @@ toposort : List(List(Nat)) -> Result(List(Nat), [Cycle])
 toposort(graph) -> (
   nodes = List.range(graph.len())
   degrees = Map.counted(graph.flatten())
-  ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
+  ready = nodes.filter(|node| degrees.get(node).ok_or(0) == 0)
   order = taken(graph, {ready, degrees}, [])
   if order.len() == nodes.len() then Ok(order) else Err(Cycle)
 )
@@ -49,14 +49,14 @@ toposort(graph) -> (
 taken : (List(List(Nat)), Kahn, List(Nat)) -> List(Nat)
 taken(_, {ready: [], *}, order) -> order
 taken(graph, {ready: [node, *ready], degrees}, order) -> (
-  next = graph.get_or(node, []).fold({ready, degrees}, released)
+  next = graph.get(node).ok_or([]).fold({ready, degrees}, released)
   taken(graph, next, order.append(node))
 )
 
 released : (Kahn, Nat) -> Kahn
 released({ready, degrees}, target) -> (
   degrees = degrees.update(target, |degree| degree - 1)
-  if degrees.get_or(target, 0) > 0 then {ready, degrees} else {ready: [target, *ready], degrees}
+  if degrees.get(target).ok_or(0) > 0 then {ready, degrees} else {ready: [target, *ready], degrees}
 )
 
 expect toposort([[1, 2], [2], []]) == Ok([0, 1, 2]) & toposort([[1], [0]]) == Err(Cycle)

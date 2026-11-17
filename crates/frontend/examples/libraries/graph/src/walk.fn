@@ -40,7 +40,7 @@ groups_from(graph, starts) -> (
 # walks entered, which each walk hands the next.
 walks : (g, List(Nat), List(Bool)) -> (List(List(Nat)), List(Bool)) where Walkable(g, e)
 walks(_, [], seen) -> ([], seen)
-walks(graph, [start, *starts], seen) if seen.get_or(start, True) -> walks(graph, starts, seen)
+walks(graph, [start, *starts], seen) if seen.get(start).ok_or(True) -> walks(graph, starts, seen)
 walks(graph, [start, *starts], seen) -> (
   (seen, group) = walk(graph, [start], seen, [], deeper)
   (groups, seen) = walks(graph, starts, seen)
@@ -52,7 +52,7 @@ walks(graph, [start, *starts], seen) -> (
 # `next` says.
 walk : (g, List(Nat), List(Bool), List(Nat), (List(Nat), List(Nat)) -> List(Nat)) -> (List(Bool), List(Nat)) where Walkable(g, e)
 walk(_, [], seen, order, _) -> (seen, order)
-walk(graph, [node, *rest], seen, order, next) if seen.get_or(node, True) -> walk(graph, rest, seen, order, next)
+walk(graph, [node, *rest], seen, order, next) if seen.get(node).ok_or(True) -> walk(graph, rest, seen, order, next)
 walk(graph, [node, *rest], seen, order, next) -> (
   found = targets(graph.edges_from(node))
   walk(graph, next(found, rest), seen.put(node, True), order.append(node), next)

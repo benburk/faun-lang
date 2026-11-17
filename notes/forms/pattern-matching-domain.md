@@ -561,7 +561,7 @@ drain(heap, state) -> (
 )
 
 back(settled, node, route) -> (
-  settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
+  settled.get(node).ok_or(Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
   walked = [node, *route]
   if from == node then Ok(walked) else back(settled, from, walked)
 )
@@ -626,7 +626,7 @@ drain(heap, state) -> (
 )
 
 back(settled, node, route) -> (
-  Ok({from, *}) = settled.get_or(node, Err(Unreachable)) else return Err(Unreachable)
+  Ok({from, *}) = settled.get(node).ok_or(Err(Unreachable)) else return Err(Unreachable)
   …
 )
 
@@ -655,7 +655,7 @@ drain(heap, state) -> (
 )
 
 back(settled, node, route) -> (
-  if settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
+  if settled.get(node).ok_or(Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
   walked = [node, *route]
   if from == node return Ok(walked)
   back(settled, from, walked)
@@ -725,7 +725,7 @@ comparisons. Its answer was a value, then clauses in parentheses:
 
 ```ruby ignore
 back(settled, node, route) -> (
-  step = settled.get_or(node, Err(Unreachable))?
+  step = settled.get(node).ok_or(Err(Unreachable))?
   walked = [node, *route]
   when step.from (
     from if from == node -> Ok(walked)

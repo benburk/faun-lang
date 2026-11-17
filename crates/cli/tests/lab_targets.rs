@@ -9,7 +9,7 @@ const BYTE_RESULT: &str = r"pick : (Nat, List(U8)) -> Result(List(U8), U8)
         pick(0, _) -> Err(11)
         pick(_, bytes) -> Ok(bytes)
         answer : Result(List(U8), U8) -> U8
-        answer(Ok(bytes)) -> bytes.get_or(0, 9)
+        answer(Ok(bytes)) -> bytes.get(0).ok_or(9)
         answer(Err(code)) -> code
         expect answer(pick(0, [7])) == 11
         main!(host) -> (

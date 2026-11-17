@@ -37,10 +37,6 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   get(Tip, _) -> Err(Missing)
   get(Bin(left, found, value, right, _), key) -> got(key.cmp(found), left, value, right, key)
 
-  # The value bound to `key` in `map`, and `fallback` where it is absent.
-  get_or : (SortedMap(k, v), k, v) -> v where Ordered(k)
-  get_or(map, key, fallback) -> get(map, key).ok_or(fallback)
-
   # Whether `key` is bound in `map`.
   contains : (SortedMap(k, v), k) -> Bool where Ordered(k)
   contains(map, key) -> get(map, key).is_ok()
@@ -69,7 +65,7 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   # `map` with `key`'s value replaced by `change` applied to it, or to
   # `missing` where `key` is absent, as `Map.update_or` does.
   update_or : (SortedMap(k, v), k, v, v -> v) -> SortedMap(k, v) where Ordered(k)
-  update_or(map, key, missing, change) -> insert(map, key, change(get_or(map, key, missing)))
+  update_or(map, key, missing, change) -> insert(map, key, change(get(map, key).ok_or(missing)))
 
   # The keys of `map` in ascending order.
   keys : SortedMap(k, v) -> List(k)

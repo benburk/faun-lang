@@ -24,7 +24,7 @@ roads = (
 
 # The town at `node`, or its number where the caller has no name for it.
 name : Nat -> Str
-name(node) -> towns.get_or(node, node.to_str())
+name(node) -> towns.get(node).ok_or(node.to_str())
 
 route : (Nat, Nat) -> Result(Str, _)
 route(from, to) -> (

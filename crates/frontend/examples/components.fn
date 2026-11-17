@@ -29,7 +29,7 @@ component(graph, node, {seen, groups}) -> (
 walk(graph, [current, *stack], walked) if walked.seen.contains(current) ->
   walk(graph, stack, walked)
 walk(graph, [current, *stack], {seen, path}) -> (
-  next = graph.get_or(current, [])
+  next = graph.get(current).ok_or([])
   walk(graph, next.concat(stack), {seen: seen.insert(current), path: path.append(current)})
 )
 walk(_, [], walked) -> walked

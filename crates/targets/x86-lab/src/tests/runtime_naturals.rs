@@ -163,8 +163,8 @@ main! : Host -> []
 main!(host) -> (
   read = host.stdin.read!(2)
   read is Ok(Data(bytes)) else return host.exit!(1)
-  x = bytes.get_or(0, 0).to_nat()
-  n = bytes.get_or(1, 0).to_nat()
+  x = bytes.get(0).ok_or(0).to_nat()
+  n = bytes.get(1).ok_or(0).to_nat()
   a = U8.of_nat(x)
   b = U16.of_nat(x * 256 + 5)
   c = U32.of_nat(x * 16777216 + 5)

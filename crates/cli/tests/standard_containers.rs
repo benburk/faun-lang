@@ -80,7 +80,7 @@ fn hashed_containers_keep_insertion_order() {
 
          expect counts.get("a") == Ok(1)
          expect counts.get("z") == Err(Missing)
-         expect counts.get_or("z", 0) == 0
+         expect counts.get("z").ok_or(0) == 0
          expect counts.len() == 3 & !counts.is_empty() & Map.empty.is_empty()
          expect counts.keys() == ["b", "a", "c"]
          expect counts.insert("a", 10).to_list() == [("b", 2), ("a", 10), ("c", 3)]

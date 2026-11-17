@@ -896,7 +896,7 @@ fn appends_are_linear_work() {
          main! : Host -> []
          main!(host) -> (
            values = built(20000, [])
-           host.exit!(U8.of_nat(values.len() % 256 + values.get_or(19999, 9)))
+           host.exit!(U8.of_nat(values.len() % 256 + values.get(19999).ok_or(9)))
          )",
     );
     assert_eq!(package.run(), 20000 % 256);
@@ -972,7 +972,7 @@ fn joins_before_a_list_are_linear_work() {
          main! : Host -> []
          main!(host) -> (
            values = built(200000, [])
-           host.exit!(U8.of_nat(values.len() % 256 + values.get_or(0, 9)))
+           host.exit!(U8.of_nat(values.len() % 256 + values.get(0).ok_or(9)))
          )",
     );
     assert_eq!(package.run(), 400_000 % 256);

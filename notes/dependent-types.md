@@ -28,7 +28,7 @@ dependent types cover in other languages is covered by other means:
 
   ```ruby
   expect [10, 20].get(5) == Err(OutOfBounds)
-  expect [10, 20].get_or(5, 0) == 0
+  expect [10, 20].get(5).ok_or(0) == 0
   expect [1, 2, 3].zip([4]) == [(1, 4)]
   expect 7 / 0 == 0
   expect U8.of_nat(300) == U8.of_nat(44)

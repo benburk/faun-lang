@@ -857,20 +857,22 @@ macro_rules! listed {
     };
 }
 const LIST_GET: &str = listed!("xs.get(3).ok_or(9) + xs.get(n).ok_or(9) * 10");
-const LIST_SET: &str = listed!("xs.set(1, 7).ok_or([]).get_or(1, 0)");
+const LIST_SET: &str = listed!("xs.set(1, 7).ok_or([]).get(1).ok_or(0)");
 const LIST_FIND: &str =
     listed!("xs.find(|x| x % 2 == 1).ok_or(9) + xs.find(|x| x == 7).ok_or(9) * 10");
 const LIST_FILTER: &str = listed!("xs.filter(|x| x % 2 == 1).len()");
-const LIST_DROP_TAKE: &str = listed!("xs.drop(1).take(2).get_or(1, 9)");
+const LIST_DROP_TAKE: &str = listed!("xs.drop(1).take(2).get(1).ok_or(9)");
 const LIST_TAKE_PAST: &str = listed!("xs.take(9).len()");
 const LIST_LAST: &str = listed!("xs.last().ok_or(9)");
 // A list put before itself, which its buffer is shared with.
-const LIST_CONCAT: &str = listed!("xs.concat(xs).get_or(6, 9) * 10 + xs.concat(xs).get_or(9, 9)");
-const LIST_REVERSE: &str = listed!("xs.reverse().get_or(0, 9) * 10 + xs.reverse().get_or(4, 9)");
+const LIST_CONCAT: &str =
+    listed!("xs.concat(xs).get(6).ok_or(9) * 10 + xs.concat(xs).get(9).ok_or(9)");
+const LIST_REVERSE: &str =
+    listed!("xs.reverse().get(0).ok_or(9) * 10 + xs.reverse().get(4).ok_or(9)");
 // Elements that are lists themselves, each holding a claim to its buffer.
 // What a list of lists holds is not bounded, so the answer is made to fit.
 const LIST_OF_LISTS: &str = listed!(
-    "([xs, xs.drop(3)].reverse().get_or(0, []).get_or(0, 9) % 10) + ([[xs], [xs.drop(4)]].flatten().get_or(1, []).get_or(0, 9) % 10) * 10"
+    "([xs, xs.drop(3)].reverse().get(0).ok_or([]).get(0).ok_or(9) % 10) + ([[xs], [xs.drop(4)]].flatten().get(1).ok_or([]).get(0).ok_or(9) % 10) * 10"
 );
 
 /// Programs using the standard list, and what each leaves with. A lookup
@@ -1451,7 +1453,7 @@ fn it_greets_whom_it_is_handed() {
 
          main! : Host -> []
          main!(host) -> (
-           name = host.args.get_or(1, \"world\")
+           name = host.args.get(1).ok_or(\"world\")
            host.println!(\"Hello, ${name}!\")
            host.exit!(U8.of_nat(host.args.len()))
          )",
@@ -1478,7 +1480,7 @@ fn it_is_handed_strings_beside_a_list_of_numbers() {
 
          main! : Host -> []
          main!(host) -> (
-           name = host.args.get_or(1, \"world\")
+           name = host.args.get(1).ok_or(\"world\")
            sizes = [name.len(), host.args.len()]
            host.println!(\"Hello, ${name}!\")
            host.exit!(U8.of_nat((sizes.len() + sizes.sum()) % 8))

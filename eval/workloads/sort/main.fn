@@ -19,7 +19,7 @@ weighed(numbers) -> numbers.enumerate().fold(0, |sum, (place, n)| (sum + (place 
 report : Nat -> Str
 report(count) -> (
   sorted = draw(count, 42).sort()
-  "${sorted.first().ok_or(0)} ${sorted.get_or(count / 2, 0)} ${sorted.last().ok_or(0)} ${weighed(sorted)}"
+  "${sorted.first().ok_or(0)} ${sorted.get(count / 2).ok_or(0)} ${sorted.last().ok_or(0)} ${weighed(sorted)}"
 )
 
 expect draw(3, 42) == [42, 22539, 42944]

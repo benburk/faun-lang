@@ -93,7 +93,7 @@ block_words(_) -> []
 round : (List(U32), State, (Nat, (U32, Nat))) -> State
 round(words, (a, b, c, d), (i, (k, s))) -> (
   (f, g) = mix(b, c, d, i)
-  (d, b + (a + f + k + words.get_or(g, 0)).rotate_left(s), b, c)
+  (d, b + (a + f + k + words.get(g).ok_or(0)).rotate_left(s), b, c)
 )
 
 # Each round's function of b, c and d, and which word of the block it adds.

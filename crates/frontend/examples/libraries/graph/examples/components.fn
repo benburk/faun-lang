@@ -21,7 +21,7 @@ friendships = UnGraph.from_edges(people.len(), [(0, 1), (1, 2), (3, 4), (5, 3)])
 
 # The person at `node`, or their number where the caller has no name.
 name : Nat -> Str
-name(node) -> people.get_or(node, node.to_str())
+name(node) -> people.get(node).ok_or(node.to_str())
 
 circles : List(List(Str))
 circles = components(friendships).map(|members| members.map(name))

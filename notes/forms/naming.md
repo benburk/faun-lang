@@ -41,8 +41,12 @@ the three are one, `to_`.
 
 - `is_x` asks a yes-or-no question: `is_empty`, `is_ok`, `is_digit`,
   `is_nan`.
+- A lookup that may find nothing answers a `Result`, `list.get(i)` and
+  `map.get(key)`, and has no twin that takes a fallback: the fallback is
+  `Result`'s, `list.get(i).ok_or(0)`, so every lookup gets it, and
+  `?`, `|` and `map_ok` too, without each collection repeating them.
 - `x_or(fallback)` answers the value, or the fallback where there is none:
-  `get_or`, `ok_or`, `err_or`.
+  `ok_or`, `err_or`.
 - `try_x` is the version of `x` that stops at the first `Err`: `try_map`,
   `try_fold`.
 - A failure is a tag named by its cause, never text: `TooBig`,

@@ -29,8 +29,8 @@ components(graph) -> (
 # The set holding `node` is named by its least node, which is its own
 # parent; every other node's parent is a smaller node of its set.
 root : (List(Nat), Nat) -> Nat
-root(parents, node) if parents.get_or(node, node) == node -> node
-root(parents, node) -> root(parents, parents.get_or(node, node))
+root(parents, node) if parents.get(node).ok_or(node) == node -> node
+root(parents, node) -> root(parents, parents.get(node).ok_or(node))
 
 # The sets of an edge's two ends made one, under the lesser root.
 joined : (List(Nat), (Nat, Nat, e)) -> List(Nat)
@@ -44,7 +44,7 @@ joined(parents, (one, other, _)) -> (
 gathered : (List(Nat), List(List(Nat)), Nat) -> List(List(Nat))
 gathered(parents, groups, node) -> (
   named = root(parents, node)
-  held = groups.get_or(named, [])
+  held = groups.get(named).ok_or([])
   groups.put(named, held.append(node))
 )
 
@@ -77,7 +77,7 @@ leaving_order(graph) -> (
 stepping : (g, List(Step), List(Bool), List(Nat)) -> (List(Bool), List(Nat)) where Walkable(g, e)
 stepping(_, [], seen, left) -> (seen, left)
 stepping(graph, [Leave(node), *steps], seen, left) -> stepping(graph, steps, seen, left.append(node))
-stepping(graph, [Enter(node), *steps], seen, left) if seen.get_or(node, True) -> stepping(graph, steps, seen, left)
+stepping(graph, [Enter(node), *steps], seen, left) if seen.get(node).ok_or(True) -> stepping(graph, steps, seen, left)
 stepping(graph, [Enter(node), *steps], seen, left) -> (
   entering = targets(graph.edges_from(node)).map(|target| Enter(target))
   stepping(graph, entering.concat([Leave(node), *steps]), seen.put(node, True), left)

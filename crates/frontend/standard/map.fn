@@ -57,12 +57,6 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
     value_at(slots, position)
   )
 
-  # The value bound to `key` in `map`, and `fallback` where it is absent —
-  # `get` for a caller that has an answer for a missing key, as `List.get_or`
-  # is for a position past the end.
-  get_or : (Map(k, v), k, v) -> v where Hashable(k)
-  get_or(map, key, fallback) -> get(map, key).ok_or(fallback)
-
   # Whether `key` is bound in `map`.
   contains : (Map(k, v), k) -> Bool where Hashable(k)
   contains(map, key) -> get(map, key).is_ok()
@@ -84,7 +78,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # `missing` where `key` is absent, as Python's `defaultdict` updates:
   # `counts.update_or(word, 0, |count| count + 1)`.
   update_or : (Map(k, v), k, v, v -> v) -> Map(k, v) where Hashable(k)
-  update_or(map, key, missing, change) -> insert(map, key, change(get_or(map, key, missing)))
+  update_or(map, key, missing, change) -> insert(map, key, change(get(map, key).ok_or(missing)))
 
   # `map` without any binding for `key`; unchanged when `key` is absent.
   remove : (Map(k, v), k) -> Map(k, v) where Hashable(k)
@@ -93,7 +87,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
     slot_of(seed, index, slots, key) is Ok(position) else return map
     digest = digest_of(seed, key)
     bucket = bucket_of(digest, index.len())
-    entries = index.get_or(bucket, []).filter(|(_, at)| at != position)
+    entries = index.get(bucket).ok_or([]).filter(|(_, at)| at != position)
     Map({
       seed: seed,
       slots: slots.put(position, Removed),
@@ -160,7 +154,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
 
   # How many times each of `values` occurs, as Python's `Counter` counts:
   # each value a key, in the order it first appears, bound to its count. A
-  # value that never occurs is missing, so `get_or(value, 0)` reads it.
+  # value that never occurs is missing, so `get(value).ok_or(0)` reads it.
   counted : List(k) -> Map(k, Nat) where Hashable(k)
   counted(values) -> values.fold(empty, |tally, value| update_or(tally, value, 0, |count| count + 1))
 
@@ -192,13 +186,13 @@ bucket_of(digest, room) -> digest.to_nat() % room
 slot_of : (U64, List(List((U64, Nat))), List(Slot(k, v)), k) -> Result(Nat, [Missing]) where Hashable(k)
 slot_of(seed, index, slots, key) -> (
   digest = digest_of(seed, key)
-  position_in(index.get_or(bucket_of(digest, index.len()), []), digest, slots, key)
+  position_in(index.get(bucket_of(digest, index.len())).ok_or([]), digest, slots, key)
 )
 
 position_in : (List((U64, Nat)), U64, List(Slot(k, v)), k) -> Result(Nat, [Missing]) where Equatable(k)
 position_in([], _, _, _) -> Err(Missing)
 position_in([(found, position), *_], digest, slots, key)
-  if found == digest & holds(slots.get_or(position, Removed), key) -> Ok(position)
+  if found == digest & holds(slots.get(position).ok_or(Removed), key) -> Ok(position)
 position_in([_, *rest], digest, slots, key) -> position_in(rest, digest, slots, key)
 
 holds : (Slot(k, v), k) -> Bool where Equatable(k)
@@ -206,7 +200,7 @@ holds(Filled(found, _), key) -> found == key
 holds(Removed, _) -> False
 
 value_at : (List(Slot(k, v)), Nat) -> Result(v, [Missing])
-value_at(slots, position) -> slot_value(slots.get_or(position, Removed))
+value_at(slots, position) -> slot_value(slots.get(position).ok_or(Removed))
 
 slot_value : Slot(k, v) -> Result(v, [Missing])
 slot_value(Filled(_, value)) -> Ok(value)
@@ -242,7 +236,7 @@ replaced(Err(_), seed, slots, index, size, key, value) -> (
   position = slots.len()
   digest = digest_of(seed, key)
   bucket = bucket_of(digest, index.len())
-  entries = index.get_or(bucket, [])
+  entries = index.get(bucket).ok_or([])
   resized(
     Map({
       seed: seed,
@@ -275,7 +269,7 @@ resized(map) -> map
 placed : (List(List((U64, Nat))), Nat, U64, Nat) -> List(List((U64, Nat)))
 placed(index, room, digest, position) -> (
   bucket = bucket_of(digest, room)
-  held = index.get_or(bucket, [])
+  held = index.get(bucket).ok_or([])
   index.put(bucket, [(digest, position), *held])
 )
 

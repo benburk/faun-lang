@@ -32,7 +32,7 @@ shares(bases, k) -> (
 
 # How often `run` occurs in `bases`.
 occurrences : (List(U8), Str) -> Str
-occurrences(bases, run) -> "${runs(bases, run.len()).get_or(run, 0)}\t${run}"
+occurrences(bases, run) -> "${runs(bases, run.len()).get(run).ok_or(0)}\t${run}"
 
 counted : List(Str) -> List(Str)
 counted(lines) -> (

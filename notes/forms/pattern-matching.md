@@ -247,7 +247,7 @@ Dijkstra's walk back along a path shows the difference:
 ```ruby ignore
 # With a helper
 back(settled, node, route) -> (
-  step = settled.get_or(node, Err(Unreachable))
+  step = settled.get(node).ok_or(Err(Unreachable))
   stepped(settled, node, step, [node, *route])
 )
 
@@ -258,7 +258,7 @@ stepped(settled, _, Ok({from, *}), route) -> back(settled, from, route)
 
 # With a test
 back(settled, node, route) -> (
-  settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
+  settled.get(node).ok_or(Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
   walked = [node, *route]
   if from == node then Ok(walked) else back(settled, from, walked)
 )

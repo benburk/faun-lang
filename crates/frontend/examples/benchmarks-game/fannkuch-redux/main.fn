@@ -31,7 +31,7 @@ following : (List(Nat), List(Nat), Nat) -> Result((List(Nat), List(Nat), Nat), [
 following(perm, _, r) if r == perm.len() -> Err(Done)
 following(perm, count, r) -> (
   perm = turned(perm, r)
-  left = count.get_or(r, 1) - 1
+  left = count.get(r).ok_or(1) - 1
   count = count.put(r, left)
   if left > 0 then Ok((perm, count, r)) else following(perm, count, r + 1)
 )

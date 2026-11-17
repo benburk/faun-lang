@@ -18,18 +18,18 @@ const CASES: &[(&str, &str, u32)] = &[
         "xs.is_empty().to_nat() + xs.take(0).is_empty().to_nat() * 2",
         2,
     ),
-    ("append", "xs.append(9).get_or(5, 0)", 9),
+    ("append", "xs.append(9).get(5).ok_or(0)", 9),
     (
         "concat",
-        "xs.concat([7, 8]).get_or(6, 0) + xs.concat([7, 8]).len() * 10",
+        "xs.concat([7, 8]).get(6).ok_or(0) + xs.concat([7, 8]).len() * 10",
         78,
     ),
     (
         "prepend",
-        "xs.prepend(9).get_or(0, 0) + xs.prepend(9).len() * 10",
+        "xs.prepend(9).get(0).ok_or(0) + xs.prepend(9).len() * 10",
         69,
     ),
-    ("map", "xs.map(|x| x * 2).get_or(4, 0)", 8),
+    ("map", "xs.map(|x| x * 2).get(4).ok_or(0)", 8),
     (
         "map2",
         "xs.map2([10, 20], |a, b| a + b).fold(0, |s, x| s + x)",
@@ -66,12 +66,12 @@ const CASES: &[(&str, &str, u32)] = &[
     ),
     (
         "trail",
-        "xs.trail(0, |s, x| s + x).get_or(4, 0) + xs.trail(0, |s, x| s + x).len() * 20",
+        "xs.trail(0, |s, x| s + x).get(4).ok_or(0) + xs.trail(0, |s, x| s + x).len() * 20",
         110,
     ),
     (
         "reverse",
-        "xs.reverse().get_or(0, 9) + xs.reverse().len() * 10",
+        "xs.reverse().get(0).ok_or(9) + xs.reverse().len() * 10",
         54,
     ),
     (
@@ -85,15 +85,15 @@ const CASES: &[(&str, &str, u32)] = &[
         94,
     ),
     ("get", "xs.get(3).ok_or(9) + xs.get(n).ok_or(9) * 10", 93),
-    ("get_or", "xs.get_or(2, 9) + xs.get_or(n, 9) * 10", 92),
+    ("get_or", "xs.get(2).ok_or(9) + xs.get(n).ok_or(9) * 10", 92),
     (
         "put",
-        "xs.put(1, 7).get_or(1, 0) + xs.put(n, 7).len() * 10 + xs.put(n, 7).get_or(4, 0) * 100",
+        "xs.put(1, 7).get(1).ok_or(0) + xs.put(n, 7).len() * 10 + xs.put(n, 7).get(4).ok_or(0) * 100",
         (7 + 50 + 400) % 256,
     ),
     (
         "set",
-        "xs.set(1, 7).ok_or([]).get_or(1, 0) + xs.set(n, 7).ok_or([]).len() * 10",
+        "xs.set(1, 7).ok_or([]).get(1).ok_or(0) + xs.set(n, 7).ok_or([]).len() * 10",
         7,
     ),
     (
@@ -113,15 +113,19 @@ const CASES: &[(&str, &str, u32)] = &[
     ),
     (
         "exchange",
-        "xs.exchange(0, 4).ok_or([]).get_or(0, 9) + xs.exchange(0, n).ok_or([]).len() * 10",
+        "xs.exchange(0, 4).ok_or([]).get(0).ok_or(9) + xs.exchange(0, n).ok_or([]).len() * 10",
         4,
     ),
     ("take", "xs.take(2).len() + xs.take(9).len() * 10", 52),
-    ("drop", "xs.drop(1).get_or(0, 9) + xs.drop(9).len() * 10", 1),
+    (
+        "drop",
+        "xs.drop(1).get(0).ok_or(9) + xs.drop(9).len() * 10",
+        1,
+    ),
     ("take_while", "xs.take_while(|x| x % 4 == x).len()", 4),
     (
         "drop_while",
-        "xs.drop_while(|x| x % 4 == x).get_or(0, 9)",
+        "xs.drop_while(|x| x % 4 == x).get(0).ok_or(9)",
         4,
     ),
     (

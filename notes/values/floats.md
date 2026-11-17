@@ -76,7 +76,7 @@ expect F64.nan == F64.nan & -0.0 != 0.0 & -0.0 < 0.0
 expect F64.numeric_equals(-0.0, 0.0) & !F64.numeric_equals(F64.nan, F64.nan)
 expect F64.partial_cmp(F64.nan, 1.0) == Err(Unordered)
 expect [F64.nan, 1.0, 0.0, -0.0].sort() == [-0.0, 0.0, 1.0, F64.nan]
-expect Map.of_list([(F64.nan, 1)]).get_or(F64.nan, 0) == 1
+expect Map.of_list([(F64.nan, 1)]).get(F64.nan).ok_or(0) == 1
 expect Set.of_list([0.0, -0.0, 0.0]).len() == 2
 ```
 

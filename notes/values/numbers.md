@@ -212,7 +212,7 @@ Hashes, checksums, random generators and ciphers are written in it.
 library's hasher multiplies a `U64` by a prime:
 
 ```ruby ignore
-(d, b + (a + f + k + words.get_or(g, 0)).rotate_left(s), b, c)
+(d, b + (a + f + k + words.get(g).ok_or(0)).rotate_left(s), b, c)
 ```
 
 Wrapping is the definition, not a failure, so there is nothing to detect,

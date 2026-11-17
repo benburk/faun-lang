@@ -635,7 +635,7 @@ finish_object(members, Decoded(value, used)) -> marked(used, List.repeat(False, 
 # `marks` with each of `places` set, refused where one already is.
 marked : (List(Nat), List(Bool)) -> Result(List(Bool), [Overlap])
 marked([], marks) -> Ok(marks)
-marked([place, *_], marks) if marks.get_or(place, False) -> Err(Overlap)
+marked([place, *_], marks) if marks.get(place).ok_or(False) -> Err(Overlap)
 marked([place, *rest], marks) -> marked(rest, marks.put(place, True))
 
 # Why the first member not marked was not read, `read` holding the names of

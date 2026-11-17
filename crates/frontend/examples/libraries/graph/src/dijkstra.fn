@@ -42,7 +42,7 @@ Queue(e) = Heap(e, {node: Nat, from: Nat})
 settling : (g, Queue(e), Settled(e)) -> Settled(e) where Walkable(g, e), Weight(e)
 settling(graph, queue, settled) -> (
   queue.pop() is Ok({key: cost, value: {node, from}, rest}) else return settled
-  if settled.get_or(node, Ok({cost, from})) is Ok(_) return settling(graph, rest, settled)
+  if settled.get(node).ok_or(Ok({cost, from})) is Ok(_) return settling(graph, rest, settled)
   onward = graph.edges_from(node).map(|edge| (cost + edge.weight, {node: edge.target, from: node}))
   settling(graph, rest.push_all(onward), settled.put(node, Ok({cost, from})))
 )
@@ -52,7 +52,7 @@ settling(graph, queue, settled) -> (
 Paths(e) : Settled(e).(
   # The least cost of a path to `target`.
   cost : (Paths(e), Nat) -> Result(e, [Unreachable])
-  cost(Paths(settled), target) -> settled.get_or(target, Err(Unreachable)).map_ok(|step| step.cost)
+  cost(Paths(settled), target) -> settled.get(target).ok_or(Err(Unreachable)).map_ok(|step| step.cost)
 
   # The nodes of a cheapest path to `target`, from the source to `target`.
   path : (Paths(e), Nat) -> Result(List(Nat), [Unreachable])
@@ -63,7 +63,7 @@ Paths(e) : Settled(e).(
 # the source.
 back : (Settled(e), Nat, List(Nat)) -> Result(List(Nat), [Unreachable])
 back(settled, node, route) -> (
-  settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
+  settled.get(node).ok_or(Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
   walked = [node, *route]
   if from == node then Ok(walked) else back(settled, from, walked)
 )

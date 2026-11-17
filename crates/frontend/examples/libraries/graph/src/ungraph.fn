@@ -36,7 +36,7 @@ UnGraph(e) : {adjacency: List(List(Edge(e))), given: List((Nat, Nat, e))}.(
   # The edges at `node`, each as `node` sees it, in the order they were
   # given, and none at a node the graph does not have.
   edges_from : (UnGraph(e), Nat) -> List(Edge(e))
-  edges_from(UnGraph({adjacency, *}), node) -> adjacency.get_or(node, [])
+  edges_from(UnGraph({adjacency, *}), node) -> adjacency.get(node).ok_or([])
 
   # The other ends of the edges at `node`, one for each edge.
   neighbors : (UnGraph(e), Nat) -> List(Nat)
