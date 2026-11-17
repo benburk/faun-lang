@@ -1,0 +1,91 @@
+# Checksums over bytes: CRC-32 as zlib, gzip and PNG compute it (ISO-HDLC,
+# reflected, polynomial 0xEDB88320), and Adler-32 as zlib's container
+# does. Neither is a cryptographic hash: each catches accidents, not
+# tampering.
+
+package {}
+
+export {Crc32, Adler32, crc32, adler32}
+
+# The CRC-32 of `bytes`. `Crc32` folds one in pieces.
+crc32 : List(U8) -> U32
+crc32(bytes) -> Crc32.empty.update(bytes).value()
+
+# The Adler-32 of `bytes`. `Adler32` folds one in pieces.
+adler32 : List(U8) -> U32
+adler32(bytes) -> Adler32.empty.update(bytes).value()
+
+# A CRC-32 part way through a message: the register, held inverted as the
+# algorithm runs it, so `update` neither starts nor ends with a flip.
+Crc32 : U32.(
+  empty : Crc32
+  empty = Crc32(0xffffffff)
+
+  update : (Crc32, List(U8)) -> Crc32
+  update(Crc32(register), bytes) -> (
+    # Bound here, since a constant is worked out again wherever it is
+    # named: named inside the walk, the table is built once a byte.
+    table = crc_table
+    Crc32(crc_bytes(table, register, bytes))
+  )
+
+  value : Crc32 -> U32
+  value(Crc32(register)) -> !register
+)
+
+crc_bytes : (List(U32), U32, List(U8)) -> U32
+crc_bytes(_, register, []) -> register
+crc_bytes(table, register, [byte, *rest]) -> (
+  index = (register ^ U32.of_u8(byte)).to_nat() & 0xff
+  crc_bytes(table, table.get(index).ok_or(0) ^ register.shift_right(8), rest)
+)
+
+# The register after each of the 256 bytes alone, from nought.
+crc_table : List(U32)
+crc_table = List.range(256).map(|n| crc_entry(U32.of_nat(n), 8))
+
+crc_entry : (U32, Nat) -> U32
+crc_entry(register, 0) -> register
+crc_entry(register, Succ(bits)) if (register & 1) == 1 ->
+  crc_entry(0xedb88320 ^ register.shift_right(1), bits)
+crc_entry(register, Succ(bits)) -> crc_entry(register.shift_right(1), bits)
+
+# An Adler-32 part way through a message: the sum of its bytes plus one,
+# and the sum of those sums, each modulo 65521.
+Adler32 : (Nat, Nat).(
+  empty : Adler32
+  empty = Adler32((1, 0))
+
+  update : (Adler32, List(U8)) -> Adler32
+  update(Adler32((low, high)), bytes) -> Adler32(adler_bytes(low, high, 0, bytes))
+
+  value : Adler32 -> U32
+  value(Adler32((low, high))) -> U32.of_nat(high * 65536 + low)
+)
+
+# The sums are reduced every 5552 bytes, the most whose sums cannot pass
+# 2^32 from below the modulus, as zlib reduces them.
+adler_bytes : (Nat, Nat, Nat, List(U8)) -> (Nat, Nat)
+adler_bytes(low, high, _, []) -> (low % 65521, high % 65521)
+adler_bytes(low, high, 5552, bytes) -> adler_bytes(low % 65521, high % 65521, 0, bytes)
+adler_bytes(low, high, count, [byte, *rest]) -> (
+  sum = low + byte.to_nat()
+  adler_bytes(sum, high + sum, count + 1, rest)
+)
+
+expect crc32("123456789".to_utf8()) == 0xcbf43926
+expect crc32([]) == 0
+expect crc32("The quick brown fox jumps over the lazy dog".to_utf8()) == 0x414fa339
+expect adler32("Wikipedia".to_utf8()) == 0x11e60398
+expect adler32([]) == 1
+
+# A run of 0xff, the worst case for the sums, past several reductions.
+expect adler32(List.repeat(255, 20000)) == 0x9f51d664
+
+# Split updates give the whole message's checksum, wherever they split.
+expect (
+  message = List.range(300).map(U8.of_nat)
+  [0, 1, 7, 255, 299, 300].all(|n|
+    Crc32.empty.update(message.take(n)).update(message.drop(n)).value() == crc32(message)
+      & Adler32.empty.update(message.take(n)).update(message.drop(n)).value() == adler32(message))
+)
