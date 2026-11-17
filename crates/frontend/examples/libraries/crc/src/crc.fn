@@ -33,16 +33,45 @@ Crc32 : U32.(
   value(Crc32(register)) -> !register
 )
 
+# Eight bytes a step, slicing-by-8 as zlib and crc32fast read them: the
+# register mixed with the first four, and eight table lookups, one a
+# byte, each table the register after its byte and as many noughts as the
+# table's place. The bytes left over go one at a time.
 crc_bytes : (List(U32), U32, List(U8)) -> U32
-crc_bytes(_, register, []) -> register
-crc_bytes(table, register, [byte, *rest]) -> (
-  index = (register ^ U32.of_u8(byte)).to_nat() & 0xff
-  crc_bytes(table, table.get(index).ok_or(0) ^ register.shift_right(8), rest)
+crc_bytes(table, register, [a, b, c, d, e, f, g, h, *rest]) -> (
+  one = register ^ U32.of_le_bytes(a, b, c, d)
+  crc_bytes(table,
+    lookup(table, 7, one) ^ lookup(table, 6, one.shift_right(8)) ^ lookup(table, 5, one.shift_right(16)) ^ lookup(table, 4, one.shift_right(24))
+      ^ lookup(table, 3, U32.of_u8(e)) ^ lookup(table, 2, U32.of_u8(f)) ^ lookup(table, 1, U32.of_u8(g)) ^ lookup(table, 0, U32.of_u8(h)),
+    rest)
+)
+crc_bytes(table, register, bytes) -> crc_tail(table, register, bytes)
+
+crc_tail : (List(U32), U32, List(U8)) -> U32
+crc_tail(_, register, []) -> register
+crc_tail(table, register, [byte, *rest]) ->
+  crc_tail(table, lookup(table, 0, register ^ U32.of_u8(byte)) ^ register.shift_right(8), rest)
+
+# The entry of table `slice` for the low byte of `index`.
+lookup : (List(U32), Nat, U32) -> U32
+lookup(table, slice, index) -> table.get(slice * 256 + (index.to_nat() & 0xff)).ok_or(0)
+
+# Eight tables of 256, one after another: the first the register after
+# each byte alone, from nought, and each after it the one before it with
+# a nought byte more.
+crc_table : List(U32)
+crc_table = (
+  first = List.range(256).map(|n| crc_entry(U32.of_nat(n), 8))
+  crc_slices(first, first, 7)
 )
 
-# The register after each of the 256 bytes alone, from nought.
-crc_table : List(U32)
-crc_table = List.range(256).map(|n| crc_entry(U32.of_nat(n), 8))
+crc_slices : (List(U32), List(U32), Nat) -> List(U32)
+crc_slices(_, tables, 0) -> tables
+crc_slices(first, tables, Succ(left)) -> (
+  last = tables.drop(tables.len() - 256)
+  next = last.map(|entry| first.get(entry.to_nat() & 0xff).ok_or(0) ^ entry.shift_right(8))
+  crc_slices(first, tables.concat(next), left)
+)
 
 crc_entry : (U32, Nat) -> U32
 crc_entry(register, 0) -> register
@@ -52,26 +81,45 @@ crc_entry(register, Succ(bits)) -> crc_entry(register.shift_right(1), bits)
 
 # An Adler-32 part way through a message: the sum of its bytes plus one,
 # and the sum of those sums, each modulo 65521.
-Adler32 : (Nat, Nat).(
+Adler32 : (U64, U64).(
   empty : Adler32
   empty = Adler32((1, 0))
 
   update : (Adler32, List(U8)) -> Adler32
-  update(Adler32((low, high)), bytes) -> Adler32(adler_bytes(low, high, 0, bytes))
+  update(Adler32((low, high)), bytes) -> Adler32(adler_bytes(low, high, adler_run, bytes))
 
   value : Adler32 -> U32
-  value(Adler32((low, high))) -> U32.of_nat(high * 65536 + low)
+  value(Adler32((low, high))) -> U32.of_nat(high.to_nat() * 65536 + low.to_nat())
 )
 
-# The sums are reduced every 5552 bytes, the most whose sums cannot pass
-# 2^32 from below the modulus, as zlib reduces them.
-adler_bytes : (Nat, Nat, Nat, List(U8)) -> (Nat, Nat)
-adler_bytes(low, high, _, []) -> (low % 65521, high % 65521)
-adler_bytes(low, high, 5552, bytes) -> adler_bytes(low % 65521, high % 65521, 0, bytes)
-adler_bytes(low, high, count, [byte, *rest]) -> (
-  sum = low + byte.to_nat()
-  adler_bytes(sum, high + sum, count + 1, rest)
+# How many bytes the sums take before they are reduced. zlib reduces its
+# 32-bit sums every 5552 bytes; in 64 bits, from below the modulus, the
+# larger sum is below 2^64 after 2^22 bytes by a margin of thousands.
+adler_run : U64
+adler_run = 4194304
+
+# Eight bytes a step, then one at a time, reduced every `adler_run`. The
+# reduction is the last clause: written first, it parted the walk into two
+# functions calling each other, which the compiler did not make a loop,
+# and 16 MB overflowed the stack.
+adler_bytes : (U64, U64, U64, List(U8)) -> (U64, U64)
+adler_bytes(low, high, left, [a, b, c, d, e, f, g, h, *rest]) if left >= 8 -> (
+  s1 = low + U64.of_u8(a)
+  s2 = s1 + U64.of_u8(b)
+  s3 = s2 + U64.of_u8(c)
+  s4 = s3 + U64.of_u8(d)
+  s5 = s4 + U64.of_u8(e)
+  s6 = s5 + U64.of_u8(f)
+  s7 = s6 + U64.of_u8(g)
+  s8 = s7 + U64.of_u8(h)
+  adler_bytes(s8, high + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8, left - 8, rest)
 )
+adler_bytes(low, high, left, [byte, *rest]) if left > 0 -> (
+  sum = low + U64.of_u8(byte)
+  adler_bytes(sum, high + sum, left - 1, rest)
+)
+adler_bytes(low, high, _, []) -> (low % 65521, high % 65521)
+adler_bytes(low, high, _, bytes) -> adler_bytes(low % 65521, high % 65521, adler_run, bytes)
 
 expect crc32("123456789".to_utf8()) == 0xcbf43926
 expect crc32([]) == 0
