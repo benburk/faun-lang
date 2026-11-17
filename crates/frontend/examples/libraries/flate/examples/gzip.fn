@@ -1,8 +1,9 @@
-# A small gzip: `gzip -d` reads a gzip file on standard input and writes
-# what it holds to standard output. `--zlib` and `--raw` read a zlib
-# stream or raw DEFLATE instead. A stream refused says why on standard
-# error, with status one; a command line not understood gives the usage,
-# with status two.
+# A small gzip. With no flags it compresses standard input to a gzip file
+# on standard output, as `gzip -n` would; `-0` to `-9` say how hard, nought storing it as it is, 6
+# where none does, and `--zlib` and `--raw` write a zlib stream or raw
+# DEFLATE instead. `-d` reads one of the three back. A stream refused says
+# why on standard error, with status one; a command line not understood
+# gives the usage, with status two.
 
 package {
   uses: {
@@ -11,34 +12,72 @@ package {
 }
 
 import std.host {Host}
-import flate {inflate, zlib_decompress, gzip_decompress}
+import flate {inflate, zlib_decompress, gzip_decompress, deflate, zlib_compress, gzip_compress, Level}
 
 usage : Str
-usage = "usage: gzip -d [--zlib | --raw] < input > output"
+usage = "usage: gzip [-d | -0 ... -9] [--zlib | --raw] < input > output"
+
+Format = [Gzip, Zlib, Raw]
+
+Mode = [Decompress, Compress(Level)]
+
+# What the flags ask for, or nothing where they are not understood.
+command_of : List(Str) -> Result((Mode, Format), [Usage])
+command_of(flags) -> flags is (
+  [] then Ok((Compress(Level.default), Gzip))
+  [flag] then mode_of(flag).map_ok(|mode| (mode, Gzip)) | format_of(flag).map_ok(|format| (Compress(Level.default), format))
+  [flag, container] then (
+    mode = mode_of(flag)?
+    format = format_of(container)?
+    Ok((mode, format))
+  )
+  _ then Err(Usage)
+)
+
+mode_of : Str -> Result(Mode, [Usage])
+mode_of("-d") -> Ok(Decompress)
+mode_of(flag) -> flag.to_utf8() is (
+  ['-', digit] if digit.is_digit() then Ok(Compress(Level.of_nat((digit - '0').to_nat())))
+  _ then Err(Usage)
+)
+
+format_of : Str -> Result(Format, [Usage])
+format_of("--zlib") -> Ok(Zlib)
+format_of("--raw") -> Ok(Raw)
+format_of(_) -> Err(Usage)
 
 main! : Host -> []
 main!(host) -> (
-  command = host.args.drop(1)
-  if command != ["-d"] & command != ["-d", "--zlib"] & command != ["-d", "--raw"] return (
+  command = command_of(host.args.drop(1))
+  command is Ok((mode, format)) else return (
     written = host.stderr.write_all!("${usage}\n".to_utf8())
     host.exit!(2)
   )
   read = host.stdin.read_to_end!()
   read is Ok(input) else return host.exit!(1)
-  decoded = command is (
-    [_, "--zlib"] then zlib_decompress(input)
-    [_, "--raw"] then inflate(input)
-    _ then gzip_decompress(input)
+  result = mode is (
+    Compress(level) then Ok(format is (
+      Gzip then gzip_compress(input, level)
+      Zlib then zlib_compress(input, level)
+      Raw then deflate(input, level)
+    ))
+    Decompress then format is (
+      Gzip then gzip_decompress(input)
+      Zlib then zlib_decompress(input)
+      Raw then inflate(input)
+    )
   )
-  decoded is Ok(output) else return (
-    written = host.stderr.write_all!("gzip: ${decoded}\n".to_utf8())
+  result is Ok(output) else return (
+    written = host.stderr.write_all!("gzip: ${result}\n".to_utf8())
     host.exit!(1)
   )
   wrote = host.stdout.write_all!(output)
   host.exit!(if wrote.is_ok() then 0 else 1)
 )
 
-expect gzip_decompress([
-  0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 2, 0xff, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00,
-  0x86, 0xa6, 0x10, 0x36, 5, 0, 0, 0,
-]) == Ok("hello".to_utf8())
+expect command_of([]) == Ok((Compress(Level.default), Gzip))
+expect command_of(["-9", "--raw"]) == Ok((Compress(Level.best), Raw))
+expect command_of(["-d", "--zlib"]) == Ok((Decompress, Zlib))
+expect command_of(["--zlib"]) == Ok((Compress(Level.default), Zlib))
+expect command_of(["-0"]) == Ok((Compress(Level.none), Gzip)) & command_of(["-x"]) == Err(Usage)
+expect gzip_decompress(gzip_compress("hello".to_utf8(), Level.fastest)) == Ok("hello".to_utf8())

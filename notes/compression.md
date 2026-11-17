@@ -142,6 +142,85 @@ first-level table of 9 or 10 bits with a second level for longer codes,
 as zlib builds, would cut it; this is the next step for speed, not a
 finding about Faun.
 
+### The match search wants words too
+
+Deflate confirms inflate's finding from the other side. Its search walks
+a hash chain and compares bytes, every step working out a position, a
+distance or a length. Written over `Nat`, compressing 5 MB of source at
+level 6 took 610 ms, and the profile was the search and
+`nat.to_word`/`nat.from_word`. With the search's positions, lengths and
+distances `U64`, the same took 343 ms, and level 9 went from 2.4 s to
+1.1 s; moving the rest of the loop to words as well took 6% more off.
+`deflate.fn` names the word `Pos` and crosses to `Nat` only to index a
+list.
+
+### Nothing compares bytes several at a time
+
+A match is found by comparing bytes from two places until they differ,
+up to 258 of them. zlib compares a word or two at a time; Faun has no way
+to read a word out of a list at an offset, nor a standard
+`common_prefix_len(list, a, b)`, so `deflate.fn`'s `matching` compares a
+byte a step, each through a `get` answering a `Result`. At level 9 the
+search is 94% of the time. A `U64.of_le_bytes_at(list, i)`, or a prefix
+length on lists that the compiler turns into word compares, would serve
+the window here and the unfiltering of PNG rows.
+
+### The search's loop keeps its state on the stack
+
+The profile of level 9, annotated, shows the chain walk's ten or so live
+values stored to the stack and read back each step, comparisons made into
+bytes by `setb` and `movzbl` before they are tested, and small constants
+loaded by `push` and `pop`. Part of the time is the memory the chain
+reaches into, which C pays too, but most of the 5× to zlib at level 9 is
+this. It is code generation's to fix, and the search is a good workload
+for it: one function, no allocation, every value a word.
+
+### A mask after a mixture binds before it
+
+The hash of three bytes was first written `a.shift_left(10) ^
+b.shift_left(5) ^ c & 32767`, meaning the mask to apply to the whole.
+`&` binds tighter than `^`, as in C and Rust, so only `c` was masked, the
+hash ran past the table, and every lookup missed. Nothing failed: the
+output still read back, every expectation held, and compression was
+merely 1.9 times bigger, 2.32 MB where zlib writes 1.21. Only comparing
+sizes with zlib showed it, so the deflate test now holds every output to
+within 2% of zlib's size at the same level. The precedence is the usual
+one; the lesson is that a compressor's tests need a size oracle, not only
+a round trip. The hash is now a product's top bits, which needs no mask.
+
+### Expectations run on a budget, and a stream has a fixed cost
+
+The test suite asks a library's expectations through the reference
+interpreter, with a budget of 100 million steps for the whole file. A
+round trip at every level through every container ran out of it, and the
+suite said only `FuelExhausted`, from the test's support code, not which
+expectation or how far it got. Natively the same expectations took 1.4 s.
+
+What spent the budget was a fixed cost per call: deflate began each
+stream by filling two tables of 32768 entries, its hash heads and its
+window, so compressing one byte took 5.2 million instructions, and a
+repeated `List.repeat` was the profile's top line. The tables are now
+sized to the input, a hash of 8 to 15 bits and a window no longer than
+the input, which halved it; most of the rest is building each block's
+codes, a fixed cost of a few lists of 286. The expectations were cut to
+four levels, leaving every level and container to the native test.
+
+### A wrapper has no equality until it asks
+
+`Level` wraps a `Nat`, and `Level.of_nat(12) == Level.best` was refused
+with "`Level` has no field or method `equals`". A record or a tuple has
+`equals` without declaring it; a declared type asks by writing the
+signature with no body, `equals : (Level, Level) -> Bool`, which the
+message could say, as the refusal of a binding with `else` says its fix.
+
+### A lambda is never kept
+
+Binding a lambda to share it, `bump = |counts, i| …`, is refused with
+"a lambda stands only as a call's argument, as functions are passed and
+not kept", which says exactly what and why. The cost is small: the
+helpers deflate wanted inside one function, `bump`, `bases` and
+`symbol_at`, are top-level functions instead.
+
 ## Throughput
 
 On x86-64, release build, over 50 MB of random bytes read from standard
@@ -164,6 +243,30 @@ output a second:
 | ------------ | -------- | -------- |
 | raw DEFLATE  | 100 MB/s | 510 MB/s |
 | gzip, CRC-32 | 83 MB/s  |          |
+
+Deflate, over 50 MB of the repository's own source and notes, as the
+gzip example compressing standard input to a gzip file, in megabytes of
+input a second, with zlib's through Python at the same level:
+
+| Level | Faun      | zlib      | Faun's size | zlib's size |
+| ----- | --------- | --------- | ----------- | ----------- |
+| 1     | 44 MB/s   | 184 MB/s  | 16,147,261  | 16,285,456  |
+| 6     | 13.9 MB/s | 52.9 MB/s | 13,092,597  | 13,101,272  |
+| 9     | 3.6 MB/s  | 17.6 MB/s | 12,995,734  | 13,004,460  |
+
+The search and the codes are zlib's, its levels' table and its lazy
+matching, so sizes agree to a fraction of a percent; Faun's are a little
+smaller because each block's code is a true Huffman code cut to 15 bits
+as miniz cuts it, and each block is written whichever of stored, fixed or
+its own code is smallest. On the fixtures, raw DEFLATE:
+
+| Input            | Level | Faun   | zlib   |
+| ---------------- | ----- | ------ | ------ |
+| text, 70 KB      | 1     | 26,394 | 26,475 |
+| text, 70 KB      | 6     | 22,468 | 22,473 |
+| text, 70 KB      | 9     | 22,368 | 22,377 |
+| repetitive, 68 K | 6     | 96     | 97     |
+| random, 70 KB    | 6     | 70,025 | 70,025 |
 
 ## Related
 
