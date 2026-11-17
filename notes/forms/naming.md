@@ -53,6 +53,23 @@ the three are one, `to_`.
   a noun names what it answers, `len`, `keys`, `first`. Neither takes a
   `get_` prefix.
 
+## Operators
+
+An operator is a method, `a | b` calling `a.or(b)`, so naming a method
+`add`, `mul`, `or` and the rest gives a type the symbol too. Give one only
+where it has one obvious meaning: closed, two of a type answering that
+type, or else with the one partner the type is plainly used with, as a
+price is scaled by a number. Where several meanings are natural, name them
+instead. [Operators](operators.md) owns the conventions and their laws.
+
+```ruby
+expect (Nat.from_str("x") | Nat.from_str("7")) == Ok(7)
+expect Nat.from_str("x").ok_or(0) == 0
+```
+
+`Result`'s `or` is the first `Ok`, closed as `|` is everywhere else; the
+fallback to a plain value, which answers another type, is `ok_or`.
+
 ## Where names live
 
 A type's block is its namespace: what concerns a type is a method of it,
@@ -72,11 +89,3 @@ does not prefix its names for it, nor declare a type only to hold them.
   and `as` for lossy ones. Faun could keep `of_` for lossless conversions
   and name the lossy ones for what they do, `U8.wrapping(n)` and
   `F64.rounding(n)`.
-- **What `|` means on a `Result`.** `a | b` calls `a.or(b)`, and `Result`
-  has no `or`. It could be the fallback, `Nat.from_str(text) | 0`, the
-  shortest spelling of `ok_or`, which would also make `get_or` redundant:
-  `list.get(i) | 0`. Or it could be Rust's `or`, the first `Ok` of two
-  results, chainable as `a | b | c`, as `Order.or` is. The fallback is the
-  far commoner need. Either way `|` binds more loosely than `==`, so it
-  wants parentheses, `(list.get(i) | 0) == 5`, and its right side is
-  worked out even where the left is `Ok`; only `Bool`'s `|` skips it.
