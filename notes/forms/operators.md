@@ -75,7 +75,10 @@ field by field, `a.major.cmp(b.major) | a.minor.cmp(b.minor)`.
 
 `&`, `|` and `^` are `and`, `or` and `xor`: logical on `Bool`, bitwise on
 `Nat` and the words. `!` is `not`, logical on `Bool` and every bit flipped
-on a word. `Int` has no bitwise operations. They sit looser than the
+on a word. `Int` has no bitwise operations. `|` also keeps the first that
+did not give up: on `Order`, the first that is not `Eq`, so
+`a.x.cmp(b.x) | a.y.cmp(b.y)` orders by `x` and then `y`; on `Result`, the
+first that is `Ok`, so `(parse(a) | parse(b))` tries each in turn. They sit looser than the
 comparisons, so a condition reads without parentheses and a mask needs
 them:
 
@@ -117,6 +120,32 @@ For any other type an operator's right side is an argument like any other.
 Where the method reads it on some paths only, the optimizer may leave it
 unworked on the others, as `Order.or` reads its second order only on a tie,
 but that is not promised.
+
+## What an operator should mean
+
+An operator is a method, and a method may take and answer any types, so the
+language asks nothing more of one: `price * 3` may call
+`mul : (Money, Int) -> Money`. What a reader expects of a symbol is more,
+and a type's operators keep to it by convention:
+
+- **One obvious meaning.** Define an operator only where it has one meaning
+  nobody would mistake, and give anything less certain a name. A type has
+  one `sub`, so where two subtractions are both natural, the difference of
+  two instants and an instant moved back by a duration, neither is `-`:
+  they are `later.since(earlier)` and `instant.minus(duration)`.
+- **Closed, by default.** `+`, `-`, `*`, `/`, `%`, `&`, `|` and `^` take
+  two of a type and answer that type, as numbers do, `Order.or` does and
+  `Result.or` does. A fallback that answers a different type is a method,
+  `ok_or`, not `|`.
+- **The most natural partner, where not closed.** A quantity is scaled by a
+  plain number, `Money * Nat -> Money`, since `Money * Money` means nothing;
+  an offset moves a point, `Instant + Duration -> Instant`. Pick the one
+  pairing the type is used with, and name the rest.
+- **The laws its symbol suggests.** `+` and `*` associate, `+` commutes, a
+  zero adds nothing and a one multiplies by nothing, `&` and `|` associate,
+  and `a == b` holds exactly where `a.cmp(b)` is `Eq`. None is checked, as
+  `cmp`'s are not, and an `expect`, or a property test over many values,
+  is how a type shows it keeps them.
 
 ## Precedence
 
@@ -200,6 +229,25 @@ side reads, `xs.first() is Ok(x) & x > 10`, where the right side has no
 would be an `if` or a guard. The cost is that `&` and `|` on `Bool` are the
 one place an operator is not an ordinary call, which is why `?` on their
 right is refused.
+
+### Why may an operator's operands differ in type?
+
+Because an operator is a method, and a method's types are its own: a rule
+that `+` must be `(T, T) -> T` would make the operator table the one place
+a method's signature is not its author's to choose. The few useful
+exceptions, scaling a quantity and moving a point by an offset, would then
+need names for operations everyone writes with a symbol. What makes
+overloading in other languages hard to read is several definitions of one
+operator chosen by argument types, which Faun does not have: a type has one
+`mul`, found from the left operand alone, so `a * b` always means one
+definition a reader can find. The expectations above are conventions
+because they are judgements, whether a meaning is obvious or a partner
+natural, that a compiler cannot make.
+
+The cost is that nothing stops an odd operator, and that `price * 3` does
+not make `3 * price` work: that is `Int`'s `mul`, which takes no `Money`.
+A lint flagging an operator that is neither closed nor one of the familiar
+pairings is an open question.
 
 ### Why may no program define operators?
 
