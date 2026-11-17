@@ -1,0 +1,82 @@
+# Naming
+
+This note owns how Faun names what a type or a library offers: the
+standard library's conventions for conversions, questions, fallbacks and
+errors, and where a library's names live, so a library reads like the
+standard one. Rust's [API guidelines](https://rust-lang.github.io/api-guidelines/naming.html)
+are the nearest counterpart; where Faun differs, it says why.
+
+## Conversions
+
+A conversion is named by the type it comes from or goes to:
+
+- `T.of_x(x) -> T` makes a `T` from an `x`, always: `Int.of_nat`,
+  `Set.of_list`, `F64.of_int`.
+- `T.from_x(x) -> Result(T, …)` makes a `T` from an `x` where one fits,
+  checked: `U8.from_nat`, `Nat.from_str`, `F64.from_nat`.
+- `t.to_x() -> X` is an `X` from a `t`: `to_str`, `to_nat`, `to_list`,
+  `to_bits`.
+
+```ruby
+expect U8.of_nat(300) == 44
+expect U8.from_nat(300) == Err(TooBig)
+expect Nat.from_str("42") == Ok(42)
+expect U8.of_nat(300).to_nat() == 44
+```
+
+- `of_` never fails, and may lose what does not fit: `U8.of_nat` wraps and
+  `F64.of_nat` rounds. Where nothing is lost, as in `Int.of_nat`, the name
+  is the same.
+- `from_` is the checked twin: it answers `Err` with why, rather than
+  wrapping or rounding, and is what a value worked out at run time wants.
+- `to_str` is also how a value prints itself: `"${value}"` calls it, and
+  `Printable(a)` asks for it.
+
+There is no `as_` and no `into_`. Rust tells a borrowed view, `as_`, from
+a copy, `to_`, and from a conversion that takes ownership, `into_`; Faun's
+types hold no borrows and its memory reuses what nothing else holds, so
+the three are one, `to_`.
+
+## Questions, fallbacks and failures
+
+- `is_x` asks a yes-or-no question: `is_empty`, `is_ok`, `is_digit`,
+  `is_nan`.
+- `x_or(fallback)` answers the value, or the fallback where there is none:
+  `get_or`, `ok_or`, `err_or`.
+- `try_x` is the version of `x` that stops at the first `Err`: `try_map`,
+  `try_fold`.
+- A failure is a tag named by its cause, never text: `TooBig`,
+  `Malformed`, `OutOfBounds`, `Missing`, `NotAscii`. Callers match on it,
+  and two libraries refusing for one reason may share a word.
+- A constant is a value on its type: `Nat.zero`, `Str.empty`.
+- A verb names a function that does something, `encode`, `split`, `sort`;
+  a noun names what it answers, `len`, `keys`, `first`. Neither takes a
+  `get_` prefix.
+
+## Where names live
+
+A type's block is its namespace: what concerns a type is a method of it,
+called `value.method()` or `Type.method(…)`. A capitalised word before a
+dot is a type and a lowercase one a value, so the case alone says which.
+
+A library's other functions are exported plainly, `export {encode,
+decode}`, and imported by name. Where two libraries export one name, the
+importer renames one, `import base64 {encode: base64_encode}`; a library
+does not prefix its names for it, nor declare a type only to hold them.
+
+## Open questions
+
+- **Whether `of_` should be lossless only.** `Int.of_nat` and `U8.of_nat`
+  share a prefix, but only one can lose information, and the name does
+  not say which. Rust keeps them apart, `From` for lossless conversions
+  and `as` for lossy ones. Faun could keep `of_` for lossless conversions
+  and name the lossy ones for what they do, `U8.wrapping(n)` and
+  `F64.rounding(n)`.
+- **What `|` means on a `Result`.** `a | b` calls `a.or(b)`, and `Result`
+  has no `or`. It could be the fallback, `Nat.from_str(text) | 0`, the
+  shortest spelling of `ok_or`, which would also make `get_or` redundant:
+  `list.get(i) | 0`. Or it could be Rust's `or`, the first `Ok` of two
+  results, chainable as `a | b | c`, as `Order.or` is. The fallback is the
+  far commoner need. Either way `|` binds more loosely than `==`, so it
+  wants parentheses, `(list.get(i) | 0) == 5`, and its right side is
+  worked out even where the left is `Ok`; only `Bool`'s `|` skips it.
