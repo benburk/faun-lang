@@ -95,7 +95,7 @@ a clause's or a lambda's body, an argument, a binding's value, a guard, an
 says which it is: `=` a binding, `,` a tuple, `)` a grouping, a line end the
 next line of a block.
 
-```ruby
+```ruby ignore
 edges.fold(state, |inner, edge| (
   target = edge.target
   discover(target, inner)
@@ -164,7 +164,7 @@ pattern, write `==name`; to ask two parts of one pattern equal, write the
 name twice. Both are asked by the type's `equals`, after the rest of the
 pattern has matched and before the guard.
 
-```ruby
+```ruby ignore
 found(r, node) -> r is Ok(==node)
 
 strip_prefix([byte, *rest], [byte, *prefix]) -> strip_prefix(rest, prefix)
@@ -244,7 +244,7 @@ appeared 72 times, mostly two-way steps in parsers.
 
 Dijkstra's walk back along a path shows the difference:
 
-```ruby
+```ruby ignore
 # With a helper
 back(settled, node, route) -> (
   step = settled.get_or(node, Err(Unreachable))

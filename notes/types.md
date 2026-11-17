@@ -65,7 +65,7 @@ is written, so it takes no `where` bounds. `_` stands for a type only in a
 function's signature; a data declaration or an alias states its type in
 full.
 
-```ruby
+```ruby ignore
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 ```
 
@@ -127,7 +127,7 @@ takes the type the others answer, and where every path is `[]`, so is the
 join. The joins are the branches of an `if`, the arms of an `is`, and a
 `return` or leaving line meeting its clause's or lambda's answer:
 
-```ruby
+```ruby ignore
 port! : Host -> Nat
 port!(host) -> if host.args.len() > 1 then 8080 else host.exit!(2)
 ```
@@ -165,7 +165,7 @@ swap(x, n) -> 1 + swap(True, n - 1)
 A call that grows the type each round is refused, since it would need a
 definition for every round. From the refused cases:
 
-```ruby
+```ruby ignore
 nest : (a, Nat) -> Nat
 nest(_, 0) -> 0
 nest(x, n) -> 1 + nest([x], n - 1)

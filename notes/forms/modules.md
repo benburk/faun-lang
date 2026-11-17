@@ -12,7 +12,7 @@ Every file is a module. A module imports names from another by the other's
 path, and names each one it takes. From the arena example's
 `bots/random.fn`:
 
-```ruby
+```ruby ignore
 export {RandomBot}
 
 import pcg {Random}
@@ -47,7 +47,7 @@ or through others, is refused: "import cycle through …".
 A module exports nothing it does not list. `export {…}` names what other
 modules may import, as the arena's `arena.fn` does:
 
-```ruby
+```ruby ignore
 export {Player, Tally, Score, play, pairs, tournament}
 ```
 
@@ -69,7 +69,7 @@ list is the prelude.
 A package is its root module's directory and every module it imports from
 there. Its root may begin with a header, a record of fields, each optional:
 
-```ruby
+```ruby ignore
 package {
   faun: "0.1",
   uses: {
@@ -164,7 +164,7 @@ packages are not fetched at all.
 This follows Roc's packages. A dependency may be an `https` URL to a
 bundle, a `.tar.zst` file named by the BLAKE3 hash of its bytes:
 
-```ruby
+```ruby ignore
 package {
   uses: {
     pcg: "https://example.com/pcg/1.2.0/4ZuGvfzgQ8bm8nVz7dLNYRTYHoNeuDLPdrvzeAUm7gwF.tar.zst",

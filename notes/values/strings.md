@@ -9,7 +9,7 @@ note covers only how they meet text.
 
 `Str` is valid UTF-8, held as bytes behind a private wrapper:
 
-```ruby
+```ruby ignore
 Str : List(U8).(
   # The number of bytes, which for text beyond ASCII is more than the
   # number of characters.

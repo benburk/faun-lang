@@ -23,7 +23,7 @@ are row-polymorphic, which means a type may hold "these tags, and whatever
 else is joined to them" while inference works it out. Where two rows meet,
 unification joins them into one row holding the tags of both:
 
-```ruby
+```ruby ignore
 MyError = [NotFound, SomethingElse]
 AnotherError = [Blah, NotFound]
 
@@ -48,7 +48,7 @@ do meet, the payloads must unify: joining `[Invalid(Nat), Missing]` with
 A caller that needs to know which producer failed wraps each at the join.
 A tag may be passed as a callback for this:
 
-```ruby
+```ruby ignore
 combined(n) -> (
   x = cat(n).map_err(CatFailure)?
   y = dog(n).map_err(DogFailure)?

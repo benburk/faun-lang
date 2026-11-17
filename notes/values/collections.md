@@ -57,7 +57,7 @@ compacted away when it does.
 A map updates a key as Python's `defaultdict` does, with
 `update_or(key, missing, change)`:
 
-```ruby
+```ruby ignore
 counts = counts.update_or(word, 0, |count| count + 1)
 ```
 
@@ -107,7 +107,7 @@ A key says what it is made of through `hash_into : (T, h) -> h`, generic
 over any hasher. `Hasher(h)` is an alias for a type with two methods and
 nothing more:
 
-```ruby
+```ruby ignore
 Hasher(h) = where
   h.write_u64 : (h, U64) -> h,
   h.write_bytes : (h, List(U8)) -> h
@@ -149,7 +149,7 @@ key. The container keeps the policy's value beside its entries, and each
 call to it is resolved by the policy's type at specialization, so dispatch
 stays static.
 
-```ruby
+```ruby ignore
 CaseFold : {}.(
   same : (CaseFold, Str, Str) -> Bool
   same(_, a, b) -> folded(a) == folded(b)

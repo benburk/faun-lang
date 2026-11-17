@@ -52,7 +52,7 @@ equality ([pattern matching](../forms/pattern-matching.md)).
 Both are ordinary types in the standard library, with arithmetic written as
 clauses over their constructors:
 
-```ruby
+```ruby ignore
 Nat : [Zero, Succ(Nat)].(
   sub : (Nat, Nat) -> Nat
   sub(0, _) -> 0
@@ -125,7 +125,7 @@ memory for naturals ends the program with status 2.
 `U8`, `U16`, `U32` and `U64` are `Nat` behind a private constructor, and
 every operation reduces its answer modulo `2^k`:
 
-```ruby
+```ruby ignore
 U8 : Nat.(
   add : (U8, U8) -> U8
   add(U8(a), U8(b)) -> U8((a + b) % 256)
@@ -211,7 +211,7 @@ Hashes, checksums, random generators and ciphers are written in it.
 `md5.fn` adds four `U32`s and rotates in one line, and the standard
 library's hasher multiplies a `U64` by a prime:
 
-```ruby
+```ruby ignore
 (d, b + (a + f + k + words.get_or(g, 0)).rotate_left(s), b, c)
 ```
 

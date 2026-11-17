@@ -25,7 +25,7 @@ A function type's parameters are parenthesized too, so `(Nat, Nat) -> Nat`
 takes two values. A function taking one tuple writes the tuple inside the
 parameter list:
 
-```ruby
+```ruby ignore
 swap : ((Nat, Bool)) -> (Bool, Nat)
 divmod : (Nat, Nat) -> (Nat, Nat)
 ```
@@ -37,7 +37,7 @@ nothing else. There is no `pair.0`. A pattern takes one apart wherever a
 value can be named: in a binding, a clause's head, a lambda's parameters, a
 test or a `for`:
 
-```ruby
+```ruby ignore
 (q, r) = divmod(7, 2)
 swap((n, b)) -> (b, n)
 keys(map) -> to_list(map).map(|(key, _)| key)
