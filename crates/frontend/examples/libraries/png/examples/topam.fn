@@ -1,0 +1,33 @@
+# Decodes a PNG file on standard input and writes its pixels to standard
+# output as a PAM file (Netpbm's P7) of 8-bit red, green, blue and alpha,
+# which most image tools read. A file refused says why on standard error,
+# with status one.
+
+package {
+  uses: {
+    png: "../src/png"
+  }
+}
+
+import std.host {Host}
+import png {decode, Image}
+
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.read_to_end!()
+  read is Ok(input) else return host.exit!(1)
+  decoded = decode(input)
+  decoded is Ok(image) else return (
+    written = host.stderr.write_all!("png: ${decoded}\n".to_utf8())
+    host.exit!(1)
+  )
+  wrote = host.stdout.write_all!(pam(image))
+  host.exit!(if wrote.is_ok() then 0 else 1)
+)
+
+# The image as a PAM file: its header, then its pixels as they are.
+pam : Image -> List(U8)
+pam({width, height, pixels}) ->
+  "P7\nWIDTH ${width}\nHEIGHT ${height}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n".to_utf8().concat(pixels)
+
+expect pam({width: 1, height: 1, pixels: [1, 2, 3, 4]}).drop(65) == [1, 2, 3, 4]

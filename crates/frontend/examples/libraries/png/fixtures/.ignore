@@ -1,0 +1,4 @@
+# PngSuite as it ships, and the CRC-32s generate.py writes: kept from
+# searches, and from `just format`, which would change the files it reads
+# as text.
+pngsuite/
