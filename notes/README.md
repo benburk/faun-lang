@@ -50,6 +50,8 @@ not needed.
 - [Operators](forms/operators.md): operators as methods, one `cmp`, and
   precedence
 - [Modules](forms/modules.md): imports, exports, packages and `expect`
+- [Naming](forms/naming.md): conversions, questions, fallbacks, errors and
+  where a library's names live
 - [Effects](forms/effects.md): `!` calls, `Host`, capabilities and linear
   resources
 
