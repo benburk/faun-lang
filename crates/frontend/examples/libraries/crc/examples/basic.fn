@@ -1,0 +1,24 @@
+# Prints the CRC-32 and Adler-32 of standard input, as hex words.
+
+package {
+  uses: {
+    crc: "../src/crc"
+  }
+}
+
+import crc {crc32, adler32}
+
+app : {stdin: List(U8), *} -> Str
+app(input) -> "crc32 ${hex(crc32(input.stdin))}\nadler32 ${hex(adler32(input.stdin))}"
+
+# The word's 8 hex digits, most significant first.
+hex : U32 -> Str
+hex(word) -> (
+  (a, b, c, d) = word.le_bytes()
+  Str.hex([d, c, b, a])
+)
+
+expect hex(crc32("123456789".to_utf8())) == "cbf43926"
+expect hex(adler32("Wikipedia".to_utf8())) == "11e60398"
+
+main!(host) -> host.run_stdin!(app)
