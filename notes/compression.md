@@ -4,9 +4,10 @@ This note owns what writing checksums, DEFLATE and PNG in Faun taught: a
 large, exactly specified workload of bit-level work on `U8` and `U32`, big
 byte buffers and random access into a window, with outside programs as
 oracles. The libraries are in-tree under
-`crates/frontend/examples/libraries/`: `crc`, `flate` and `png`. Each finding is a workaround the code carries, an error that
-misled, or something the standard library lacked, with what it cost and
-where it stands.
+`crates/frontend/examples/libraries/`: `crc`, `flate` and `png`. Each
+finding is a workaround the code carries, an error that misled, or
+something the standard library lacked, with what it cost and where it
+stands.
 
 ## Findings
 
@@ -74,11 +75,11 @@ error: mismatched types
    |      ------   ^^^^^^ expected `Nat`, found `Bool`
 ```
 
-which names the right place but not the cause. Inflate wrote it eight times
-before the first refusal, and twice more after. Every flag test in `flate.fn` is
-parenthesized, `(flags & 4) == 0`. C has this precedence and it is a
-known trap there; Rust binds `&` above `==`. Either the operator note
-gives the bit operators their own level above comparison, or a test
+which names the right place but not the cause. Inflate wrote it eight
+times before the first refusal, and twice more after. Every flag test in
+`flate.fn` is parenthesized, `(flags & 4) == 0`. C has this precedence and
+it is a known trap there; Rust binds `&` above `==`. Either the operator
+note gives the bit operators their own level above comparison, or a test
 `x & k == v` on numbers is refused with a message saying to parenthesize.
 
 ### A binding cannot leave, and says what to write
@@ -145,12 +146,17 @@ inlining: inflate's whole loop is one function, `codes`.
 
 ### Building a full-width table per block shows
 
-Each dynamic block builds a literal table of 2 to the longest code length
+Each dynamic block built a literal table of 2 to the longest code length
 entries, up to 32768, by `List.repeat` and a fold over the lengths: 10%
-of inflate's time on 50 MB of text, for blocks of some 16000 symbols. A
-first-level table of 9 or 10 bits with a second level for longer codes,
-as zlib builds, would cut it; this is the next step for speed, not a
-finding about Faun.
+of inflate's time on 50 MB of text, for blocks of some 16000 symbols.
+Now a table reads at most 10 bits, and a code longer than that, marked in
+the table, is read a bit at a time as puff reads every code, through how
+many codes each length has and the symbols in code order. With the
+match's length, distance and copy moved to `U64` as well, 16 MB of text
+inflates in 121 ms rather than 185. A first level of 8, 9 or 11 bits did
+no better than 10, and a second level, zlib's way, was not needed: codes
+over 10 bits are rare enough that reading them a bit at a time does not
+show in the profile.
 
 ### The match search wants words too
 
@@ -301,13 +307,77 @@ against string literals, `"IHDR" then …`, as the specification names
 them. Only a critical chunk's capital first letter needs the bytes
 themselves, `U8.is_ascii_upper`.
 
-### A slice to checksum is a copy
+### A slice to checksum is a view
 
 `Crc32.update` takes a `List(U8)`, so the CRC-32 of a chunk, its type and
-data, is `input.drop(at + 4).take(length + 4)`: `drop` is free, but `take`
-copies. Over a 9 MB file that is a few milliseconds; a walk that took a
-start and a count, or a `List` slice that shares its buffer as `drop` does,
-would need none.
+data, is `input.drop(at + 4).take(length + 4)`. Both are free: 100000
+calls of `drop(i).take(n)` cost the same at a `n` of 10 as of 100000, so
+`take` of a list shares its buffer as `drop` does, rather than walking
+`take_into` as the source reads. That a view costs nothing until the
+list it shares is grown is the next finding's other side.
+
+### A view held while its list grows copies the list
+
+Copying a match by slices rather than a byte at a time,
+`out.concat(out.drop(from).take(length))`, made inflate quadratic: 300 KB
+took 8.2 billion instructions where the byte loop takes 94 million. The
+view shares `out`'s buffer, so `out` is no longer held by one, and
+joining onto it copies all of it, every match. A probe growing a list by
+its own last three bytes 20000 times shows it: 912 million instructions
+through `concat(out.drop(k).take(3))`, 13 million through three `get`s
+into a list literal. Binding the view first changes nothing; copying it,
+`take(…).map(|byte| byte)`, puts it in a buffer of its own and the loop is
+linear again, but `reverse().reverse()` does not, since those cancel.
+
+Nothing in the source says which of `drop`, `take` and `map` copies, and
+the cost of being wrong is not a constant but a power. The copy through
+`map` read the window with fewer instructions than the byte loop, 4.48
+billion against 5.14 for 16 MB, and took as long, an allocation a match,
+so inflate kept the byte loop. A `List.extend_from(out, from, count)`,
+appending a list's own elements where it lies, as Rust's
+`extend_from_within` does, would serve every LZ77 decoder.
+
+### Splitting a walk's clauses can lose its loop
+
+Adler-32 read eight bytes a step with a clause reducing the sums when a
+count ran out, written first:
+
+```ruby ignore
+adler_bytes(low, high, 0, bytes) -> adler_bytes(low % 65521, high % 65521, adler_run, bytes)
+adler_bytes(low, high, left, [a, b, c, d, e, f, g, h, *rest]) if left >= 8 -> (
+  s1 = low + U64.of_u8(a)
+  …
+```
+
+Built natively, 16 MB said `stack overflow` and exited with status 3,
+though every call is in tail position and `faun test` held. `faun emit
+barb` shows why: Barb parted the clauses into `adler_bytes` and
+`adler_bytes, going on`, each calling the other last, and the two calls
+are calls, not a loop. In the cases tried it happened with a list pattern
+of five elements or more and five bindings or more in its body; with four
+of either the walk stayed one function. Writing the reduction last keeps
+it whole, and `crc.fn` says why beside it. A tail call between the parts
+of one walk could be a jump, as a call to itself is; until then nothing
+warns, and a test on a small input passes.
+
+### A word's arithmetic is a call in the profile
+
+In inflate's profile, `U64.add`, `U64.cmp`, `U64.sub`, `U64.shift_right`,
+`U64.to_nat` and `List.get` are functions of their own, each 1 to 3% of
+the time, about a seventh in all, besides `codes`, the loop they are
+called from. Each is a line in the standard library, `U64((a + b) %
+18446744073709551616)`, which the backend reduces to an `add`, but does
+not always inline into a large loop. `perf annotate` of `codes` also
+shows its live values stored to the stack and read back, a comparison
+made into a byte by `sete` and `movzbl` before it is tested, and small
+constants loaded by `push` and `pop`, as the deflate search's does.
+
+### An arm leaves with `return`, not `then return`
+
+Refusing a bad argument from inside a match, `_ then return
+host.exit!(2)`, is refused with "a body leaves only by a leaving line, `if
+c return x` or `c else return x`, or by an arm, `P return x`", which
+names the form wanted, `_ return host.exit!(2)`, and was fixed at once.
 
 ### Walking lists side by side beats reading them by index
 
@@ -359,42 +429,58 @@ hands out flate's `Level` and a caller imports one library.
 
 ## Throughput
 
-On x86-64, release build, over 50 MB of random bytes read from standard
-input, less the 26 ms reading them takes; zlib through Python for scale:
+`crates/frontend/examples/libraries/flate/bench/run.py` measures every
+library against Python's zlib, 1.3.2 here, on inputs made from the
+committed fixtures, so they are the same at every commit: 16 MB of the
+fixtures' 70 KB of text repeated, its repeats further apart than DEFLATE's
+window reaches, 4 MB of noise, and a 1024 by 1024 RGBA PNG of gradients
+with a little noise, its rows taking each filter in turn. Each Faun
+program reads standard input and writes standard output; its time is the
+quickest of three runs, pinned to one CPU, less the quickest time of a
+program that only reads the same input. zlib's is on bytes in memory. In
+megabytes a second of the larger side, input for checksums and deflate,
+output for inflate and PNG, on x86-64:
 
-| Checksum | Faun     | zlib      | Notes                         |
-| -------- | -------- | --------- | ----------------------------- |
-| CRC-32   | 500 MB/s | 9000 MB/s | one table lookup a byte       |
-| Adler-32 | 230 MB/s | 5500 MB/s | sums reduced every 5552 bytes |
+| Work            | Before | Now  | zlib  | zlib over now |
+| --------------- | ------ | ---- | ----- | ------------- |
+| CRC-32          | 460    | 829  | 8954  | 10.8          |
+| Adler-32        | 213    | 1590 | 5461  | 3.4           |
+| inflate, raw    | 81     | 130  | 606   | 4.7           |
+| inflate, zlib   | 60     | 122  | 560   | 4.6           |
+| inflate, gzip   | 73     | 115  | 571   | 5.0           |
+| inflate, stored | 1353   | 1689 | 23369 | 13.8          |
+| deflate, 1      | 34     | 36   | 180   | 5.0           |
+| deflate, 6      | 5.4    | 5.4  | 21    | 3.9           |
+| deflate, 9      | 3.6    | 3.6  | 14    | 3.9           |
+| PNG decode      | 35     | 44   | 372   | 8.4           |
 
-zlib's CRC-32 reads several bytes a step through several tables, and its
-Adler-32 sums 16 bytes a step; both are open to Faun as well.
+"Before" is the libraries as each stage left them, "now" after the two
+changes this section's findings give: inflate's tables and words, and the
+checksums eight bytes a step. Inflate of a zlib stream gained the most,
+since its Adler-32 was over a quarter of its time. The PNG's zlib column
+is the inflate of its image data alone, a floor under any decoder; Pillow,
+on libpng, decoded a 2048 by 2048 RGBA image at 380 MB/s. Deflate's speed
+is its search's, which this section left alone: the repeated fixture text
+holds many more matches than prose, so deflate is slower on it than on the
+repository's own source, 13.7 MB/s at level 6, and zlib slower too.
 
-Inflate, over 50 MB of the repository's own source and notes compressed
-by zlib at level 6 to a quarter of its size, measured as the gzip example
-reading standard input and writing standard output, in megabytes of
-output a second:
-
-| Stream       | Faun     | zlib     |
-| ------------ | -------- | -------- |
-| raw DEFLATE  | 100 MB/s | 510 MB/s |
-| gzip, CRC-32 | 83 MB/s  |          |
-
-Deflate, over 50 MB of the repository's own source and notes, as the
-gzip example compressing standard input to a gzip file, in megabytes of
-input a second, with zlib's through Python at the same level:
-
-| Level | Faun      | zlib      | Faun's size | zlib's size |
-| ----- | --------- | --------- | ----------- | ----------- |
-| 1     | 44 MB/s   | 181 MB/s  | 16,019,810  | 16,285,456  |
-| 6     | 13.7 MB/s | 52.1 MB/s | 13,087,687  | 13,101,272  |
-| 9     | 3.6 MB/s  | 17.5 MB/s | 12,995,702  | 13,004,460  |
+zlib's CRC-32 reads its eight bytes a step as two words, where Faun's
+reads them as eight `get`s, each checked against the list's length; its
+Adler-32 sums 16 bytes a step in vector registers.
 
 The search is zlib's, its levels' table and its lazy matching, though its
 hash is not, so sizes agree to within a percent; Faun's are a little
 smaller because each block's code is a true Huffman code cut to 15 bits
 as miniz cuts it, and each block is written whichever of stored, fixed or
-its own code is smallest. On the fixtures, raw DEFLATE:
+its own code is smallest. On the benchmark's text, gzip files:
+
+| Level | Faun      | zlib      |
+| ----- | --------- | --------- |
+| 1     | 5,967,368 | 5,977,160 |
+| 6     | 4,878,746 | 4,881,023 |
+| 9     | 4,835,952 | 4,840,685 |
+
+On the fixtures, raw DEFLATE:
 
 | Input            | Level | Faun   | zlib   |
 | ---------------- | ----- | ------ | ------ |
@@ -404,9 +490,9 @@ its own code is smallest. On the fixtures, raw DEFLATE:
 | repetitive, 68 K | 6     | 96     | 97     |
 | random, 70 KB    | 6     | 70,025 | 70,025 |
 
-PNG decoding, over images Pillow and pypng wrote, through the PAM
-example reading standard input and writing standard output, in megabytes
-of RGBA a second; Pillow, on libpng's zlib, for scale:
+PNG decoding before this section's changes, over images Pillow and pypng
+wrote, through the PAM example, in megabytes of RGBA a second, Pillow
+for scale:
 
 | Image                    | Faun    | Pillow   |
 | ------------------------ | ------- | -------- |
@@ -414,8 +500,8 @@ of RGBA a second; Pillow, on libpng's zlib, for scale:
 | 1024², 8-bit RGB, Adam7  | 34 MB/s | 300 MB/s |
 | 1024², 16-bit RGB, Adam7 | 24 MB/s | 250 MB/s |
 
-Of the 0.31 s the RGBA image takes, inflate is 0.25 s, where zlib takes
-0.04 s; reading the chunks with their CRC-32s and writing the output take
+Of the 0.31 s the RGBA image took, inflate was 0.25 s, where zlib takes
+0.04 s; reading the chunks with their CRC-32s and writing the output took
 0.03 s, and unfiltering 0.03 s. PNG decoding is as fast as inflate is.
 
 PNG encoding, through the `topng` example reading a PAM file on standard
@@ -439,6 +525,34 @@ bytes where Pillow, saving each in the colour type `topng` chose, writes
 fewest channels that hold an image exactly, grey and dropping alpha, is
 what keeps the suite's 162 images from 78,748 bytes, which Pillow writes
 saving them all as RGBA.
+
+## A ratchet workload, proposed
+
+The [ratchet](../RATCHET.md) improves the compiler against fourteen
+programs, each with a C twin. Compression would be a good fifteenth: a
+loop of words and table lookups with no allocation but a growing output,
+where this note's findings, a constant worked out at every use, a word's
+arithmetic left as calls and the search's spills, are each what a
+compiler change would move. It is not added, because `eval/` is
+protected: changing the suite starts a new series and needs approval.
+
+The proposal, for that decision:
+
+- **`crc32`**, a kernel in `eval/workloads` reading its input as bytes,
+  as `checksum` does: table-driven CRC-32 a byte at a time, the table
+  built in the program, against a C twin of 20 lines. Sizes 4 MB, 1 MB and
+  1 KB as `checksum`'s; it fits the 6502, its table 1 KB.
+- **`inflate`**, taking a size as its argument: the program writes a
+  deterministic text of that size, compresses it with fixed Huffman codes
+  and a short hash-chain search written in it, inflates the result and
+  prints the length and CRC-32 of what it read back. Both directions run
+  on every target with no input file; the C twin is the same 300 lines,
+  not zlib, so the twin measures how far the compiler is from C, not how
+  far the algorithm is from zlib's. On the 6502 at a few hundred bytes the
+  window and tables fit in 16 KB.
+
+`crc32` alone would have caught the first finding, the table rebuilt a
+byte, as a 500-fold regression.
 
 ## Related
 
