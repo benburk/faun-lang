@@ -1,0 +1,4 @@
+# Written by generate.py, byte for byte: kept from searches, and from `just
+# format`, which would end each with a newline it does not hold.
+input/
+deflate/

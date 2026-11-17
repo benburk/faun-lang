@@ -1,0 +1,385 @@
+# DEFLATE (RFC 1951) decompression, and the two containers that wrap it:
+# zlib's (RFC 1950), checked by Adler-32, and gzip's (RFC 1952), checked by
+# CRC-32. Corrupt or cut-short input answers `Err` naming why; nothing
+# panics or reads past the end.
+#
+# The reader is a bit position into the input, least significant bit
+# first, so nothing holds a bit buffer: a read of up to 17 bits takes the
+# three bytes it can span. The output is the window: a match copies from
+# the output already written, which `List.get` reads in constant time.
+
+package {
+  uses: {
+    crc: "../../crc/src/crc"
+  }
+}
+
+import crc {crc32, adler32}
+
+export {inflate, zlib_decompress, gzip_decompress, InflateError}
+
+# Every way a stream can be refused.
+InflateError = [
+  # The input ends before the stream does.
+  Truncated,
+  # A block's type is 3, which RFC 1951 reserves.
+  BadBlockType,
+  # A stored block's length and its complement disagree.
+  BadStoredLength,
+  # A Huffman code is over-subscribed, has no end of block, repeats a
+  # length that is not there, or the bits read match no code.
+  BadCode,
+  # A match reaches back before the start of the output.
+  BadDistance,
+  # A container's header is not one this reads.
+  BadHeader,
+  # The checksum the container carries is not the data's.
+  ChecksumMismatch,
+  # gzip's trailer gives another length for the data.
+  LengthMismatch,
+]
+
+# The bytes a raw DEFLATE stream holds. Anything after the final block is
+# ignored.
+inflate : List(U8) -> Result(List(U8), InflateError)
+inflate(input) -> (
+  (out, _) = inflate_at(input, 0)?
+  Ok(out)
+)
+
+# The bytes a zlib stream holds, its Adler-32 checked.
+zlib_decompress : List(U8) -> Result(List(U8), InflateError)
+zlib_decompress(input) -> (
+  input is [cmf, flg, *] else return Err(Truncated)
+  method = cmf.to_nat()
+  flags = flg.to_nat()
+  if (method & 15) != 8 | method / 16 > 7 | (method * 256 + flags) % 31 != 0 return Err(BadHeader)
+  # A preset dictionary is for a protocol to agree on; there is none here.
+  if (flags & 32) != 0 return Err(BadHeader)
+  (out, end) = inflate_at(input, 16)?
+  at = (end + 7) / 8
+  if at + 4 > input.len() return Err(Truncated)
+  if big_endian(input, at) != adler32(out).to_nat() return Err(ChecksumMismatch)
+  Ok(out)
+)
+
+# The bytes a gzip file holds: every member, one after another, as
+# `gzip -d` writes them, each checked by its CRC-32 and length.
+gzip_decompress : List(U8) -> Result(List(U8), InflateError)
+gzip_decompress(input) -> gzip_members(input, 0, [])
+
+gzip_members : (List(U8), Nat, List(U8)) -> Result(List(U8), InflateError)
+gzip_members(input, at, out) -> (
+  start = gzip_header(input, at)?
+  (member, end) = inflate_at(input, start * 8)?
+  trailer = (end + 7) / 8
+  if trailer + 8 > input.len() return Err(Truncated)
+  if little_endian(input, trailer) != crc32(member).to_nat() return Err(ChecksumMismatch)
+  if little_endian(input, trailer + 4) != member.len() % 4294967296 return Err(LengthMismatch)
+  next = trailer + 8
+  joined = out.concat(member)
+  if next >= input.len() return Ok(joined)
+  gzip_members(input, next, joined)
+)
+
+# Where the deflated data of the gzip member at `at` starts.
+gzip_header : (List(U8), Nat) -> Result(Nat, InflateError)
+gzip_header(input, at) -> (
+  if at + 10 > input.len() return Err(Truncated)
+  if byte(input, at) != 0x1f | byte(input, at + 1) != 0x8b | byte(input, at + 2) != 8 return Err(BadHeader)
+  flags = byte(input, at + 3)
+  # The reserved flags must be clear.
+  if (flags & 0xe0) != 0 return Err(BadHeader)
+  extra = if (flags & 4) == 0 then at + 10 else at + 12 + byte(input, at + 10) + byte(input, at + 11) * 256
+  name = if (flags & 8) == 0 then extra else past_zero(input, extra)?
+  comment = if (flags & 16) == 0 then name else past_zero(input, name)?
+  header_crc = if (flags & 2) == 0 then comment else comment + 2
+  if header_crc > input.len() return Err(Truncated)
+  Ok(header_crc)
+)
+
+# Just past the zero ending the string at `at`.
+past_zero : (List(U8), Nat) -> Result(Nat, InflateError)
+past_zero(input, at) -> input.get(at) is (
+  Ok(0) then Ok(at + 1)
+  Ok(_) then past_zero(input, at + 1)
+  Err(_) then Err(Truncated)
+)
+
+byte : (List(U8), Nat) -> Nat
+byte(input, at) -> input.get(at).ok_or(0).to_nat()
+
+big_endian : (List(U8), Nat) -> Nat
+big_endian(input, at) ->
+  byte(input, at) * 16777216 + byte(input, at + 1) * 65536 + byte(input, at + 2) * 256 + byte(input, at + 3)
+
+little_endian : (List(U8), Nat) -> Nat
+little_endian(input, at) ->
+  byte(input, at) + byte(input, at + 1) * 256 + byte(input, at + 2) * 65536 + byte(input, at + 3) * 16777216
+
+# The tables a stream is read with, built once a stream, since a constant
+# is worked out again wherever it is named.
+Tables = {
+  # For each length symbol from 257, its base length times 16 plus how
+  # many extra bits follow it.
+  lengths: List(U32),
+  # For each distance symbol, its base distance times 16 plus its extra
+  # bits.
+  distances: List(U32),
+}
+
+tables : Tables
+tables = {
+  lengths: [
+    3 * 16, 4 * 16, 5 * 16, 6 * 16, 7 * 16, 8 * 16, 9 * 16, 10 * 16,
+    11 * 16 + 1, 13 * 16 + 1, 15 * 16 + 1, 17 * 16 + 1,
+    19 * 16 + 2, 23 * 16 + 2, 27 * 16 + 2, 31 * 16 + 2,
+    35 * 16 + 3, 43 * 16 + 3, 51 * 16 + 3, 59 * 16 + 3,
+    67 * 16 + 4, 83 * 16 + 4, 99 * 16 + 4, 115 * 16 + 4,
+    131 * 16 + 5, 163 * 16 + 5, 195 * 16 + 5, 227 * 16 + 5,
+    258 * 16,
+  ],
+  distances: List.range(30).map(distance_entry),
+}
+
+# Distances come in pairs per number of extra bits, from 1, 2, 3 and 4
+# with none, each pair's base past the last's span.
+distance_entry : Nat -> U32
+distance_entry(symbol) if symbol < 4 -> U32.of_nat((symbol + 1) * 16)
+distance_entry(symbol) -> (
+  extra = symbol / 2 - 1
+  base = 2.pow(extra + 1) + (symbol % 2) * 2.pow(extra) + 1
+  U32.of_nat(base * 16 + extra)
+)
+
+# A position in the input, in bits. Positions are `U64` rather than `Nat`
+# because every step of the loop reads and moves one: a word the compiler
+# knows is a word runs several times faster than a natural it must check
+# for growing past one.
+Bit = U64
+
+# The output of the stream starting at bit `start`, and the bit just past
+# its final block.
+inflate_at : (List(U8), Nat) -> Result((List(U8), Nat), InflateError)
+inflate_at(input, start) -> (
+  (out, end) = blocks(input, U64.of_nat(input.len() * 8), tables, U64.of_nat(start), [])?
+  Ok((out, end.to_nat()))
+)
+
+blocks : (List(U8), Bit, Tables, Bit, List(U8)) -> Result((List(U8), Bit), InflateError)
+blocks(input, total, t, bit, out) -> (
+  if bit + 3 > total return Err(Truncated)
+  header = peek(input, bit) & 7
+  (out2, end) = block(input, total, t, bit + 3, header.shift_right(1).to_nat(), out)?
+  if (header & 1) == 1 then Ok((out2, end)) else blocks(input, total, t, end, out2)
+)
+
+block : (List(U8), Bit, Tables, Bit, Nat, List(U8)) -> Result((List(U8), Bit), InflateError)
+block(input, total, _, bit, 0, out) -> stored(input, total, bit, out)
+block(input, total, t, bit, 1, out) -> (
+  literals = huffman(fixed_literal_lengths, True)?
+  distances = huffman(List.repeat(5, 32), True)?
+  codes(input, total, t, literals, distances, bit, out)
+)
+block(input, total, t, bit, 2, out) -> (
+  (literals, distances, start) = dynamic_header(input, total, bit)?
+  codes(input, total, t, literals, distances, start, out)
+)
+block(_, _, _, _, _, _) -> Err(BadBlockType)
+
+fixed_literal_lengths : List(Nat)
+fixed_literal_lengths =
+  List.repeat(8, 144).concat(List.repeat(9, 112)).concat(List.repeat(7, 24)).concat(List.repeat(8, 8))
+
+# A stored block: to the next byte, a length and its complement, and that
+# many bytes as they are.
+stored : (List(U8), Bit, Bit, List(U8)) -> Result((List(U8), Bit), InflateError)
+stored(input, total, bit, out) -> (
+  at = (bit + 7).shift_right(3).to_nat()
+  if at * 8 + 32 > total.to_nat() return Err(Truncated)
+  length = byte(input, at) + byte(input, at + 1) * 256
+  complement = byte(input, at + 2) + byte(input, at + 3) * 256
+  if length + complement != 65535 return Err(BadStoredLength)
+  start = at + 4
+  if (start + length) * 8 > total.to_nat() return Err(Truncated)
+  Ok((out.concat(input.drop(start).take(length)), U64.of_nat((start + length) * 8)))
+)
+
+# A Huffman code read through one table indexed by the next bits, least
+# significant first, as many as `mask` keeps: each entry its symbol times
+# 16 plus its length, or nought where no code starts so.
+Huffman = {table: List(U16), mask: U64}
+
+# The canonical code whose symbols have `lengths`, a length of nought
+# leaving a symbol out. An over-subscribed code is refused, and so is an
+# incomplete one, as zlib refuses them, but where `lone` lets a lone code
+# one bit long, or none at all, stand; `BadCode` is what reading a gap
+# answers.
+huffman : (List(Nat), Bool) -> Result(Huffman, InflateError)
+huffman(lengths, lone) -> (
+  counts = lengths.fold(List.repeat(0, 16), |counts, length| counts.put(length, counts.get(length).ok_or(0) + 1))
+  width = lengths.max().ok_or(0)
+  left = unused(counts, 1, 1)?
+  if left > 0 & (width > 1 | !lone) return Err(BadCode)
+  firsts = first_codes(counts, 1, 0, [0])
+  size = 2.pow(width)
+  (_, table) = lengths.enumerate().fold((firsts, List.repeat(U16.of_nat(0), size)), |(next, table), (symbol, length)|
+    if length == 0 then (next, table)
+    else (
+      code = next.get(length).ok_or(0)
+      entry = U16.of_nat(symbol * 16 + length)
+      (next.put(length, code + 1), fill(table, reversed(code, length, 0), 2.pow(length), size, entry))
+    ))
+  Ok({table, mask: U64.of_nat(size - 1)})
+)
+
+# How many codes of the longest length are left unused, or `BadCode`
+# where some length has more codes than are left for it.
+unused : (List(Nat), Nat, Nat) -> Result(Nat, InflateError)
+unused(_, 16, left) -> Ok(left)
+unused(counts, length, left) -> (
+  room = left * 2
+  count = counts.get(length).ok_or(0)
+  if count > room then Err(BadCode) else unused(counts, length + 1, room - count)
+)
+
+# Each length's first code, as RFC 1951 counts them out.
+first_codes : (List(Nat), Nat, Nat, List(Nat)) -> List(Nat)
+first_codes(_, 16, _, firsts) -> firsts
+first_codes(counts, length, code, firsts) -> (
+  next = (code + counts.get(length - 1).ok_or(0) * (length > 1).select(1, 0)) * 2
+  first_codes(counts, length + 1, next, firsts.append(next))
+)
+
+reversed : (Nat, Nat, Nat) -> Nat
+reversed(_, 0, done) -> done
+reversed(code, Succ(left), done) -> reversed(code / 2, left, done * 2 + code % 2)
+
+# Every index below `size` whose low bits are `index`'s, `step` apart.
+fill : (List(U16), Nat, Nat, Nat, U16) -> List(U16)
+fill(table, index, step, size, entry) if index < size -> fill(table.put(index, entry), index + step, step, size, entry)
+fill(table, _, _, _, _) -> table
+
+# The next symbol of `code` at `bit`, and the bit after it.
+decode : (List(U8), Bit, Huffman, Bit) -> Result((U64, Bit), InflateError)
+decode(input, total, {table, mask}, bit) -> (
+  entry = U64.of_u16(table.get((peek(input, bit) & mask).to_nat()).ok_or(0))
+  length = entry & 15
+  if length == 0 return Err(BadCode)
+  if bit + length > total return Err(Truncated)
+  Ok((entry.shift_right(4), bit + length))
+)
+
+# The bits from `bit` on, the first the least significant: at least 17 of
+# them, enough for any code or extra bits DEFLATE reads at once. Bits past
+# the input read as nought; a caller checks it has them.
+peek : (List(U8), Bit) -> U64
+peek(input, bit) -> (
+  at = bit.shift_right(3).to_nat()
+  word = U64.of_le_bytes(input.get(at).ok_or(0), input.get(at + 1).ok_or(0), input.get(at + 2).ok_or(0), 0, 0, 0, 0, 0)
+  word.shift_right((bit & 7).to_nat())
+)
+
+# The `count` bits at `bit`.
+bits : (List(U8), Bit, U64) -> U64
+bits(input, bit, count) -> peek(input, bit) & (U64.of_nat(1).shift_left(count.to_nat()) - 1)
+
+# A dynamic block's two codes, and where its data starts.
+dynamic_header : (List(U8), Bit, Bit) -> Result((Huffman, Huffman, Bit), InflateError)
+dynamic_header(input, total, bit) -> (
+  if bit + 14 > total return Err(Truncated)
+  literal_count = bits(input, bit, 5).to_nat() + 257
+  distance_count = bits(input, bit + 5, 5).to_nat() + 1
+  length_count = bits(input, bit + 10, 4).to_nat() + 4
+  lengths_start = bit + 14 + U64.of_nat(length_count * 3)
+  if lengths_start > total return Err(Truncated)
+  order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+  code_lengths = order.take(length_count).enumerate().fold(List.repeat(0, 19), |lengths, (i, symbol)|
+    lengths.put(symbol, bits(input, bit + 14 + U64.of_nat(i * 3), 3).to_nat()))
+  length_code = huffman(code_lengths, False)?
+  (lengths, start) = code_lengths_read(input, total, length_code, lengths_start, literal_count + distance_count, [])?
+  # A block with no end-of-block code could never end.
+  if lengths.get(256).ok_or(0) == 0 return Err(BadCode)
+  literals = huffman(lengths.take(literal_count), True)?
+  distances = huffman(lengths.drop(literal_count), True)?
+  Ok((literals, distances, start))
+)
+
+# `count` code lengths, read through the code-length code, with its runs.
+code_lengths_read : (List(U8), Bit, Huffman, Bit, Nat, List(Nat)) -> Result((List(Nat), Bit), InflateError)
+code_lengths_read(input, total, code, bit, count, lengths) -> (
+  if lengths.len() >= count return (lengths.len() == count).select(Ok((lengths, bit)), Err(BadCode))
+  (symbol, at) = decode(input, total, code, bit)?
+  if symbol < 16 return code_lengths_read(input, total, code, at, count, lengths.append(symbol.to_nat()))
+  (value, extra, least) = symbol.to_nat() is (
+    16 then (lengths.last().ok_or(16), 2, 3)
+    17 then (0, 3, 3)
+    _ then (0, 7, 11)
+  )
+  # A repeat of the previous length needs one.
+  if value == 16 return Err(BadCode)
+  if at + extra > total return Err(Truncated)
+  run = least + bits(input, at, extra).to_nat()
+  code_lengths_read(input, total, code, at + extra, count, lengths.concat(List.repeat(value, run)))
+)
+
+# A block's symbols to its end: literals written, matches copied from the
+# output so far.
+codes : (List(U8), Bit, Tables, Huffman, Huffman, Bit, List(U8)) -> Result((List(U8), Bit), InflateError)
+codes(input, total, t, literals, distances, bit, out) -> (
+  (symbol, at) = decode(input, total, literals, bit)?
+  if symbol < 256 return codes(input, total, t, literals, distances, at, out.append(symbol.to_u8()))
+  if symbol == 256 return Ok((out, at))
+  t.lengths.get((symbol - 257).to_nat()) is Ok(length_entry) else return Err(BadCode)
+  (length, after_length) = extra(input, total, length_entry, at)?
+  (distance_symbol, at2) = decode(input, total, distances, after_length)?
+  t.distances.get(distance_symbol.to_nat()) is Ok(distance_entry) else return Err(BadDistance)
+  (distance, after) = extra(input, total, distance_entry, at2)?
+  written = out.len()
+  if distance > written return Err(BadDistance)
+  codes(input, total, t, literals, distances, after, copy(out, written - distance, length))
+)
+
+# A base read from its table's entry, plus its extra bits, and the bit
+# after them.
+extra : (List(U8), Bit, U32, Bit) -> Result((Nat, Bit), InflateError)
+extra(input, total, entry, bit) -> (
+  word = U64.of_u32(entry)
+  count = word & 15
+  if bit + count > total return Err(Truncated)
+  Ok((word.shift_right(4).to_nat() + bits(input, bit, count).to_nat(), bit + count))
+)
+
+# `length` bytes from `from` on appended, one at a time, so a match may
+# overlap what it writes and repeat it.
+copy : (List(U8), Nat, Nat) -> List(U8)
+copy(out, _, 0) -> out
+copy(out, from, Succ(left)) -> copy(out.append(out.get(from).ok_or(0)), from + 1, left)
+
+# A stored block of "hi", final.
+expect inflate([1, 2, 0, 0xfd, 0xff, 'h', 'i']) == Ok("hi".to_utf8())
+
+# Fixed Huffman: "a" from Python's zlib.compress(b"a", wbits=-15).
+expect inflate([0x4b, 0x04, 0x00]) == Ok("a".to_utf8())
+
+# An overlapping match: "abcabcabcabc".
+expect inflate([0x4b, 0x4c, 0x4a, 0x4e, 0x84, 0x21, 0x00]) == Ok("abcabcabcabc".to_utf8())
+
+expect inflate([]) == Err(Truncated)
+expect inflate([0x07]) == Err(BadBlockType)
+expect inflate([1, 2, 0, 0xfd, 0xfe, 'h', 'i']) == Err(BadStoredLength)
+expect inflate([1, 2, 0, 0xfd, 0xff, 'h']) == Err(Truncated)
+expect inflate([0x4b, 0x4c, 0x4a, 0x4e]) == Err(Truncated)
+
+# zlib.compress(b"hello") and gzip.compress(b"hello", mtime=0).
+expect zlib_decompress([0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0x06, 0x2c, 0x02, 0x15]) == Ok("hello".to_utf8())
+expect zlib_decompress([0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0x06, 0x2c, 0x02, 0x16]) == Err(ChecksumMismatch)
+expect zlib_decompress([0x78, 0x9d, 0xcb]) == Err(BadHeader)
+expect gzip_decompress([
+  0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 2, 0xff, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00,
+  0x86, 0xa6, 0x10, 0x36, 5, 0, 0, 0,
+]) == Ok("hello".to_utf8())
+expect gzip_decompress([
+  0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 2, 0xff, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00,
+  0x86, 0xa6, 0x10, 0x36, 6, 0, 0, 0,
+]) == Err(LengthMismatch)

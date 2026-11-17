@@ -1,0 +1,44 @@
+# A small gzip: `gzip -d` reads a gzip file on standard input and writes
+# what it holds to standard output. `--zlib` and `--raw` read a zlib
+# stream or raw DEFLATE instead. A stream refused says why on standard
+# error, with status one; a command line not understood gives the usage,
+# with status two.
+
+package {
+  uses: {
+    flate: "../src/flate"
+  }
+}
+
+import std.host {Host}
+import flate {inflate, zlib_decompress, gzip_decompress}
+
+usage : Str
+usage = "usage: gzip -d [--zlib | --raw] < input > output"
+
+main! : Host -> []
+main!(host) -> (
+  command = host.args.drop(1)
+  if command != ["-d"] & command != ["-d", "--zlib"] & command != ["-d", "--raw"] return (
+    written = host.stderr.write_all!("${usage}\n".to_utf8())
+    host.exit!(2)
+  )
+  read = host.stdin.read_to_end!()
+  read is Ok(input) else return host.exit!(1)
+  decoded = command is (
+    [_, "--zlib"] then zlib_decompress(input)
+    [_, "--raw"] then inflate(input)
+    _ then gzip_decompress(input)
+  )
+  decoded is Ok(output) else return (
+    written = host.stderr.write_all!("gzip: ${decoded}\n".to_utf8())
+    host.exit!(1)
+  )
+  wrote = host.stdout.write_all!(output)
+  host.exit!(if wrote.is_ok() then 0 else 1)
+)
+
+expect gzip_decompress([
+  0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 2, 0xff, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00,
+  0x86, 0xa6, 0x10, 0x36, 5, 0, 0, 0,
+]) == Ok("hello".to_utf8())
