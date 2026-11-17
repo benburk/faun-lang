@@ -202,10 +202,22 @@ stored(input, total, bit, out) -> (
   Ok((out.concat(input.drop(start).take(length)), U64.of_nat((start + length) * 8)))
 )
 
-# A Huffman code read through one table indexed by the next bits, least
-# significant first, as many as `mask` keeps: each entry its symbol times
-# 16 plus its length, or nought where no code starts so.
-Huffman = {table: List(U16), mask: U64}
+# A Huffman code read through a table indexed by its next bits, least
+# significant first, as many as `mask` keeps, at most `quick_bits`: each
+# entry its symbol times 16 plus its length, `long` where a code longer
+# than the table starts so, or nought where none does. A long code is read
+# a bit at a time, as puff reads every code, through how many codes each
+# length has and the symbols in the code's order.
+Huffman = {table: List(U16), mask: U64, counts: List(Nat), symbols: List(Nat)}
+
+# How many bits the table of a code reads at once. Wider tables take
+# fewer codes to the slow path, but a table is built for every block: one
+# of 2^15 entries for each dynamic block cost a sixth of inflating text.
+quick_bits : Nat
+quick_bits = 10
+
+long : U16
+long = 0xfff0
 
 # The canonical code whose symbols have `lengths`, a length of nought
 # leaving a symbol out. An over-subscribed code is refused, and so is an
@@ -219,16 +231,30 @@ huffman(lengths, lone) -> (
   left = unused(counts, 1, 1)?
   if left > 0 & (width > 1 | !lone) return Err(BadCode)
   firsts = first_codes(counts, 1, 0, [0])
-  size = 2.pow(width)
+  quick = width.min(quick_bits)
+  size = 2.pow(quick)
   (_, table) = lengths.enumerate().fold((firsts, List.repeat(U16.of_nat(0), size)), |(next, table), (symbol, length)|
     if length == 0 then (next, table)
     else (
       code = next.get(length).ok_or(0)
-      entry = U16.of_nat(symbol * 16 + length)
-      (next.put(length, code + 1), fill(table, reversed(code, length, 0), 2.pow(length), size, entry))
+      at = reversed(code, length, 0)
+      (next.put(length, code + 1), place(table, at, length, size, U16.of_nat(symbol * 16 + length)))
     ))
-  Ok({table, mask: U64.of_nat(size - 1)})
+  symbols = if width > quick then in_code_order(lengths) else []
+  Ok({table, mask: U64.of_nat(size - 1), counts, symbols})
 )
+
+# A code `length` bits long whose bits, first first, are `at`'s: in every
+# entry it starts where it fits the table, and as `long` where it does not.
+place : (List(U16), Nat, Nat, Nat, U16) -> List(U16)
+place(table, at, length, size, _) if length > quick_bits -> table.put(at % size, long)
+place(table, at, length, size, entry) -> fill(table, at, 2.pow(length), size, entry)
+
+# The symbols that have codes, shortest code first and in order within a
+# length, which is the order of their codes.
+in_code_order : List(Nat) -> List(Nat)
+in_code_order(lengths) ->
+  lengths.enumerate().filter(|(_, length)| length > 0).sort_on(|(symbol, length)| length * 512 + symbol).map(|(symbol, _)| symbol)
 
 # How many codes of the longest length are left unused, or `BadCode`
 # where some length has more codes than are left for it.
@@ -247,12 +273,34 @@ fill(table, _, _, _, _) -> table
 
 # The next symbol of `code` at `bit`, and the bit after it.
 decode : (List(U8), Bit, Huffman, Bit) -> Result((U64, Bit), InflateError)
-decode(input, total, {table, mask}, bit) -> (
-  entry = U64.of_u16(table.get((peek(input, bit) & mask).to_nat()).ok_or(0))
+decode(input, total, code is {table, mask, *}, bit) -> (
+  word = peek(input, bit)
+  entry = U64.of_u16(table.get((word & mask).to_nat()).ok_or(0))
   length = entry & 15
-  if length == 0 return Err(BadCode)
+  if length == 0 return slow_decode(total, code, bit, word, entry)
   if bit + length > total return Err(Truncated)
   Ok((entry.shift_right(4), bit + length))
+)
+
+# A code longer than the table reads, or a gap.
+slow_decode : (Bit, Huffman, Bit, U64, U64) -> Result((U64, Bit), InflateError)
+slow_decode(total, {counts, symbols, *}, bit, word, entry) -> (
+  if entry != U64.of_u16(long) return Err(BadCode)
+  (symbol, length) = canonical(word, counts, symbols, 1, 0, 0, 0)?
+  if bit + U64.of_nat(length) > total return Err(Truncated)
+  Ok((U64.of_nat(symbol), bit + U64.of_nat(length)))
+)
+
+# puff's decoding, a bit at a time: `code` the bits read so far, `first`
+# the first code of `length` bits, and `index` how many symbols have
+# shorter codes.
+canonical : (U64, List(Nat), List(Nat), Nat, Nat, Nat, Nat) -> Result((Nat, Nat), InflateError)
+canonical(_, _, _, 16, _, _, _) -> Err(BadCode)
+canonical(word, counts, symbols, length, code, first, index) -> (
+  read = code + (word.shift_right(length - 1) & 1).to_nat()
+  count = counts.get(length).ok_or(0)
+  if read < first + count return Ok((symbols.get(index + read - first).ok_or(0), length))
+  canonical(word, counts, symbols, length + 1, read * 2, (first + count) * 2, index + count)
 )
 
 # The bits from `bit` on, the first the least significant: at least 17 of
@@ -320,26 +368,26 @@ codes(input, total, t, literals, distances, bit, out) -> (
   (distance_symbol, at2) = decode(input, total, distances, after_length)?
   t.distances.get(distance_symbol.to_nat()) is Ok(distance_entry) else return Err(BadDistance)
   (distance, after) = extra(input, total, distance_entry, at2)?
-  written = out.len()
+  written = U64.of_nat(out.len())
   if distance > written return Err(BadDistance)
   codes(input, total, t, literals, distances, after, copy(out, written - distance, length))
 )
 
 # A base read from its table's entry, plus its extra bits, and the bit
 # after them.
-extra : (List(U8), Bit, U32, Bit) -> Result((Nat, Bit), InflateError)
+extra : (List(U8), Bit, U32, Bit) -> Result((U64, Bit), InflateError)
 extra(input, total, entry, bit) -> (
   word = U64.of_u32(entry)
   count = word & 15
   if bit + count > total return Err(Truncated)
-  Ok((word.shift_right(4).to_nat() + bits(input, bit, count).to_nat(), bit + count))
+  Ok((word.shift_right(4) + bits(input, bit, count), bit + count))
 )
 
 # `length` bytes from `from` on appended, one at a time, so a match may
 # overlap what it writes and repeat it.
-copy : (List(U8), Nat, Nat) -> List(U8)
+copy : (List(U8), U64, U64) -> List(U8)
 copy(out, _, 0) -> out
-copy(out, from, Succ(left)) -> copy(out.append(out.get(from).ok_or(0)), from + 1, left)
+copy(out, from, left) -> copy(out.append(out.get(from.to_nat()).ok_or(0)), from + 1, left - 1)
 
 # A stored block of "hi", final.
 expect inflate([1, 2, 0, 0xfd, 0xff, 'h', 'i']) == Ok("hi".to_utf8())
