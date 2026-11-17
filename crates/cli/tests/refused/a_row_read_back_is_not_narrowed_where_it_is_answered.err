@@ -3,5 +3,5 @@ error: `Other` is not among the tags of `[Gone]`, which admits no others
   |
 3 | first : List(Result(Nat, [Gone, Other])) -> Result(Nat, [Gone])
   |                                             ------------------- expected `Result(Nat, [Gone])` because of return type
-4 | first(results) -> results.get_or(0, Err(Gone))
-  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4 | first(results) -> results.get(0).ok_or(Err(Gone))
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

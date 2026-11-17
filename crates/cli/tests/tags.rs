@@ -100,13 +100,13 @@ const RUNNING: &[(&str, &str, u32)] = &[
          read(Box(inner)) -> inner.held
 
          first : List(Result(e, [Gone])) -> Result(e, [Gone])
-         first(results) -> results.get_or(0, Err(Gone))
+         first(results) -> results.get(0).ok_or(Err(Gone))
 
          Table : {rows: List(Result(Nat, [Gone])), size: Nat}
 
          doubled : Table -> Result(Nat, [Gone])
          doubled(Table({rows, *})) -> (
-           n = rows.get_or(0, Err(Gone))?
+           n = rows.get(0).ok_or(Err(Gone))?
            Ok(n * 2)
          )
 

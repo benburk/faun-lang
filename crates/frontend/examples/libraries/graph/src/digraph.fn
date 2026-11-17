@@ -36,7 +36,7 @@ DiGraph(e) : {outgoing: List(List(Edge(e))), incoming: List(List(Edge(e))), edge
   # The edges leaving `node`, in the order they were given, and none from a
   # node the graph does not have.
   edges_from : (DiGraph(e), Nat) -> List(Edge(e))
-  edges_from(DiGraph({outgoing, *}), node) -> outgoing.get_or(node, [])
+  edges_from(DiGraph({outgoing, *}), node) -> outgoing.get(node).ok_or([])
 
   # The targets of the edges leaving `node`, one for each edge.
   neighbors : (DiGraph(e), Nat) -> List(Nat)
@@ -44,7 +44,7 @@ DiGraph(e) : {outgoing: List(List(Edge(e))), incoming: List(List(Edge(e))), edge
 
   # How many edges come into `node`.
   in_degree : (DiGraph(e), Nat) -> Nat
-  in_degree(DiGraph({incoming, *}), node) -> incoming.get_or(node, []).len()
+  in_degree(DiGraph({incoming, *}), node) -> incoming.get(node).ok_or([]).len()
 
   # The graph with every edge turned round: what reaches a node here leaves
   # it there.

@@ -103,7 +103,7 @@ remaining(text, limits) -> (
 )
 
 offer : (List(U8), Nat, Bounds, Search) -> Search
-offer(text, steps, _, state) if state.seen.get_or(text, steps + 1) <= steps -> state
+offer(text, steps, _, state) if state.seen.get(text).ok_or(steps + 1) <= steps -> state
 offer(text, _, limits, state) if limits.bytes == 0 & text.len() > 1 -> state
 offer(text, _, limits, state) if limits.weight == 0 & weight(text) > 1 -> state
 # If no forward RHS contains e, the initial electron disappears on the first
@@ -114,7 +114,7 @@ offer(text, steps, limits, state) ->
    seen: state.seen.insert(text, steps)}
 
 expand : (List(Rule), Bounds, List(U8), Nat, Search) -> Search
-expand(_, _, text, steps, state) if state.seen.get_or(text, steps) < steps -> state
+expand(_, _, text, steps, state) if state.seen.get(text).ok_or(steps) < steps -> state
 expand(reverse_rules, limits, text, steps, state) ->
   products(reverse_rules, text).to_list().fold(state, |next, made| offer(made, steps + 1, limits, next))
 

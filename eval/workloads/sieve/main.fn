@@ -11,7 +11,7 @@ strike(prime, at, step) -> strike(prime.put(at, False), at + step, step)
 # first one no smaller prime has struck lies.
 sieve : (List(Bool), Nat) -> List(Bool)
 sieve(prime, n) if n * n >= prime.len() -> prime
-sieve(prime, n) if prime.get_or(n, False) -> sieve(strike(prime, n * n, n), n + 1)
+sieve(prime, n) if prime.get(n).ok_or(False) -> sieve(strike(prime, n * n, n), n + 1)
 sieve(prime, n) -> sieve(prime, n + 1)
 
 primes : Nat -> Nat

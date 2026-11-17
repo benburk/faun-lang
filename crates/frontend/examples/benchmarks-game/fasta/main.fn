@@ -59,7 +59,7 @@ main! : Host -> []
 main!(host) -> (
   n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
   one = host.print!(">ONE Homo sapiens alu\n")
-  repeated = emit!(host, 2 * n, 0, |i| ((i + 1) % alu.len(), alu.get_or(i, 0)))
+  repeated = emit!(host, 2 * n, 0, |i| ((i + 1) % alu.len(), alu.get(i).ok_or(0)))
   two = host.print!(">TWO IUB ambiguity codes\n")
   drawn = random!(host, 3 * n, 42, "acgtBDHKMNRSVWY", [27, 12, 12, 27, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
   seed = drawn.ok_or(42)

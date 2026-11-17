@@ -95,7 +95,7 @@ of equality, asked before the clause's guard.
 `List` follows Ori's standard list: `len`, `is_empty`, `append`, `concat`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
 `any`, `all`, `fold`, `fold_until`, `try_fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
-`get`, `get_or`, `put`, `set`, `exchange`, `try_map`, `find`, `find_index`,
+`get`, `put`, `set`, `exchange`, `try_map`, `find`, `find_index`,
 `partition_point`, `equals`,
 `contains`, `sum`, `take`, `drop`, `take_while`, `drop_while`, `split_at`,
 `partition`, `zip`, `unzip`, `cross`, `enumerate`, `windows`, `min`, `max`,
@@ -125,7 +125,7 @@ import, and rows of tags join by unification where values meet, so
 the body, which may answer only those tags, and open to callers, which may
 join it with their own. A closed row a body answers where its signature's
 row stands is rebuilt in that row, however the body came by it: bound by a
-pattern, answered by a call such as `results.get_or(0, Err(Gone))`, or read
+pattern, answered by a call such as `results.get(0).ok_or(Err(Gone))`, or read
 from a field. A row in a parameter is what a definition handles
 and stays closed. Clauses, or an `is`'s arms, that take a row apart with no
 catch-all close it, so a caller cannot hand them a tag nothing matches. A closed row answered
@@ -208,7 +208,7 @@ is exported. `SortedMap` and `SortedSet` are AVL trees ordered by the key's
 list by the container, so the caller says which: `Map.of_list(entries)`,
 `Map.grouped(values, key)` gathering values by a key, and
 `Map.counted(values)` counting how many times each occurs, as Python's
-`Counter` does, `Map.counted(["a", "b", "a"]).get_or("a", 0)` being 2.
+`Counter` does, `Map.counted(["a", "b", "a"]).get("a").ok_or(0)` being 2.
 `SortedMap` has the same three, its keys in order, and both sorted
 containers answer the part of themselves from a key on, `from(low)`, or
 between two, `range(low, high)`, `high` itself left out, walking only the
@@ -827,7 +827,7 @@ start and what it asks of it is found on `Host` without importing it.
 `Host` is authority carrying what its target hands the program: `host.args`,
 the arguments it was run with, its own name first, read like any record
 field. `host.args.len()` is how many there are, and
-`host.args.get_or(1, "world")` the first after its name. In Barb, `Host` holds
+`host.args.get(1).ok_or("world")` the first after its name. In Barb, `Host` holds
 its fields itself, `Host(args: List<Str>)`, and `main!` is the entry as
 written. A target hands the entry the arguments as C lays them out, a count
 and where their addresses lie, as its startup table says; machine lowering

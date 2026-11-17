@@ -156,9 +156,6 @@ List(a) : [Nil, Cons(a, List(a))].(
   get : (List(a), Nat) -> Result(a, [OutOfBounds])
   get(values, index) -> front(drop(values, index))
 
-  get_or : (List(a), Nat, a) -> a
-  get_or(values, index, fallback) -> get(values, index).ok_or(fallback)
-
   # The list with the element at `index` replaced by `value`, and unchanged
   # where there is none. A list nothing else holds is written where it
   # lies, so a list threaded through repeated `put`s is not copied: written

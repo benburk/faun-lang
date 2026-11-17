@@ -11,7 +11,7 @@ factorial(m) -> m * factorial(m - 1)
 
 # Effectful functions come from the host, and end with an exclamation mark
 main!(host) -> (
-  name = host.args.get_or(1, "world")
+  name = host.args.get(1).ok_or("world")
   host.println!("Hello, ${name}!")
   host.exit!(0)
 )

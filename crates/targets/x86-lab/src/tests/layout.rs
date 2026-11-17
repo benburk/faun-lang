@@ -58,8 +58,8 @@ raw = [[255, 192], [0, 216], [128]]
 main! : Host -> []
 main!(host) -> (
   at = host.args.len()
-  text = texts.get_or(at, "")
-  bytes = raw.get_or(at - 1, [])
+  text = texts.get(at).ok_or("")
+  bytes = raw.get(at - 1).ok_or([])
   tail = text.to_utf8().drop(22)
   grown = bytes.append(42)
   result = [text, Str.hex(tail), Str.hex(bytes), Str.hex(grown)].join("|")
@@ -85,7 +85,7 @@ names = ["ash", "beech", "elm"]
 
 pick : (Nat, List(Str), Str) -> Str
 pick(n, table, last) -> (
-  next = table.get_or(n % table.len(), "")
+  next = table.get(n % table.len()).ok_or("")
   if n == 0 then last.concat(next) else pick(n - 1, table, next)
 )
 
@@ -183,7 +183,7 @@ main! : Host -> []
 main!(host) -> (
   read = host.stdin.read!(2)
   read is Ok(Data(bytes)) else return host.exit!(1)
-  byte = bytes.get_or(0, 0)
+  byte = bytes.get(0).ok_or(0)
   a = List.repeat(byte, 7)
   b = List.repeat(byte, 31)
   c = List.repeat(byte, 47)
@@ -191,7 +191,7 @@ main!(host) -> (
   large = List.repeat(byte, 300)
   previous = c.drop(12)
   changed = c.put(12, 17)
-  host.print!(Str.hex([a.get_or(6, 0), b.get_or(30, 0), previous.get_or(0, 0), changed.get_or(12, 0), d.get_or(92, 0), large.get_or(299, 0)]))
+  host.print!(Str.hex([a.get(6).ok_or(0), b.get(30).ok_or(0), previous.get(0).ok_or(0), changed.get(12).ok_or(0), d.get(92).ok_or(0), large.get(299).ok_or(0)]))
   host.exit!(0)
 )
 ";

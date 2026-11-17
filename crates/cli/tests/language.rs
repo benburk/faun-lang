@@ -602,7 +602,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
     (
         "a sift down closes the gap to its bound, once built",
         "at : (List(Nat), Nat) -> Nat
-         at(xs, i) -> xs.get_or(i, 0)
+         at(xs, i) -> xs.get(i).ok_or(0)
 
          larger : (List(Nat), Nat, Nat, Nat) -> Nat
          larger(xs, a, b, n) if b < n & at(xs, a) < at(xs, b) -> b
@@ -693,7 +693,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> (
            xs = [5, host.args.len(), 4, 2, 3]
            sorted = sort(xs)
-           host.exit!(U8.of_nat(sorted.get_or(0, 9) * 10 + tails(xs) + fronts(xs) + halvings(sorted.len())))
+           host.exit!(U8.of_nat(sorted.get(0).ok_or(9) * 10 + tails(xs) + fronts(xs) + halvings(sorted.len())))
          )",
         10 + 5 + 5 + 3,
     ),
