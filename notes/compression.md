@@ -309,6 +309,54 @@ copies. Over a 9 MB file that is a few milliseconds; a walk that took a
 start and a count, or a `List` slice that shares its buffer as `drop` does,
 would need none.
 
+### Walking lists side by side beats reading them by index
+
+The encoder's first filter pass read every byte and its neighbours by
+index, `samples.get(at - stride).ok_or(0)` and the like, and scored the
+five filters in five walks, each matching the filter for every byte. A
+2048 by 2048 RGBA image took 1.8 s to filter, 9 MB/s, before deflate saw
+a byte. Scoring all five in one walk, each byte and its neighbours read
+once, took encoding at level 1 from 2.60 s to 1.57 s. Walking the row as
+four lists side by side, `costs([x, *xs], [a, *as], [b, *bs], [c, *cs],
+…)`, the row, itself from one pixel on, the row above and the row above
+from one pixel on, took level 0 from 1.02 s to 0.59 s, and the profile's
+`nat.from_word` and `nat.to_word`, 11% before, went away.
+
+`drop` shares the buffer, so each cursor costs nothing to make, and a
+pattern reads its head with no `Result` and no index to work out. What
+the walk loses is the edges: before the first row and left of the first
+pixel there are noughts, so the encoder keeps one row of noughts and
+walks each row twice, its first pixel against noughts and the rest
+against itself. The decoder's `unfilter_row` indexes into the output as
+it grows, which is why it cannot do the same: the bytes to its left are
+not written until it gets there.
+
+### A smallest-by-key is a tuple's `min`
+
+Choosing the filter with the smallest score is `min` over `(score,
+filter)` pairs, taken apart with `map_ok` and `ok_or`: there is a
+`sort_on` but no `min_on`, nor an `index_of_min`. Tuples compare in
+order, so it is right, ties going to the lower filter as libpng's do; a
+`min_on(|(score, _)| score)` would say so without depending on it.
+
+### Reading a header out of bytes has no search
+
+Finding where a PAM header ends, `ENDHDR\n`, has no `List` search for a
+run of elements, nor a `Str` one that answers where. The example reads
+the header a line at a time, `take_while(|byte| byte != '\n')` then
+`Str.from_ascii` and `split(" ")`, and matches each line's words against
+literals, `["WIDTH", n] then …`, which reads well; the Rust test does the
+same search with `windows`.
+
+### Record update and rows of tags join without asking
+
+The example's flags update an `Encoding` as they are read,
+`{filtering: Unfiltered, *encoding}`, and its result joins the PAM
+reader's failure and the encoder's, `image_of(input).and_then(|image|
+encode(image, encoding))`, `[NotPam]` and `[BadSize]` becoming one row
+with nothing declared. A module can export a name it imported, so `png`
+hands out flate's `Level` and a caller imports one library.
+
 ## Throughput
 
 On x86-64, release build, over 50 MB of random bytes read from standard
@@ -369,6 +417,28 @@ of RGBA a second; Pillow, on libpng's zlib, for scale:
 Of the 0.31 s the RGBA image takes, inflate is 0.25 s, where zlib takes
 0.04 s; reading the chunks with their CRC-32s and writing the output take
 0.03 s, and unfiltering 0.03 s. PNG decoding is as fast as inflate is.
+
+PNG encoding, through the `topng` example reading a PAM file on standard
+input and writing a PNG file, in megabytes of RGBA a second; Pillow
+saving the same image, in RGBA for the first and RGB for the second, as
+`topng` writes them:
+
+| Image, level         | Faun     | Size       | Pillow  | Size      |
+| -------------------- | -------- | ---------- | ------- | --------- |
+| 2048², noisy RGBA, 6 | 3.1 MB/s | 6,021,518  | 17 MB/s | 6,052,244 |
+| 2048², noisy RGBA, 1 | 16 MB/s  | 6,453,818  |         |           |
+| 2048², noisy RGBA, 0 | 31 MB/s  | 16,783,684 |         |           |
+| 2048², opaque RGB, 6 | 4.4 MB/s | 5,391,483  | 16 MB/s | 5,336,787 |
+| 2048², opaque RGB, 1 | 18 MB/s  | 6,080,092  |         |           |
+
+At level 6 deflate's search is 65% of the time, and the filtering, at
+level 0, about 0.5 s; filtering is libpng's, so sizes are Pillow's within
+a percent. Over every valid PngSuite image, the encoder writes 67,060
+bytes where Pillow, saving each in the colour type `topng` chose, writes
+67,112, and 65,196 with `optimize`; at level 9, 65,022. Choosing the
+fewest channels that hold an image exactly, grey and dropping alpha, is
+what keeps the suite's 162 images from 78,748 bytes, which Pillow writes
+saving them all as RGBA.
 
 ## Related
 
