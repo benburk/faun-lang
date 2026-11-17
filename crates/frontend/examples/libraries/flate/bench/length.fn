@@ -1,0 +1,14 @@
+# Prints how many bytes standard input holds: what reading it costs, which
+# the compression benchmark takes from every other program's time.
+
+package {}
+
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.read_to_end!()
+  read is Ok(input) else return host.exit!(1)
+  printed = host.println!("${input.len()}")
+  host.exit!(0)
+)
