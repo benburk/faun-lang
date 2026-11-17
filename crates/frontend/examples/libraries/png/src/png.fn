@@ -1,4 +1,6 @@
-# PNG decoding (the W3C PNG specification, second edition): every colour
+# PNG decoding and encoding (the W3C PNG specification, second edition).
+#
+# Decoding reads every colour
 # type at every bit depth it allows, with or without Adam7 interlacing,
 # into 8-bit red, green, blue and alpha. Corrupt or cut-short input
 # answers `Err` naming why; nothing panics or reads past the end.
@@ -8,6 +10,12 @@
 # unfiltered into one list holding every pass's rows, which the pixels are
 # read from. Ancillary chunks other than tRNS, such as gamma and colour
 # space, are skipped: the samples come back as the file holds them.
+#
+# Encoding writes 8-bit samples in the fewest channels that hold the image
+# exactly: grey where every pixel's red, green and blue agree, and alpha
+# only where some pixel is not opaque. Each row is filtered as libpng
+# chooses, by the smallest sum of its bytes taken as signed, and the rows
+# are compressed through the flate library's deflate.
 
 package {
   uses: {
@@ -17,9 +25,9 @@ package {
 }
 
 import crc {Crc32, crc32, adler32}
-import flate {zlib_decompress}
+import flate {zlib_decompress, zlib_compress, Level}
 
-export {decode, decode_header, Header, Image, PngError}
+export {decode, decode_header, encode, Encoding, Filtering, Header, Image, PngError, Level}
 
 # The image header: its size, and how its samples are stored.
 Header = {
@@ -508,3 +516,158 @@ expect (
     & decode(file.take(33).concat(chunk("qqQQ", [1])).concat(file.drop(33))).is_ok()
     & decode(file.put(32, file.get(32).ok_or(0) ^ 1)) == Err(ChecksumMismatch)
 )
+
+# How to encode an image: how hard deflate looks for matches, and how each
+# row is filtered.
+Encoding = {level: Level, filtering: Filtering}
+
+# `Adaptive` tries every filter on each row and keeps the one whose bytes,
+# taken as signed, sum smallest, as libpng does; `Unfiltered` writes every
+# row as it is, which is faster and suits images with few colours.
+Filtering = [Adaptive, Unfiltered]
+
+# `image` as a PNG file, refused where its pixels are not four bytes for
+# each of `width` by `height`, or a side is nought or past PNG's limit.
+encode : (Image, Encoding) -> Result(List(U8), [BadSize])
+encode({width, height, pixels}, {level, filtering}) -> (
+  if width == 0 | height == 0 | width > 0x7fffffff | height > 0x7fffffff return Err(BadSize)
+  if pixels.len() != width * height * 4 return Err(BadSize)
+  colour = colour_for(pixels, True, True)
+  samples = reduced(pixels, colour)
+  per = channels(colour)
+  stride = width * per
+  rows = filtered(samples, stride, per, filtering)
+  header = word(width).concat(word(height)).concat([8, U8.of_nat(colour), 0, 0, 0])
+  data = zlib_compress(rows, level)
+  Ok(signature.concat(chunk("IHDR", header)).concat(data_chunks(data, [])).concat(chunk("IEND", [])))
+)
+
+# The colour type that holds every pixel exactly: 0 grey, 2 red, green
+# and blue, 4 grey and alpha, or 6 all four. `grey` and `opaque` say
+# whether every pixel so far is.
+colour_for : (List(U8), Bool, Bool) -> Nat
+colour_for(_, False, False) -> 6
+colour_for([red, green, blue, alpha, *rest], grey, opaque) ->
+  colour_for(rest, grey & red == green & green == blue, opaque & alpha == 255)
+colour_for(_, True, True) -> 0
+colour_for(_, True, False) -> 4
+colour_for(_, False, True) -> 2
+
+# The pixels' samples in `colour`'s channels.
+reduced : (List(U8), Nat) -> List(U8)
+reduced(pixels, 6) -> pixels
+reduced(pixels, colour) -> reduce(pixels, colour, [])
+
+reduce : (List(U8), Nat, List(U8)) -> List(U8)
+reduce([red, green, blue, alpha, *rest], colour, out) -> colour is (
+  0 then reduce(rest, colour, out.append(red))
+  4 then reduce(rest, colour, out.append(red).append(alpha))
+  _ then reduce(rest, colour, out.append(red).append(green).append(blue))
+)
+reduce(_, _, out) -> out
+
+# Every row with its filter byte before it. `per` is the bytes a pixel,
+# and so how far back the byte to the left is.
+#
+# A row is walked as four lists side by side rather than read by index:
+# the row's bytes `x`, the bytes `a` to their left, those above them, `b`,
+# and those above `a`, `c`. Before the first row, and left of the first
+# pixel, there are noughts, so each row is walked twice: its first pixel
+# against noughts, then the rest against the row itself and the row above.
+filtered : (List(U8), Nat, Nat, Filtering) -> List(U8)
+filtered(samples, stride, per, filtering) -> (
+  zeros = List.repeat(U8.of_nat(0), stride)
+  filter_rows(samples, zeros, zeros, stride, per, filtering, samples.len() / stride, [])
+)
+
+filter_rows : (List(U8), List(U8), List(U8), Nat, Nat, Filtering, Nat, List(U8)) -> List(U8)
+filter_rows(_, _, _, _, _, _, 0, out) -> out
+filter_rows(row, above, zeros, stride, per, filtering, Succ(rows), out) -> (
+  filter = filtering is (
+    Unfiltered then 0
+    Adaptive then best_filter(row, above, zeros, stride, per)
+  )
+  head = residuals(row, zeros, above, zeros, per, filter, out.append(U8.of_nat(filter)))
+  done = residuals(row.drop(per), row, above.drop(per), above, stride - per, filter, head)
+  filter_rows(row.drop(stride), row, zeros, stride, per, filtering, rows, done)
+)
+
+# The filter whose row of residuals, each taken as signed, sums smallest,
+# ties going to the lower filter. Every filter is scored in one walk, which
+# reads each byte and its neighbours once.
+best_filter : (List(U8), List(U8), List(U8), Nat, Nat) -> Nat
+best_filter(row, above, zeros, stride, per) -> (
+  head = costs(row, zeros, above, zeros, per, (0, 0, 0, 0, 0))
+  (none, sub, up, average, paeth_sum) = costs(row.drop(per), row, above.drop(per), above, stride - per, head)
+  [(none, 0), (sub, 1), (up, 2), (average, 3), (paeth_sum, 4)].min().map_ok(|(_, filter)| filter).ok_or(0)
+)
+
+Costs = (Nat, Nat, Nat, Nat, Nat)
+
+costs : (List(U8), List(U8), List(U8), List(U8), Nat, Costs) -> Costs
+costs([x, *xs], [a, *rest_a], [b, *rest_b], [c, *rest_c], Succ(count), (none, sub, up, average, paeth_sum)) ->
+  costs(xs, rest_a, rest_b, rest_c, count, (
+    none + signed(x),
+    sub + signed(x - a),
+    up + signed(x - b),
+    average + signed(x - mean(a, b)),
+    paeth_sum + signed(x - paeth(a, b, c)),
+  ))
+costs(_, _, _, _, _, sums) -> sums
+
+# `count` bytes of `x` less what `filter` predicts of each, appended to
+# `out`.
+residuals : (List(U8), List(U8), List(U8), List(U8), Nat, Nat, List(U8)) -> List(U8)
+residuals([x, *xs], [a, *rest_a], [b, *rest_b], [c, *rest_c], Succ(count), filter, out) ->
+  residuals(xs, rest_a, rest_b, rest_c, count, filter, out.append(x - predicted(a, b, c, filter)))
+residuals(_, _, _, _, _, _, out) -> out
+
+predicted : (U8, U8, U8, Nat) -> U8
+predicted(_, _, _, 0) -> 0
+predicted(a, _, _, 1) -> a
+predicted(_, b, _, 2) -> b
+predicted(a, b, _, 3) -> mean(a, b)
+predicted(a, b, c, _) -> paeth(a, b, c)
+
+# The mean of `a` and `b`, rounded down.
+mean : (U8, U8) -> U8
+mean(a, b) -> U8.of_nat((a.to_nat() + b.to_nat()) / 2)
+
+# A byte's distance from nought, taken as signed.
+signed : U8 -> Nat
+signed(value) -> (
+  n = value.to_nat()
+  n.min(256 - n)
+)
+
+# The zlib stream in IDAT chunks of at most 65536 bytes. One chunk would
+# do, up to 2^31 - 1 bytes, but a reader that streams holds a chunk whole
+# to check its CRC-32 before using it, and 64 KB is what Pillow writes;
+# the 12 bytes each chunk adds are a fraction of a percent.
+data_chunks : (List(U8), List(U8)) -> List(U8)
+data_chunks([], out) -> out
+data_chunks(data, out) -> data_chunks(data.drop(65536), out.concat(chunk("IDAT", data.take(65536))))
+
+expect (
+  pixels = [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 128, 10, 11, 12, 0, 9, 9, 9, 9, 200, 100, 50, 25]
+  image = {width: 3, height: 2, pixels}
+  [Level.none, Level.fastest, Level.best].all(|level|
+    [Adaptive, Unfiltered].all(|filtering|
+      encode(image, {level, filtering}).map_ok(decode) == Ok(Ok(image))))
+)
+
+# Grey, grey and alpha, and opaque colour each round-trip through their
+# own colour type.
+expect (
+  grey = {width: 2, height: 2, pixels: [5, 5, 5, 255, 6, 6, 6, 255, 7, 7, 7, 255, 250, 250, 250, 255]}
+  faded = {width: 1, height: 2, pixels: [5, 5, 5, 0, 6, 6, 6, 9]}
+  opaque = {width: 1, height: 2, pixels: [1, 2, 3, 255, 4, 5, 6, 255]}
+  [(grey, 0), (faded, 4), (opaque, 2)].all(|(image, colour)| (
+    encoded = encode(image, {level: Level.default, filtering: Adaptive})
+    encoded.map_ok(decode) == Ok(Ok(image))
+      & encoded.map_ok(decode_header).map_ok(|header| header.map_ok(|h| h.colour)) == Ok(Ok(colour))
+  ))
+)
+
+expect encode({width: 2, height: 1, pixels: [1, 2, 3, 4]}, {level: Level.default, filtering: Adaptive}) == Err(BadSize)
+expect encode({width: 0, height: 0, pixels: []}, {level: Level.default, filtering: Adaptive}) == Err(BadSize)
