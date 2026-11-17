@@ -1,0 +1,100 @@
+# Roman numerals, from I to MMMCMXCIX: 1 to 3,999.
+#
+# A `RomanNumeral` holds a number a numeral can write, and its constructor
+# is private, so no other value can be made. Classical numerals have no
+# zero, and write a letter at most three times running, which is why 3,999
+# is the largest. A numeral is written in capitals, `XVI`, or small letters,
+# `xvi`, and read in either, so long as it is all one case and written the
+# one way `from_nat` would write it: `IIII` and `IC` are refused.
+
+export {RomanNumeral}
+
+# Each value a numeral writes, largest first, the subtractive pairs among
+# them, so writing a number takes the largest that fits, again and again.
+numerals : List((Nat, Str))
+numerals = [
+  (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+  (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+  (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+]
+
+RomanNumeral : Nat.(
+  # The smallest numeral, I.
+  min : RomanNumeral
+  min = RomanNumeral(1)
+
+  # The largest numeral, MMMCMXCIX.
+  max : RomanNumeral
+  max = RomanNumeral(3999)
+
+  # The numeral for `n`, where one writes it: 1 to 3,999.
+  from_nat : Nat -> Result(RomanNumeral, [OutOfRange])
+  from_nat(n) if fits(n) -> Ok(RomanNumeral(n))
+  from_nat(_) -> Err(OutOfRange)
+
+  # The numeral `text` writes, in capitals or small letters.
+  from_str : Str -> Result(RomanNumeral, [Malformed])
+  from_str(text) -> (
+    n = read(ascii(text, U8.to_ascii_upper), numerals, 0)
+    capitals = written(n, numerals)
+    if fits(n) & (text == capitals | text == ascii(capitals, U8.to_ascii_lower))
+      then Ok(RomanNumeral(n))
+      else Err(Malformed)
+  )
+
+  # The number it writes.
+  to_nat : RomanNumeral -> Nat
+  to_nat(RomanNumeral(n)) -> n
+
+  # The numeral in capitals, `XVI`, as `"${numeral}"` writes it.
+  to_str : RomanNumeral -> Str
+  to_str(RomanNumeral(n)) -> written(n, numerals)
+
+  # The numeral in small letters, `xvi`.
+  to_lower : RomanNumeral -> Str
+  to_lower(numeral) -> ascii(numeral.to_str(), U8.to_ascii_lower)
+
+  equals : (RomanNumeral, RomanNumeral) -> Bool
+  equals(RomanNumeral(a), RomanNumeral(b)) -> a == b
+)
+
+fits : Nat -> Bool
+fits(n) -> n >= 1 & n <= 3999
+
+# `text` with `change` made to each of its ASCII letters; a numeral is
+# all ASCII, and anything else is left as it was.
+ascii : (Str, U8 -> U8) -> Str
+ascii(text, change) -> Str.from_ascii(text.to_utf8().map(change)).ok_or(text)
+
+# `n` written with the largest numerals that fit.
+written : (Nat, List((Nat, Str))) -> Str
+written(0, _) -> ""
+written(_, []) -> ""
+written(n, [(value, letters), *rest]) if n >= value ->
+  letters.concat(written(n - value, [(value, letters), *rest]))
+written(n, [_, *rest]) -> written(n, rest)
+
+# What `text` adds up to, taking the largest numerals it starts with;
+# whether it is written as `written` would write it is the caller's to check.
+read : (Str, List((Nat, Str)), Nat) -> Nat
+read(_, [], total) -> total
+read(text, [(value, letters), *rest], total) if text.starts_with(letters) ->
+  read(text.drop_prefix(letters), [(value, letters), *rest], total + value)
+read(text, [_, *rest], total) -> read(text, rest, total)
+
+expect RomanNumeral.from_nat(16).map_ok(|numeral| numeral.to_str()) == Ok("XVI")
+expect RomanNumeral.from_nat(16).map_ok(|numeral| numeral.to_lower()) == Ok("xvi")
+expect RomanNumeral.from_nat(1994).map_ok(|numeral| "${numeral}") == Ok("MCMXCIV")
+expect RomanNumeral.max.to_str() == "MMMCMXCIX" & RomanNumeral.min.to_str() == "I"
+expect RomanNumeral.from_nat(0) == Err(OutOfRange)
+expect RomanNumeral.from_nat(4000) == Err(OutOfRange)
+expect RomanNumeral.from_str("XLII").map_ok(|numeral| numeral.to_nat()) == Ok(42)
+expect RomanNumeral.from_str("xlii").map_ok(|numeral| numeral.to_nat()) == Ok(42)
+expect RomanNumeral.from_str("MMMCMXCIX").map_ok(|numeral| numeral.to_nat()) == Ok(3999)
+expect RomanNumeral.from_str("XvI") == Err(Malformed)
+expect RomanNumeral.from_str("IIII") == Err(Malformed)
+expect RomanNumeral.from_str("IC") == Err(Malformed)
+expect RomanNumeral.from_str("MMMM") == Err(Malformed)
+expect RomanNumeral.from_str("") == Err(Malformed)
+expect RomanNumeral.from_str("Spam!") == Err(Malformed)
+expect RomanNumeral.from_str("XVI") == RomanNumeral.from_nat(16).err_as(Malformed)

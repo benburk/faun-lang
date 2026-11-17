@@ -1,0 +1,23 @@
+# Numbers in, numerals out: each number on standard input written as a
+# Roman numeral, and each numeral read back, `?` where it is out of range.
+
+package {
+  uses: {
+    roman: "../src/roman"
+  }
+}
+
+import roman {RomanNumeral}
+
+written : Nat -> Str
+written(n) -> RomanNumeral.from_nat(n).map_ok(|numeral| numeral.to_str()).ok_or("?")
+
+app : {stdin: List(U8), *} -> Result(Str, _)
+app(input) -> (
+  stdin = Str.from_utf8(input.stdin)?
+  numbers = stdin.trim().split(" ").try_map(Nat.from_str)?
+  Ok(numbers.map(written).join(" "))
+)
+
+expect [1994, 2026, 0, 4000].map(written) == ["MCMXCIV", "MMXXVI", "?", "?"]
+expect RomanNumeral.from_str("mmxxvi").map_ok(|numeral| numeral.to_nat()) == Ok(2026)
