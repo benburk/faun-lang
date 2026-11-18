@@ -259,23 +259,21 @@ fn known(packed: &Packed, (elements, leaf_bytes): (&[u8], u8), word_bits: u16) -
         .iter()
         .flat_map(|value: &u64| value.to_le_bytes()[..word].to_vec())
         .collect();
-    let stride = usize::try_from(packed.size).expect("a stride fits the host");
     for element in leaves.chunks(per) {
-        let mut laid = vec![0; stride];
-        for (leaf, &value) in packed.leaves.iter().zip(element) {
-            // A natural small enough to be held in place is twice itself.
-            let value = if leaf.kind == super::packing::NATURAL {
-                value * 2
-            } else {
-                value
-            };
-            if let Some(width) = leaf.width {
-                let offset = usize::try_from(leaf.offset).expect("an offset fits the host");
-                let width = usize::from(width.bytes(word_bits));
-                laid[offset..offset + width].copy_from_slice(&value.to_le_bytes()[..width]);
-            }
-        }
-        bytes.extend_from_slice(&laid);
+        // A natural small enough to be held in place is twice itself.
+        let values: Vec<u64> = packed
+            .leaves
+            .iter()
+            .zip(element)
+            .map(|(leaf, &value)| {
+                if leaf.kind == super::packing::NATURAL {
+                    value * 2
+                } else {
+                    value
+                }
+            })
+            .collect();
+        bytes.extend_from_slice(&packed.lay(&values, word_bits));
     }
     bytes
 }
@@ -844,12 +842,10 @@ impl Pass<'_> {
         packed: &Packed,
         values: &[ValueId],
     ) {
-        for (leaf, &value) in packed.leaves.iter().zip(values) {
-            let Some(width) = leaf.width else {
-                continue;
-            };
-            let offset = i32::try_from(at + leaf.offset).expect("checked object layout");
-            b.store(width, object, Offset::Bytes(offset), value);
+        for unit in &packed.units {
+            let offset = i32::try_from(at + unit.offset).expect("checked object layout");
+            let value = unit.value(b, values);
+            b.store(unit.width, object, Offset::Bytes(offset), value);
         }
     }
 
@@ -871,6 +867,7 @@ impl Pass<'_> {
         };
         let offset = i32::try_from(at + leaf.offset).expect("checked object layout");
         let value = b.load(width, object, Offset::Bytes(offset));
+        let value = leaf.unpacked(b, value);
         let value = if represented == Class::Word {
             value
         } else {
