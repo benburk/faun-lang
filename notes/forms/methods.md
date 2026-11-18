@@ -133,7 +133,11 @@ position; a closed tag row has `equals` and `to_str`. An open record, or a
 row a caller may still add tags to, has none of them, since part of the
 value is the caller's. A nominal type has none until it asks:
 `Size : [Small, Large]` with no block makes `Small != Large` say "`Size`
-has no field or method `equals`".
+has no field or method `equals`", with help saying how to ask: "declare
+`equals : (Size, Size) -> Bool` with no body in `Size`'s block to derive
+it". The same help is given for `cmp`, `to_str` and `hash_into`, and for a
+type taking variables names the bound each asks of them, as
+`equals : (Box(a), Box(a)) -> Bool where Equatable(a)`.
 
 ## Visibility
 
@@ -193,8 +197,8 @@ version that ignores its build tag, or a fraction where 2/4 is 1/2, is
 equal by a rule the fields do not show. A record or a tuple has no name to
 make that claim, so its shape is its meaning and its members are derived
 unasked. The cost is a line in each nominal type that wants the structural
-member, and a refusal that names the missing method when it is used
-without one.
+member, and a refusal when it is used without one, which names the missing
+method and gives the line to write.
 
 ### Why at most one of `equals` and `cmp`?
 
@@ -225,6 +229,13 @@ a type whose `==` should differ from its order's `Eq`. The floats are that
 case: their `cmp` is the standard's total order, so `==` follows it and a
 NaN equals itself, and IEEE 754's comparison is the named `numeric_equals`
 ([floats](../values/floats.md)).
+
+## History
+
+- **2026-11-17:** a refusal of a missing `equals`, `cmp`, `to_str` or
+  `hash_into` on a declared type came to give the bodyless signature that
+  derives it, after the compression libraries met "`Level` has no field or
+  method `equals`" on a wrapper with nothing saying how to ask.
 
 ## Related
 

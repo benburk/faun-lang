@@ -458,6 +458,8 @@ struct Checker<'a> {
     constructors: HashMap<Symbol, Scheme>,
     methods: HashMap<Symbol, Vec<MethodImpl>>,
     fields: HashMap<Symbol, Vec<FieldImpl>>,
+    /// Each declared type, by its name.
+    data: &'a HashMap<Symbol, n::Data>,
     visible_methods: &'a HashMap<ModuleId, HashSet<Symbol>>,
     pending_methods: Vec<PendingMethod>,
     /// The pending method whose implementation is being applied, which

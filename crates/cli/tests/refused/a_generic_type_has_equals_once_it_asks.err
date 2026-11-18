@@ -1,0 +1,7 @@
+error: `Slot(Nat)` has no field or method `equals`
+ --> a_generic_type_has_equals_once_it_asks.fn:4:8
+  |
+4 | seen = Set.empty.insert(Slot(1))
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: declare `equals : (Slot(k), Slot(k)) -> Bool where Equatable(k)` with no body in `Slot`'s block to derive it

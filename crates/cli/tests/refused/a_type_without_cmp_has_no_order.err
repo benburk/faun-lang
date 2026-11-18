@@ -3,3 +3,5 @@ error: `Size` has no field or method `cmp`
   |
 6 | main!(host) -> host.exit!(U8.of_nat((Small < Large).to_nat()))
   |                                     ^^^^^^^^^^^^^^^
+  |
+  = help: declare `cmp : (Size, Size) -> Order` with no body in `Size`'s block to derive it
