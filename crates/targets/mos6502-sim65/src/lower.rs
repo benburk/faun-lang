@@ -2841,21 +2841,29 @@ impl Lowering<'_> {
                 // so it is worked out that much wider than it is read,
                 // where the value it moves has bits there.
                 let read = self.needed(results[0]);
+                let held = bits(self.program.class(*value));
                 let needed = match direction {
                     Direction::Up => read,
-                    Direction::Down => read.max(
-                        read.saturating_add(*by)
-                            .min(bits(self.program.class(*value))),
-                    ),
+                    Direction::Down => read.max(read.saturating_add(*by).min(held)),
                 };
-                let value = self.operand(*value, T0);
-                let width = if needed <= 8 {
-                    Width::Byte
-                } else {
-                    Width::Word
-                };
+                let from = self.operand(*value, T0);
                 let dest = self.dest(results[0]);
-                self.shifted(*direction, value, dest, *by, width);
+                if *direction == Direction::Down && read <= 8 && *by >= 8 && held <= 16 {
+                    // A byte read from a word moved down a byte or more is
+                    // its high byte moved down the rest.
+                    self.load(from.byte(1));
+                    for _ in 8..*by {
+                        self.asm.lsr();
+                    }
+                    self.asm.sta_zp(dest);
+                } else {
+                    let width = if needed <= 8 {
+                        Width::Byte
+                    } else {
+                        Width::Word
+                    };
+                    self.shifted(*direction, from, dest, *by, width);
+                }
                 self.commit(results[0], dest);
             }
             Op::Compare {
