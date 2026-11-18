@@ -62,7 +62,7 @@ pub(crate) fn fuse(program: &mut Program) {
     while read < fusion.program.functions().len() {
         let id = FnId::at(read);
         read += 1;
-        if fusion.pure.get(id.index()) != Some(&true) {
+        if !fusion.fused.values().any(|&made| made == id) {
             continue;
         }
         if let Some(rewritten) = fusion.rewrite_function(id) {
