@@ -25,7 +25,7 @@ use super::ownership::{self, Liveness, managed};
 use super::packing::Packed;
 use super::sequence::{self, Growth, Library as SequenceLibrary};
 use super::{
-    Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, Relation, ShapeId,
+    Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, ShapeId,
     Terminator, ValueId, Width, validate,
 };
 
@@ -1247,9 +1247,7 @@ impl Pass<'_> {
                 left,
                 right,
             } if self.source.class(left) == Class::Natural => {
-                let ordering = self.library.inline(b, Inline::Compare, v(left), v(right));
-                let wanted = b.constant(Class::Word, u64::from(relation == Relation::Equal));
-                b.compare(Relation::Equal, ordering, wanted)
+                self.library.compare(b, relation, v(left), v(right))
             }
             Op::Compare {
                 relation,
