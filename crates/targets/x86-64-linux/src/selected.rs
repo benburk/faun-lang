@@ -6,6 +6,7 @@
 //! [`super::machine::Allocated`].
 
 mod register_allocate;
+mod thread;
 
 use super::machine::Reg;
 use crate::{ARG_COUNT, WORD_BITS};
@@ -1485,7 +1486,9 @@ impl Selector<'_> {
         Ok(block)
     }
 
-    fn finish(self) -> Result<Selected, String> {
+    fn finish(mut self) -> Result<Selected, String> {
+        self.thread();
+        self.sink_conditions();
         let mut order = Vec::new();
         let mut block_params = Vec::new();
         let mut block_param_specs = Vec::new();
