@@ -73,7 +73,7 @@ const fn is_if(op: &Op) -> bool {
 fn tagged(tags: (u64, u64)) -> Program {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let three = b.constant(Class::Word, 3);
+        let three = opaque(b, 3);
         let five = b.constant(Class::Word, 5);
         let test = b.compare(Relation::Less, three, five);
         let tag = b.if_(
@@ -158,7 +158,7 @@ fn a_tag_that_says_nothing_is_not_read_as_a_comparison() {
 fn a_tag_read_elsewhere_survives_the_branch_that_no_longer_needs_it() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let three = b.constant(Class::Word, 3);
+        let three = opaque(b, 3);
         let five = b.constant(Class::Word, 5);
         let test = b.compare(Relation::Less, three, five);
         let tag = b.if_(
@@ -192,7 +192,8 @@ fn a_constant_is_written_at_the_width_it_is_read_at() {
     p.define(main, |b, _| {
         let narrow = b.constant(Class::fixed(3), 5);
         let read = b.convert(wide, narrow);
-        let other = b.constant(wide, 256);
+        // Worked out, so the sum is not one known before it runs.
+        let other = unknown(b, wide, 256);
         let total = b.binary(Binary::Add, read, other);
         let answer = b.convert(Class::Word, total);
         b.ret(&[answer]);
@@ -259,7 +260,9 @@ fn a_branch_nothing_reads_stays_for_what_its_arms_do() {
     p.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
         let one = b.constant(Class::Word, 1);
-        let test = b.compare(Relation::Less, zero, one);
+        // Asked of something worked out, so which arm runs is not known.
+        let unknown_zero = opaque(b, 0);
+        let test = b.compare(Relation::Less, unknown_zero, one);
         b.if_(
             test,
             &[],
@@ -450,11 +453,18 @@ fn a_quotient_by_a_power_of_two_is_a_shift() {
 
 const WIDE: Class = Class::fixed(9);
 
+/// `value` as a word that a loop answers, going round once: what a loop
+/// leaves with is worked out, so no pass knows it before the program runs.
+fn opaque(b: &mut super::Builder, value: u64) -> ValueId {
+    let held = b.constant(Class::Word, value);
+    b.loop_(&[held], &[Class::Word], |b, state| b.break_(&[state[0]]))[0]
+}
+
 /// `value` at `class`, where no pass can see it: whichever arm a comparison
 /// chose, each answering it. Arithmetic on it is arithmetic on something
 /// worked out, which is what a pass recognising shapes of arithmetic reads.
 fn unknown(b: &mut super::Builder, class: Class, value: u64) -> ValueId {
-    let zero = b.constant(Class::Word, 0);
+    let zero = opaque(b, 0);
     let one = b.constant(Class::Word, 1);
     let test = b.compare(Relation::Less, zero, one);
     b.if_(
@@ -1022,3 +1032,43 @@ fn a_projection_through_a_call_still_reads_the_returned_cell() {
 
 #[path = "../../../../core/src/ir/simplify/prepend_tests.rs"]
 mod prepend_tests;
+
+/// A branch on a condition known before the program runs is the arm it
+/// takes: a small natural written as a constant, held as twice itself, is
+/// known not to name an object, so the test of its low bit and the arm
+/// that would have given up an object's claim go, and the shift that
+/// doubled it is the number it came to.
+#[test]
+fn a_branch_on_a_number_known_before_it_runs_is_the_arm_it_takes() {
+    let (mut p, main) = Program::new("main");
+    p.bind_layout(super::Layout { word_bits: 64 })
+        .expect("a layout the program allows");
+    let note = p.external("note", &[Class::Word], Returns::Values(&[]));
+    p.define(main, |b, _| {
+        let three = b.constant(Class::Held(Facts::at(3)), 3);
+        let doubled = b.shift(Class::Word, super::Direction::Up, three, 1);
+        let handle = b.convert(Class::Address, doubled);
+        let held = b.convert(Class::Word, handle);
+        let named = b.convert(BIT, held);
+        let answer = b.if_(
+            named,
+            &[Class::Word],
+            |b| {
+                b.call(note, &[held]);
+                let nought = b.constant(Class::Word, 0);
+                b.yield_(&[nought]);
+            },
+            |b| b.yield_(&[held]),
+        )[0];
+        let two = b.constant(Class::Word, 2);
+        let below = b.compare(Relation::Less, answer, two);
+        let reported = arms(b, below);
+        b.ret(&[reported]);
+    });
+    let held = settled(&p);
+    assert_eq!(count(&held, is_if), 0, "every branch is decided");
+    assert_eq!(count(&held, |op| matches!(*op, Op::Call { .. })), 0);
+    assert_eq!(count(&held, |op| matches!(*op, Op::Shift { .. })), 0);
+    // Six is not below two, so the second arm answers.
+    assert_eq!(returns(&held), BigUint::from(20u8));
+}

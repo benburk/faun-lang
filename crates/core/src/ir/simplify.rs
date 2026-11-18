@@ -176,9 +176,15 @@ impl rewrite::Pass for Simplify {
             }
             Op::Convert { value } => {
                 let class = rebuild.source().class(results[0]);
-                self.wrapping(rebuild, b, class, value, results[0])
+                self.converted(rebuild, b, class, value, results[0])
+                    || self.wrapping(rebuild, b, class, value, results[0])
                     || self.widened(rebuild, b, class, value, results[0])
             }
+            Op::Shift {
+                direction,
+                value,
+                by,
+            } => self.shifted(rebuild, b, direction, value, by, results[0]),
             Op::Binary {
                 op: Binary::Add,
                 left,
@@ -231,7 +237,27 @@ impl rewrite::Pass for Simplify {
                 condition,
                 then_region,
                 else_region,
-            } => self.branching(rebuild, b, condition, [then_region, else_region], results),
+            } => {
+                self.taken(rebuild, b, condition, [then_region, else_region], results)
+                    || self.branching(rebuild, b, condition, [then_region, else_region], results)
+            }
+            Op::Compare {
+                relation: relation @ (Relation::Equal | Relation::Less),
+                left,
+                right,
+            } if self.number(left).is_some() && self.number(right).is_some() => {
+                let (Some(x), Some(y)) = (self.number(left), self.number(right)) else {
+                    return false;
+                };
+                let answer = u64::from(if relation == Relation::Equal {
+                    x == y
+                } else {
+                    x < y
+                });
+                self.folded[results[0].index()] = Some(answer);
+                rebuild.stands_for(results[0], b.constant(Class::Word, answer));
+                true
+            }
             Op::Compare {
                 relation: Relation::Equal,
                 left,
@@ -277,6 +303,147 @@ fn shifting(
 }
 
 impl Simplify {
+    /// A number known before the program runs, converted: the number the
+    /// conversion keeps, known for whatever reads it, and written as a
+    /// constant where it is read as a word.
+    ///
+    /// A handle is converted to an address and back as legalization takes
+    /// a natural apart, so a small natural written as a constant is known
+    /// through both, and asking whether it names an object is answered.
+    fn converted(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        class: Class,
+        value: ValueId,
+        result: ValueId,
+    ) -> bool {
+        let Some(number) = self.number(value) else {
+            return false;
+        };
+        // A number is followed to a word only from an address: the handle
+        // a natural constant is, read back as the word it is to ask what
+        // it holds. Any other number read as a word stays the conversion
+        // it was, as it was before this was written.
+        if class == Class::Word && rebuild.source().class(value) != Class::Address {
+            return false;
+        }
+        let kept = match class {
+            Class::Held(_) => wrap(class, number),
+            Class::Word | Class::Address => match self.word_bits {
+                Some(bits) if bits < 64 => number & ((1 << bits) - 1),
+                Some(_) => number,
+                None => return false,
+            },
+            Class::Cell | Class::Buffer | Class::Natural => return false,
+        };
+        if let Some(facts) = class.facts()
+            && (kept < facts.low || facts.high.is_some_and(|high| kept > high))
+        {
+            return false;
+        }
+        self.folded[result.index()] = Some(kept);
+        if class != Class::Word {
+            return false;
+        }
+        rebuild.stands_for(result, b.constant(class, kept));
+        true
+    }
+
+    /// A number known before the program runs, moved some places: the
+    /// number it comes to, where it is one the class holds.
+    fn shifted(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        direction: Direction,
+        value: ValueId,
+        by: u16,
+        result: ValueId,
+    ) -> bool {
+        let class = rebuild.source().class(result);
+        let Some(number) = self.number(value) else {
+            return false;
+        };
+        // At a word, or a class as wide, the bits moved past its top are
+        // gone; anything narrower has to hold what it comes to.
+        let moved = match direction {
+            Direction::Up => number.checked_shl(u32::from(by)).unwrap_or(0),
+            Direction::Down => number.checked_shr(u32::from(by)).unwrap_or(0),
+        };
+        let answer = match class {
+            Class::Word => match self.word_bits {
+                Some(bits) if bits < 64 => moved & ((1 << bits) - 1),
+                Some(_) => moved,
+                None => return false,
+            },
+            Class::Held(_) if class.wraps() => moved,
+            Class::Held(_) => {
+                let op = match direction {
+                    Direction::Up => Binary::ShiftUp,
+                    Direction::Down => Binary::ShiftDown,
+                };
+                let Some(answer) = self.calculated(op, number, u64::from(by), class) else {
+                    return false;
+                };
+                answer
+            }
+            _ => return false,
+        };
+        if let Some(facts) = class.facts()
+            && (answer < facts.low || facts.high.is_some_and(|high| answer > high))
+        {
+            return false;
+        }
+        self.folded[result.index()] = Some(answer);
+        rebuild.stands_for(result, b.constant(class, answer));
+        true
+    }
+
+    /// A branch on a condition known before the program runs is the arm it
+    /// takes, written where the branch was, where that arm yields: what it
+    /// yields is what the branch answered.
+    fn taken(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        condition: ValueId,
+        arms: [RegionId; 2],
+        results: &[ValueId],
+    ) -> bool {
+        let Some(number) = self.number(condition) else {
+            return false;
+        };
+        let source = rebuild.source();
+        let arm = arms[usize::from(number == 0)];
+        let region = source.region(arm);
+        let Some(terminator) = region.terminator else {
+            return false;
+        };
+        if terminator.exit != Exit::Yield || !source.values(region.params).is_empty() {
+            return false;
+        }
+        let yielded = source.values(terminator.values);
+        if yielded.len() != results.len()
+            || yielded
+                .iter()
+                .zip(results)
+                .any(|(&value, &result)| !source.class(value).fits(source.class(result)))
+        {
+            return false;
+        }
+        for (op, written) in source.walk(arm) {
+            if !rewrite::Pass::op(self, rebuild, b, *op, written) {
+                rebuild.copy(b, *op, written, self);
+            }
+        }
+        for (&result, &value) in results.iter().zip(yielded) {
+            rebuild.stands_for(result, rebuild.value(value));
+            self.folded[result.index()] = self.number(value);
+        }
+        true
+    }
+
     /// A conversion that takes nothing off, and a constant read at another
     /// width.
     ///
