@@ -111,7 +111,11 @@ Cells are not written in place yet: building a cell as one of the same
 size dies, as a tree's insert does, frees one and allocates the other.
 Writing the new cell into the old one, touching only the fields that
 change, is planned. A cell whose fields are its only readers is not built
-at all: each field is read where it was made.
+at all: each field is read where it was made. Nor, above this tier, is a
+list made only to be walked once or only to be compared:
+`List.range(n).fold(...)` is one loop, and `key == [grey]` compares the
+key's element where the caller made it
+([Barb](barb.md#the-schedule)).
 
 ## Rationale
 
@@ -214,6 +218,10 @@ updated, which a loop that binds a name again does.
 
 ## History
 
+- **2026-11-17:** a list made only to be walked once, or only to be
+  compared, is not built: a range folded is one loop and a literal
+  compared is read where its elements were made, so neither reserves nor
+  releases a buffer ([Barb](barb.md#history)).
 - **2026-11-17:** a run of a list joined to the list is written in place,
   and a pure read of a sequence is worked out before an earlier write of
   it. Before, a view held across a join made inflate's slice copy

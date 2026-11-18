@@ -135,7 +135,7 @@ Not running:
 
 Not running:
 
-- binary-trees: size image at 3: exit 3: stack overflow
+- binary-trees: size image at 1: exit 3: stack overflow
 - fannkuch-redux: too large
 - inflate: too large
 - k-nucleotide: too large

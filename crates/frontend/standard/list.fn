@@ -218,8 +218,8 @@ List(a) : [Nil, Cons(a, List(a))].(
   # `0 1 ... count - 1`, written `List.range(count)`. Built front to back,
   # an element for each step down what is left: so a walk reading it, as
   # `List.range(n).fold(...)` does, reads each element as it is made and
-  # the list is never built, and every element is below `count`, its sum
-  # with what is left.
+  # the list is never built; and no element passes `count`, which is what
+  # it and what is left start as together.
   range : Nat -> List(Nat)
   range(count) -> range_from(0, count)
 
