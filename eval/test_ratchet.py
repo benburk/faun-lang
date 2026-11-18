@@ -16,14 +16,17 @@ from ratchet import (
     SERIES,
     WASM,
     X86,
+    again_size,
     decide,
     log_row,
+    noted,
     parser,
     probe_changes,
     probes,
     ratio,
     score,
     same_compiler,
+    same_work,
     slower,
 )
 
@@ -118,6 +121,73 @@ class Ratchet(unittest.TestCase):
         more = cell(memory=117, image="pages")
         self.assertEqual(verdict(suite([quicker, more], target=X86)), "reject")
 
+    def test_a_memory_past_the_guard_where_the_heaps_arena_falls_is_noted(self):
+        # x86-64 lab collatz under octagons: a fourth 512 KiB arena at 20,000,
+        # and less than the incumbent at 15,000.
+        quicker = cell(speed=100, image="quick")
+        arena = cell(memory=488, image="arena")
+        cells = suite([quicker, arena], [cell(), cell(memory=376)], X86)
+        self.assertEqual(verdict(cells), "reject")
+        key = X86, "stock", "program-1"
+        cells[key]["again"] = {"size": 15000, "incumbent": 336, "candidate": 308}
+        scored = score(cells)
+        self.assertEqual(decide(scored), ("accept", []))
+        self.assertEqual(
+            noted(scored),
+            [
+                "x86_64-linux stock program-1 memory is 29.8% worse"
+                " but -8.3% at size 15000"
+            ],
+        )
+        # The memory still counts in the score as measured.
+        self.assertGreater(scored["loss"], 0)
+
+    def test_a_memory_past_the_guard_at_both_sizes_rejects(self):
+        quicker = cell(speed=100, image="quick")
+        more = cell(memory=488, image="more")
+        cells = suite([quicker, more], [cell(), cell(memory=376)], X86)
+        key = X86, "stock", "program-1"
+        cells[key]["again"] = {"size": 15000, "incumbent": 290, "candidate": 336}
+        self.assertEqual(verdict(cells), "reject")
+        self.assertEqual(noted(score(cells)), [])
+        # Within its slack there, it is not past the guard there.
+        cells[key]["again"] |= {"incumbent": 40, "candidate": 50}
+        self.assertEqual(verdict(cells), "accept")
+        # Not running at the second size, it is past it.
+        cells[key]["again"] |= {"candidate": None}
+        self.assertEqual(verdict(cells), "reject")
+        # And a 6502 memory past the guard at every size, as the lab sort's
+        # first arena is, rejects.
+        sort = suite(
+            [quicker, cell(memory=1502, image="arena")],
+            [cell(), cell(memory=804)],
+            MOS,
+        )
+        sort[MOS, "stock", "program-1"]["again"] = {
+            "size": 18,
+            "incumbent": 750,
+            "candidate": 1450,
+        }
+        self.assertEqual(verdict(sort), "reject")
+
+    def test_only_a_memory_is_measured_again(self):
+        quicker = cell(speed=100, image="quick")
+        slow = cell(speed=1200, image="slow")
+        cells = suite([quicker, slow], target=X86)
+        cells[X86, "stock", "program-1"]["again"] = {
+            "size": 1,
+            "incumbent": 100,
+            "candidate": 100,
+        }
+        self.assertEqual(verdict(cells), "reject")
+
+    def test_memory_is_measured_again_at_three_quarters_of_its_size(self):
+        workload = ratchet.Workload("p", Path(), "argument", {X86: 20000, MOS: 1})
+        self.assertEqual(again_size(workload, X86), 15000)
+        self.assertEqual(again_size(workload, MOS), 1)
+        stepped = workload._replace(sizes={X86: 500}, step=10)
+        self.assertEqual(again_size(stepped, X86), 370)
+
     def test_a_program_that_stops_running_rejects(self):
         broken = cell(speed=None, memory=None, status="wrong output")
         quicker = cell(speed=10, image="quick")
@@ -190,6 +260,46 @@ class Ratchet(unittest.TestCase):
         self.assertFalse(slower(timed(100, 150, image="old"), timed(150)))
         self.assertFalse(slower(old, timed(100, 150)))
 
+    def test_a_longer_time_doing_the_same_work_is_noted_not_rejected(self):
+        # x86-64 lab checksum under octagons: as many instructions, its loop's
+        # head across a cache line.
+        def ran(instructions, branches=50_000_000, memory=9512, image="new"):
+            return dict(
+                speed=instructions,
+                branches=branches,
+                memory=memory,
+                size_sha256=image,
+                time=4.8e6,
+                time_median=4.9e6,
+            )
+
+        old = ran(94_065_692, image="old") | {"time": 3.9e6, "time_median": 4e6}
+        self.assertTrue(slower(old, ran(94_064_748)))
+        self.assertTrue(same_work(old, ran(94_064_748, 50_040_000)))
+        self.assertFalse(same_work(old, ran(93_900_000)))
+        self.assertFalse(same_work(old, ran(94_064_748, 49_900_000)))
+        self.assertFalse(same_work(old, ran(94_064_748, memory=9516)))
+        self.assertFalse(same_work(old, ran(94_064_748, branches=None)))
+        steady = [
+            {
+                "target": X86,
+                "backend": "lab",
+                "workload": "checksum",
+                "metric": "time",
+                "ratio": 1.197,
+            }
+        ]
+        scored = score(suite([cell()]))
+        self.assertEqual(decide(scored, slowed=steady)[0], "reject")
+        self.assertEqual(decide(scored)[0], "no change")
+        self.assertEqual(
+            noted(scored, steady),
+            [
+                "x86_64-linux lab checksum time runs 19.7% longer with as many"
+                " instructions and branches and the same memory"
+            ],
+        )
+
     def test_the_incumbent_is_the_trunk_unless_named(self):
         self.assertFalse(hasattr(ratchet, "incumbent_of"))
         self.assertIsNone(parser().parse_args(["eval"]).incumbent)
@@ -228,6 +338,12 @@ class Ratchet(unittest.TestCase):
             accepted["verdict"],
             "accept: not a promotion: uncommitted changes in the candidate",
         )
+        summary |= {"noted": ["one", "two"], "not a promotion": []}
+        noting = dict(zip(LOG, log_row(summary, "x").split("\t")))
+        self.assertEqual(noting["verdict"], "accept: noted: one; two")
+        summary |= {"verdict": "reject", "reasons": ["worse"]}
+        noting = dict(zip(LOG, log_row(summary, "x").split("\t")))
+        self.assertEqual(noting["verdict"], "reject: worse; noted: one; two")
 
 
 def probing(candidates, incumbents=None, target=X86):

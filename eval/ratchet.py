@@ -47,7 +47,7 @@ APPROVED = "origin/main"
 TRUNK = os.environ.get("RATCHET_TRUNK", APPROVED)
 # The log's series: a protected change, once merged, starts the next one, and
 # bumps this with it.
-SERIES = 5
+SERIES = 6
 
 X86, WASM, MOS = "x86_64-linux", "wasm32-wasi", "mos6502-sim65"
 TARGETS = (X86, WASM, MOS)
@@ -83,6 +83,15 @@ for _target in TARGETS:
 # A timed candidate is slower where its quickest and its median run are both
 # past this band over the incumbent's: a tenth, and a quarter of a millisecond.
 TURNS, SLOWER, FLOOR_NS, TIMED_NS = 5, 1.10, 250_000, 250_000_000
+# A heap takes memory in arenas, each at least as large as the heap so far,
+# so whether a buffer fits the last one turns on the size measured: a cell
+# whose memory is past the guard is measured again at this part of its size,
+# and is past it only where it is there too.
+AGAIN = 3 / 4
+# A timed program that ran within this part of the incumbent's instructions
+# and of its branches, holding the same memory, did the same work: a tenth of
+# a percent of the work does not take a tenth longer.
+STEADY = 1e-3
 
 SECONDS = 120  # one run's limit
 # The most memory one run may hold, so that a program gone wrong fails its
@@ -370,9 +379,10 @@ def run(target, image, arguments, stdin, out):
     errors = done.stderr.decode(errors="replace")
     code, taken = done.returncode, {}
     if target == X86 and code == 0:
-        ns, rss, instructions, cpu = map(int, metrics.read_text().split())
+        ns, rss, instructions, cpu, branches = map(int, metrics.read_text().split())
         taken = {"speed": instructions if instructions >= 0 else None}
         taken |= {"memory": rss, "ns": ns, "cpu_ns": cpu}
+        taken |= {"branches": branches if branches >= 0 else None}
     elif target == WASM and code == 0:
         code, fuel, held, ns = map(int, done.stdout.split())
         taken = {"speed": fuel, "memory": held, "ns": ns}
@@ -498,7 +508,7 @@ def faun_build(side, target, backend, small, workload, directory, file="main.fn"
         return None, "build: timeout", None, {}
     taken = {}
     if metrics.exists():
-        ns, rss, instructions, cpu = map(int, metrics.read_text().split())
+        ns, rss, instructions, _, _ = map(int, metrics.read_text().split())
         taken = {"instructions": instructions, "ns": ns, "rss_kib": rss}
     wrote = re.search(r"^wrote (.+)$", done.stdout, re.M)
     if done.returncode or not wrote:
@@ -552,7 +562,7 @@ def faun_cell(side, label, target, backend, workload, check, oracle, work):
         return cell
     return (
         cell
-        | {k: said.get(k) for k in ("speed", "memory", "ns")}
+        | {k: said.get(k) for k in ("speed", "memory", "ns", "branches")}
         | {"image": str(image)}
     )
 
@@ -639,6 +649,65 @@ def slower(incumbent, candidate):
     return past("time") and past("time_median")
 
 
+def same_work(incumbent, candidate):
+    """Whether two x86 images ran the same work by every exact count: as
+    many instructions and as many branches, within STEADY, and the same
+    memory. A time between two such runs is where their code lies, a loop's
+    head on one side of a cache line or the other, which a compiler may
+    change by changing anything before it."""
+    for measure in ("speed", "branches"):
+        old, new = incumbent.get(measure), candidate.get(measure)
+        if not old or not new or abs(new - old) > old * STEADY:
+            return False
+    return incumbent.get("memory") == candidate.get("memory")
+
+
+def again_size(workload, target):
+    """The size a cell's memory is measured at again: AGAIN of its own, in
+    the workload's steps, and at least one."""
+    step = workload.step
+    return max(step, int(workload.sizes[target] * AGAIN) // step * step)
+
+
+def measure_again(cells, oracle, workloads, jobs):
+    """Measure again, at the size `again_size` gives, both sides of each
+    cell whose memory is past the guard, keeping what each held there."""
+    wanted = []
+    for (target, backend, name), sides in sorted(cells.items()):
+        old, new = sides["incumbent"], sides["candidate"]
+        change = ratio(target, "memory", old, new)
+        if not isinstance(change, float) or not (old.get("image") and new.get("image")):
+            continue
+        if beyond(target, "memory", change, old["memory"], new["memory"]):
+            wanted.append(
+                ((target, backend, name), again_size(workloads[name], target))
+            )
+    # Each input is made once, before two cells could ask for it.
+    for (target, _, name), size in wanted:
+        oracle.case(workloads[name], size)
+
+    def held(key, size, label):
+        target, _, name = key
+        arguments, stdin, expected = oracle.case(workloads[name], size)
+        image = Path(cells[key][label]["image"])
+        said = run(target, image, arguments, stdin, image.with_suffix(".again"))
+        if said["status"] == "ok" and said["stdout"] == expected["stdout"]:
+            return said.get("memory")
+        return None
+
+    with ThreadPoolExecutor(jobs) as pool:
+        found = {
+            (key, label): pool.submit(held, key, size, label)
+            for key, size in wanted
+            for label in ("incumbent", "candidate")
+        }
+        for key, size in wanted:
+            cells[key]["again"] = {"size": size} | {
+                label: found[key, label].result()
+                for label in ("incumbent", "candidate")
+            }
+
+
 def ratio(target, metric, incumbent, candidate):
     """A cell's candidate over its incumbent: below one is better. `None`
     where neither side has the measure, `broken` where only the incumbent
@@ -679,7 +748,10 @@ def score(cells):
                 broken.append(where | {"status": sides["candidate"]["status"]})
             elif change is not None:
                 old, new = sides["incumbent"].get(metric), sides["candidate"][metric]
-                changes.append(where | {"ratio": change, "old": old, "new": new})
+                where |= {"ratio": change, "old": old, "new": new}
+                if metric == "memory" and "again" in sides:
+                    where["again"] = sides["again"]
+                changes.append(where)
     groups = {}
     for change in changes:
         groups.setdefault(group(change), []).append(change)
@@ -724,6 +796,24 @@ def geomean(ratios):
     return math.exp(sum(logs) / len(logs)) if logs else None
 
 
+def beyond(target, metric, change, old, new):
+    """Whether a cell's measure is past the guard: more than a tenth worse,
+    a compile a quarter, and a memory larger by more than its slack."""
+    worst = COMPILE_WORST if metric == "compile" else WORST
+    return change > worst and new - old > SLACK.get((target, metric), 0)
+
+
+def settled(cell):
+    """Whether a memory past the guard at its size is not past it at the
+    size measured again: where the heap's last arena falls, not what the
+    program holds. One not measured again, or not running there, is past."""
+    again = cell.get("again") or {}
+    old, new = again.get("incumbent"), again.get("candidate")
+    if cell["metric"] != "memory" or not old or not new:
+        return False
+    return not beyond(cell["target"], "memory", new / old, old, new)
+
+
 def decide(scored, protected=(), slowed=()):
     """The verdict and its reasons, as RATCHET.md states them."""
     reasons = []
@@ -732,9 +822,8 @@ def decide(scored, protected=(), slowed=()):
     for cell in scored["broken"]:
         reasons.append("breaks " + place(cell) + f" ({cell['status']})")
     for cell in scored["changed"]:
-        slack = SLACK.get((cell["target"], cell["metric"]), 0)
-        worst = COMPILE_WORST if cell["metric"] == "compile" else WORST
-        if cell["ratio"] > worst and cell["new"] - cell["old"] > slack:
+        where = cell["target"], cell["metric"], cell["ratio"]
+        if beyond(*where, cell["old"], cell["new"]) and not settled(cell):
             reasons.append(f"{place(cell)} is {cell['ratio'] - 1:.1%} worse")
     for cell in slowed:
         reasons.append(f"{place(cell)} runs {cell['ratio'] - 1:.1%} longer")
@@ -750,6 +839,28 @@ def decide(scored, protected=(), slowed=()):
     if gain - loss < MINIMUM:
         return "neutral", [f"net gain {gain - loss:.5f} is below {MINIMUM:g}"]
     return "accept", []
+
+
+def noted(scored, steady=()):
+    """What is reported but rejects nothing: a memory past the guard at its
+    size and not at the size measured again, and a timed program taking
+    longer though it ran the same work by every count."""
+    notes = []
+    for cell in scored["changed"]:
+        where = cell["target"], cell["metric"], cell["ratio"]
+        if beyond(*where, cell["old"], cell["new"]) and settled(cell):
+            again = cell["again"]
+            notes.append(
+                f"{place(cell)} is {cell['ratio'] - 1:.1%} worse but"
+                f" {again['candidate'] / again['incumbent'] - 1:+.1%} at"
+                f" size {again['size']}"
+            )
+    for cell in steady:
+        notes.append(
+            f"{place(cell)} runs {cell['ratio'] - 1:.1%} longer with as many"
+            " instructions and branches and the same memory"
+        )
+    return notes
 
 
 def place(cell):
@@ -1037,21 +1148,26 @@ def evaluate(args):
                 "minimum": MINIMUM,
                 "repaired": REPAIRED,
                 "slower": SLOWER,
+                "again": AGAIN,
+                "steady": STEADY,
                 "memory_limit": MEMORY,
             },
         }
         sides = {"candidate": candidate, "incumbent": incumbent}
         cells, checks, oracle, chosen = measure(sides, seed, args.jobs, args.only, work)
+        measure_again(cells, oracle, chosen, args.jobs)
         if args.time is not None:
             timed(args.time, cells, oracle, chosen)
     scored = score(cells)
-    slowed = [
-        {"target": t, "backend": b, "workload": w, "metric": "time"}
-        | {"ratio": sides["candidate"]["time"] / sides["incumbent"]["time"]}
-        for (t, b, w), sides in sorted(cells.items())
-        if slower(sides["incumbent"], sides["candidate"])
-    ]
+    slowed, steady = [], []
+    for (t, b, w), sides in sorted(cells.items()):
+        old, new = sides["incumbent"], sides["candidate"]
+        if slower(old, new):
+            cell = {"target": t, "backend": b, "workload": w, "metric": "time"}
+            cell["ratio"] = new["time"] / old["time"]
+            (steady if same_work(old, new) else slowed).append(cell)
     verdict, reasons = decide(scored, protected, slowed)
+    notes = noted(scored, steady)
     # What keeps even an accepted run from being a promotion.
     caveats = []
     if kind == "noise":
@@ -1085,8 +1201,10 @@ def evaluate(args):
             for (t, b, w), sides in sorted(cells.items())
         ],
         "slowed": slowed,
+        "steady": steady,
         "verdict": verdict,
         "reasons": reasons,
+        "notes": notes,
         "caveats": caveats,
     } | scored
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1102,6 +1220,7 @@ def evaluate(args):
     summary = {
         "verdict": verdict,
         "reasons": reasons,
+        "noted": notes,
         "not a promotion": caveats,
         "score": round(scored["score"], 5),
         "better": scored["better"],
@@ -1134,12 +1253,16 @@ LOG = ("series", "idea", "score", *METRICS, "worst", "verdict", "report")
 
 def log_row(summary, idea):
     """A run's row of ratchet/log.tsv, in the evaluator's series."""
-    verdict = summary["verdict"]
+    verdict, said = summary["verdict"], False
     if summary["reasons"]:
         verdict += ": " + "; ".join(summary["reasons"])
-    if summary["not a promotion"]:
-        verdict += ";" if summary["reasons"] else ":"
-        verdict += " not a promotion: " + ", ".join(summary["not a promotion"])
+        said = True
+    # Reported, rejecting nothing.
+    for heading, joined in (("noted", "; "), ("not a promotion", ", ")):
+        if summary.get(heading):
+            verdict += ";" if said else ":"
+            verdict += f" {heading}: " + joined.join(summary[heading])
+            said = True
     fields = {"series": str(SERIES), "idea": idea, "verdict": verdict}
     fields["report"] = Path(summary["report"]).name
     for column in ("score", *METRICS, "worst"):

@@ -1,7 +1,8 @@
 // Run a program and write what it took to a file: elapsed nanoseconds, its
 // peak resident kilobytes, the instructions it ran in user space, or -1
-// where the kernel will not count them, and the nanoseconds of processor
-// time it was given, which waiting for a busy processor does not lengthen.
+// where the kernel will not count them, the nanoseconds of processor time
+// it was given, which waiting for a busy processor does not lengthen, and
+// the branches it took in user space, or -1, as the instructions.
 //
 //     measure SECONDS METRICS PROGRAM [ARGUMENT...]
 //
@@ -93,6 +94,10 @@ int main(int argc, char **argv) {
         .inherit = 1,
     };
     int counter = syscall(SYS_perf_event_open, &counted, child, -1, -1, 0);
+    // The branches beside them: two runs with as many instructions and as
+    // many branches ran the same work, wherever their code lies.
+    counted.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
+    int branching = syscall(SYS_perf_event_open, &counted, child, -1, -1, 0);
     struct timespec start, end;
     struct rusage usage;
     long peak = -1;
@@ -119,16 +124,20 @@ int main(int argc, char **argv) {
     }
     if (WEXITSTATUS(status)) return WEXITSTATUS(status);
     uint64_t count;
-    long long instructions = -1;
+    long long instructions = -1, branches = -1;
     if (counter >= 0 && read(counter, &count, sizeof count) == sizeof count) {
         instructions = (long long)count;
+    }
+    if (branching >= 0 && read(branching, &count, sizeof count) == sizeof count) {
+        branches = (long long)count;
     }
     FILE *metrics = fopen(argv[2], "w");
     if (!metrics) return 1;
     struct timeval user = usage.ru_utime, kernel = usage.ru_stime;
-    fprintf(metrics, "%lld %ld %lld %lld\n",
+    fprintf(metrics, "%lld %ld %lld %lld %lld\n",
             (end.tv_sec - start.tv_sec) * 1000000000LL + end.tv_nsec - start.tv_nsec,
             peak < 0 ? usage.ru_maxrss : peak, instructions,
-            (user.tv_sec + kernel.tv_sec) * 1000000000LL + (user.tv_usec + kernel.tv_usec) * 1000LL);
+            (user.tv_sec + kernel.tv_sec) * 1000000000LL + (user.tv_usec + kernel.tv_usec) * 1000LL,
+            branches);
     return fclose(metrics) == 0 ? 0 : 1;
 }
