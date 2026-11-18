@@ -27,9 +27,11 @@ The analysis is a numeric program in, ranges out:
    definition and slot, becomes `Ranges`: nothing reached is anything, a
    spine's rest says nothing, and what is assumed of a field holds.
 
-The domains (`barb/octagon.rs`) are `Octagon`, `Zone`, an octagon whose
-sums are forgotten after every step, and `Intervals`, which relates
-nothing. A pack is shared between a match's arms until one says something
+The compiler solves with `Octagon`. The solver is generic over a `Domain`
+trait (`barb/octagon.rs`), and the tests solve the same programs with
+`Zone`, an octagon whose sums are forgotten after every step, and
+`Intervals`, which relates nothing, checking octagons prove at least what
+each does. A pack is shared between a match's arms until one says something
 of it, so taking a state into an arm copies only what the arm changes.
 
 ## The domain
@@ -77,10 +79,12 @@ the next place no value of the pack still in scope holds, so arms side by
 side share places, and a pack's matrix is as large as the most of its
 values in scope at once. A pack groups at most 96 values.
 
-Octagons are kept only in definitions that go round, the loops; anywhere
-else every value is an interval. `FAUN_RANGES=octagons` keeps them in
-every definition, `zones` keeps only differences `x - y <= c`, and
-`intervals` none, for measuring.
+Octagons are kept in every definition, a loop or not. Keeping them only
+in definitions that go round costs less, but makes a cliff of where a
+guard is written: the same `bit + 9 <= total` bounds `bit` in a recursion
+and is lost one helper away, and 485 ranges came out wider than the walk
+this replaced. Performance should not depend on how a program is spelled,
+so there is one mode.
 
 ## What a term says
 
@@ -145,15 +149,16 @@ in every mode but the old analysis. Naturals are the values machine IR
 holds as `natural`, not as a word; analysis is the compiler's instructions
 analysing twice less analysing once. Before is the walk over Barb itself;
 after is the three stages, which find the same ranges, byte for byte, in
-every mode.
+every mode. The modes other than octagons were measured on the way, and
+octagons everywhere is what the compiler does.
 
-| Mode      | Naturals | Analysis, before | after  | Compiling, after |
-| --------- | -------- | ---------------- | ------ | ---------------- |
-| old walk  | 23,632   | 16.9 G           |        | 153.6 G          |
-| intervals | 23,842   | 16.0 G           | 11.4 G | 146.8 G          |
-| zones     | 22,733   | 51.0 G           | 40.2 G | 171.8 G          |
-| loops     | 22,007   | 39.1 G           | 28.7 G | 158.2 G          |
-| octagons  | 21,923   | 51.6 G           | 38.6 G | 167.8 G          |
+| Mode               | Naturals | Analysis, before | after  | Compiling, after |
+| ------------------ | -------- | ---------------- | ------ | ---------------- |
+| old walk           | 23,632   | 16.9 G           |        | 153.6 G          |
+| intervals          | 23,842   | 16.0 G           | 11.4 G | 146.8 G          |
+| zones              | 22,733   | 51.0 G           | 40.2 G | 171.8 G          |
+| octagons in loops  | 22,007   | 39.1 G           | 28.7 G | 158.2 G          |
+| octagons, the mode | 21,923   | 51.6 G           | 38.6 G | 167.8 G          |
 
 Profiled before the stages, timing each part of the walk on gzip, a PNG
 decoder, a JSON decoder, n-body and k-nucleotide: closing octagons took 10
@@ -161,7 +166,7 @@ to 35%, copying the state into each arm of a match 20 to 30%, walking Barb
 itself 30 to 55%, gathering what a match's tags say 5 to 7%, and handing
 calls their arguments 2 to 7%; joins, packs and narrowing took little. A
 zone costs what an octagon does because it is one, its matrix closed the
-same way. After the stages, closing is most of what is left in loops.
+same way. After the stages, closing is most of what is left.
 
 On wasm32 the same programs hold 29,297 naturals with the old walk, 29,281
 with zones, 29,468 with octagons in loops and 28,465 with octagons
@@ -174,12 +179,14 @@ compiled have a pack; a pack's matrix is 3 values at the median, 6 at the
 median, 10 at the 90th percentile and 84 at most.
 
 Sums earn their keep over zones: 810 naturals fewer, the counters among
-them, at the same cost. Octagons outside loops earn 84 naturals on x86-64,
-and none of the suite's speed, for twice the compiling of n-body,
-mandelbrot and spectral-norm, whose software float routines relate dozens
-of values a pack. Against the old walk, octagons in every definition give
-no range anywhere wider, but for terms they show unreached; in loops only,
-485 ranges are wider, guards on sums outside loops.
+them, at the same cost. Octagons outside loops earn 84 naturals on x86-64
+and 1,003 on wasm32, where without them a guard on a sum outside a loop is
+lost, and cost most where software float routines relate dozens of values
+a pack: n-body, mandelbrot and spectral-norm compile in about twice the
+instructions. Against the old walk under the same assumptions, a length
+bounded by memory in both, no range is wider but for 1,981 terms, matches
+and fields the octagons prove unreached, such as `List.drop` of a 256-entry
+table by an index below 256 coming back empty.
 
 ## Memory bounds a length
 
