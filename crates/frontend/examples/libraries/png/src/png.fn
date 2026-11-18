@@ -400,20 +400,13 @@ colour_at(raw, row, column, format) -> format.colour is (
   0 then (
     grey = sample(raw, row, column, format.depth)
     level = scaled(grey, format.depth)
-    hidden = format.key is (
-      [k] then k == grey
-      _ then False
-    )
-    (level, level, level, if hidden then 0 else 255)
+    (level, level, level, if format.key == [grey] then 0 else 255)
   )
   2 then (
     red = sample(raw, row, column * 3, format.depth)
     green = sample(raw, row, column * 3 + 1, format.depth)
     blue = sample(raw, row, column * 3 + 2, format.depth)
-    hidden = format.key is (
-      [r, g, b] then r == red & g == green & b == blue
-      _ then False
-    )
+    hidden = format.key == [red, green, blue]
     (scaled(red, format.depth), scaled(green, format.depth), scaled(blue, format.depth), if hidden then 0 else 255)
   )
   3 then (
