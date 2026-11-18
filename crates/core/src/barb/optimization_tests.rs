@@ -708,6 +708,7 @@ fn inline_budgets_charge_copied_nodes_per_callee_caller_and_program() {
                 per_function,
                 total,
                 max_depth: 8,
+                small_callee: 0,
             },
         );
         for (&id, expected) in callers.iter().zip(expected) {

@@ -9,6 +9,10 @@ pub struct InlineLimits {
     pub per_function: usize,
     pub total: usize,
     pub max_depth: usize,
+    /// A definition costing no more than this is copied wherever it is
+    /// called, whatever its caller has spent: a word's arithmetic, a line
+    /// in the standard library, is cheaper copied than called.
+    pub small_callee: usize,
 }
 
 impl Default for InlineLimits {
@@ -18,6 +22,7 @@ impl Default for InlineLimits {
             per_function: 4096,
             total: 1_048_576,
             max_depth: 32,
+            small_callee: 24,
         }
     }
 }
@@ -75,14 +80,14 @@ impl Inlining {
         let cost = self.costs[called.index()];
         if depth >= self.limits.max_depth
             || cost > self.limits.max_callee
-            || cost > self.function_left
+            || (cost > self.function_left && cost > self.limits.small_callee)
             || cost > self.total_left
             || self.breakers[called.index()]
         {
             return None;
         }
         let body = program.function(called).body()?;
-        self.function_left -= cost;
+        self.function_left = self.function_left.saturating_sub(cost);
         self.total_left -= cost;
         Some(body)
     }
