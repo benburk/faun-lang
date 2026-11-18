@@ -13,7 +13,7 @@ use crate::{ModuleId, Symbol, Symbols};
 /// Refuse the first declaration that cannot stand, in that order.
 pub(super) fn check(
     program: &n::Program,
-    host: ModuleId,
+    host: Option<ModuleId>,
     symbols: &Symbols,
 ) -> Result<(), Refusal> {
     externals(program, host, symbols)?;
@@ -25,11 +25,15 @@ pub(super) fn check(
 /// answers such a definition by its spelling alone, so one written anywhere
 /// else would reach the target's routine at whatever type it claimed, and
 /// with no capability in hand.
-fn externals(program: &n::Program, host: ModuleId, symbols: &Symbols) -> Result<(), Refusal> {
+fn externals(
+    program: &n::Program,
+    host: Option<ModuleId>,
+    symbols: &Symbols,
+) -> Result<(), Refusal> {
     let bodyless = program
         .functions
         .iter()
-        .find(|function| function.clauses.is_empty() && function.module != host);
+        .find(|function| function.clauses.is_empty() && Some(function.module) != host);
     let Some(function) = bodyless else {
         return Ok(());
     };

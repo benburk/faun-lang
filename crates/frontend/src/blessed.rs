@@ -11,7 +11,7 @@ use std::fmt;
 use num_bigint::BigUint;
 
 use super::diagnostic::{Advised, Diagnostic};
-use super::modules::{LoadedProgram, TypeBinding};
+use super::modules::{LoadedProgram, Modules, TypeBinding};
 use super::{Symbol, Symbols};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,11 +112,20 @@ impl PreludeIds {
     /// # Errors
     ///
     /// Reports the first missing standard type, constructor, or method.
+    pub fn find_in(program: &LoadedProgram) -> Result<Self, Diagnostic> {
+        Self::find_among(&program.view())
+    }
+
+    /// [`Self::find_in`], among the modules loaded so far.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::find_in`].
     #[expect(
         clippy::too_many_lines,
         reason = "one standard identity per line, in the order the struct declares them"
     )]
-    pub fn find_in(program: &LoadedProgram) -> Result<Self, Diagnostic> {
+    pub(crate) fn find_among(program: &Modules<'_>) -> Result<Self, Diagnostic> {
         let bool_ = binding(program, "Bool")?;
         let nat = binding(program, "Nat")?;
         let int = binding(program, "Int")?;
@@ -423,11 +432,11 @@ pub fn string(bytes: &[u8], prelude: &PreludeIds) -> LiteralExpr {
 
 /// The word the prelude exports as `name`, where it has an `of_nat` and its
 /// module declares `numerals_below` as a numeral.
-fn word(program: &LoadedProgram, name: &str) -> Option<Word> {
+fn word(program: &Modules<'_>, name: &str) -> Option<Word> {
     let binding = binding(program, name).ok()?;
     let of_nat = method(program, &binding, name, "of_nat").ok()?;
     let equals = method(program, &binding, name, "equals").ok()?;
-    let local = symbol(&program.symbols, name).ok()?;
+    let local = symbol(program.symbols, name).ok()?;
     let module = program.modules.iter().find(|module| {
         module
             .scope
@@ -464,8 +473,8 @@ fn word(program: &LoadedProgram, name: &str) -> Option<Word> {
     })
 }
 
-fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, Diagnostic> {
-    let local = symbol(&program.symbols, name)?;
+fn binding(program: &Modules<'_>, name: &str) -> Result<TypeBinding, Diagnostic> {
+    let local = symbol(program.symbols, name)?;
     program
         .module(program.prelude)
         .public
@@ -476,11 +485,11 @@ fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, Diagnosti
 }
 
 fn binding_with_private_constructor(
-    program: &LoadedProgram,
+    program: &Modules<'_>,
     name: &str,
 ) -> Result<TypeBinding, Diagnostic> {
     let public = binding(program, name)?;
-    let local = symbol(&program.symbols, name)?;
+    let local = symbol(program.symbols, name)?;
     program
         .modules
         .iter()
@@ -497,12 +506,12 @@ fn binding_with_private_constructor(
 }
 
 fn method(
-    program: &LoadedProgram,
+    program: &Modules<'_>,
     binding: &TypeBinding,
     owner: &str,
     name: &str,
 ) -> Result<Symbol, Diagnostic> {
-    let local = symbol(&program.symbols, name)?;
+    let local = symbol(program.symbols, name)?;
     binding
         .methods
         .get(&local)
@@ -511,12 +520,12 @@ fn method(
 }
 
 fn constructor(
-    program: &LoadedProgram,
+    program: &Modules<'_>,
     binding: &TypeBinding,
     owner: &str,
     name: &str,
 ) -> Result<Symbol, Diagnostic> {
-    let local = symbol(&program.symbols, name)?;
+    let local = symbol(program.symbols, name)?;
     binding.constructors.get(&local).copied().ok_or_else(|| {
         Diagnostic::new(format!(
             "standard type `{owner}` has no constructor `{name}`"

@@ -44,13 +44,20 @@ type Column = Option<InferredType>;
 
 /// Refuse the first definition whose clauses leave some value unmatched,
 /// and the first `is` whose arms do.
-pub(crate) fn check(program: &t::Program, cx: &Context) -> Result<(), Diagnostic> {
-    covered(program, &cx.symbols, &cx.prelude).map_err(|refusal| cx.told(refusal))
+/// Only the functions from `from` on are looked at: those before are
+/// already checked.
+pub(crate) fn check(program: &t::Program, from: usize, cx: &Context) -> Result<(), Diagnostic> {
+    covered(program, from, &cx.symbols, &cx.prelude).map_err(|refusal| cx.told(refusal))
 }
 
-fn covered(program: &t::Program, symbols: &Symbols, prelude: &PreludeIds) -> Result<(), Refusal> {
+fn covered(
+    program: &t::Program,
+    from: usize,
+    symbols: &Symbols,
+    prelude: &PreludeIds,
+) -> Result<(), Refusal> {
     let checker = Coverage::new(program, prelude, symbols);
-    for function in &program.functions {
+    for function in &program.functions[from..] {
         let t::Definition::Body(clauses) = &function.definition else {
             continue;
         };

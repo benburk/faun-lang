@@ -5,10 +5,10 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::rc::Rc;
 
-use super::unify::{Infer, Scheme, Tags, Ty, free_variables};
+use super::unify::{Scheme, Tags, Ty, free_variables};
 use super::{
-    Bound, Checker, Facts, FieldImpl, MethodImpl, UnsignedMethod, failure, first_order, has_hole,
-    passable,
+    Bound, Checker, Environment, Facts, FieldImpl, MethodImpl, UnsignedMethod, failure,
+    first_order, has_hole, passable,
 };
 use crate::blessed::PreludeIds;
 use crate::declarations as n;
@@ -17,22 +17,38 @@ use crate::hir as h;
 use crate::{ModuleId, Symbol, Symbols};
 
 impl<'a> Checker<'a> {
+    /// A checker of `program`, after the definitions `environment` holds,
+    /// whose types are `earlier`.
     pub(super) fn new(
-        program: &'a n::Program,
+        environment: Environment,
+        (program, earlier): (&'a n::Program, &'a HashMap<Symbol, n::Data>),
         symbols: &'a Symbols,
         prelude: &'a PreludeIds,
         sites: &'a h::Sites,
     ) -> Result<Self, Refusal> {
+        let Environment {
+            infer,
+            values,
+            open,
+            constructors,
+            methods,
+            fields,
+            bounds,
+            variable_names,
+            partial,
+            defined,
+        } = environment;
         let mut checker = Self {
             symbols,
             prelude,
-            infer: Infer::default(),
-            values: HashMap::default(),
-            open: HashSet::default(),
-            constructors: HashMap::default(),
-            methods: HashMap::default(),
-            fields: HashMap::default(),
+            infer,
+            values,
+            open,
+            constructors,
+            methods,
+            fields,
             data: &program.data,
+            earlier,
             visible_methods: &program.visible_methods,
             sites,
             pending_methods: Vec::new(),
@@ -45,12 +61,12 @@ impl<'a> Checker<'a> {
             pending_ways: Vec::new(),
             answers: Vec::new(),
             written_result: None,
-            defined: HashMap::default(),
+            defined,
             clause_marks: None,
             prefix_helps: HashMap::default(),
-            bounds: HashMap::default(),
-            variable_names: HashMap::default(),
-            partial: HashMap::default(),
+            bounds,
+            variable_names,
+            partial,
             current: Vec::new(),
             current_names: HashMap::default(),
             bound_sites: Vec::new(),
@@ -78,6 +94,22 @@ impl<'a> Checker<'a> {
         }
         checker.validate_literal_protocols(program)?;
         Ok(checker)
+    }
+
+    /// What checking leaves for the definitions checked after.
+    pub(super) fn into_environment(self) -> Environment {
+        Environment {
+            infer: self.infer,
+            values: self.values,
+            open: self.open,
+            constructors: self.constructors,
+            methods: self.methods,
+            fields: self.fields,
+            bounds: self.bounds,
+            variable_names: self.variable_names,
+            partial: self.partial,
+            defined: self.defined,
+        }
     }
 
     fn add_data(&mut self, module: ModuleId, data: &n::Data) -> Result<(), Refusal> {

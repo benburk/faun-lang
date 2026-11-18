@@ -95,9 +95,10 @@ pub(crate) fn enter(
         .iter_mut()
         .find(|module| module.source == main.module)
         .expect("the entry module was resolved");
-    module
-        .items
-        .push(cx.host.entry_signature(clause.span, main.symbol, spelling));
+    module.items.push(
+        cx.host()
+            .entry_signature(clause.span, main.symbol, spelling),
+    );
     module.items.push(h::Item::Clause(clause));
     (program, locations)
 }

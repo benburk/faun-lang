@@ -123,6 +123,38 @@ impl LoadedProgram {
     pub fn module(&self, id: ModuleId) -> &LoadedModule {
         &self.modules[id.index()]
     }
+
+    /// Its modules, as what is loaded so far is seen.
+    pub(crate) fn view(&self) -> Modules<'_> {
+        Modules {
+            sources: &self.sources,
+            symbols: &self.symbols,
+            modules: &self.modules,
+            prelude: self.prelude,
+        }
+    }
+}
+
+/// The modules loaded so far, and what their syntax and interfaces point
+/// into: a whole program, or the standard package alone.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Modules<'a> {
+    pub sources: &'a Sources,
+    pub symbols: &'a Symbols,
+    /// Each module, by identity.
+    #[expect(
+        clippy::struct_field_names,
+        reason = "the modules loaded are what it is"
+    )]
+    pub modules: &'a [LoadedModule],
+    /// The standard package's root module.
+    pub prelude: ModuleId,
+}
+
+impl Modules<'_> {
+    pub(crate) fn module(&self, id: ModuleId) -> &LoadedModule {
+        &self.modules[id.index()]
+    }
 }
 
 /// Load an entry file with the standard library at `prelude`, whose exports
@@ -171,20 +203,7 @@ pub fn load_program_using(
     host: &Path,
     packages: &Packages,
 ) -> Result<LoadedProgram, Diagnostic> {
-    let mut loader = Loader {
-        fetched: packages.clone(),
-        ..Loader::default()
-    };
-    let root = loader.package_at(prelude);
-    let prelude_id = loader.load_module(prelude, Loading::Package(root), true)?;
-    loader.prelude = Some(loader.pending[prelude_id.index()].public.clone());
-    let root = loader.package_at(prelude);
-    let host_id = loader.load_module(host, Loading::Package(root), false)?;
-    loader.host = Some(host_id);
-    // The standard library as the entry is its own package.
-    let root = loader.package_at(entry);
-    let entry_id = loader.load_module(entry, Loading::Package(root), false)?;
-    Ok(loader.into_loaded_program(entry_id, prelude_id, host_id))
+    Loader::standard(prelude)?.rest(entry, host, packages)
 }
 
 /// Where a package's modules resolve their imports from: its root module's
@@ -205,25 +224,16 @@ enum Loading<'a> {
     Within(&'a Root),
 }
 
-#[derive(Debug)]
-struct PendingModule {
-    id: ModuleId,
-    /// Which package it belongs to; see [`Root`].
-    package: usize,
-    path: PathBuf,
-    source: SourceId,
-    syntax: Module,
-    namespace: Symbol,
-    imports: Vec<(usize, ModuleId)>,
-    scope: Interface,
-    public: Interface,
-}
-
-#[derive(Default)]
-struct Loader {
-    sources: Sources,
-    symbols: Symbols,
-    pending: Vec<PendingModule>,
+/// Loading under way: the standard package first, alone, and then the
+/// host and the entry's package, on from where it stopped.
+#[derive(Debug, Default)]
+pub(crate) struct Loader {
+    pub(crate) sources: Sources,
+    pub(crate) symbols: Symbols,
+    /// Every module loaded so far, by its identity.
+    pending: Vec<LoadedModule>,
+    /// Which package each module belongs to; see [`Root`].
+    packages_of: Vec<usize>,
     loaded: HashMap<PathBuf, ModuleId>,
     visiting: Vec<PathBuf>,
     /// The prelude's exports, once it has loaded; its own modules see none.
@@ -235,12 +245,99 @@ struct Loader {
     packages: usize,
     /// Which package each URL dependency is read from.
     fetched: Packages,
+    /// The standard package's root module, once it has loaded, and the
+    /// path it was loaded by, which the host's package is rooted beside.
+    standard: Option<(ModuleId, PathBuf)>,
     /// Each package's imported dependencies: the package, the dependency's
     /// root module, and whether it is in `test_uses`.
     imported: Vec<(usize, ModuleId, bool)>,
 }
 
 impl Loader {
+    /// The standard package, rooted at `prelude`, loaded alone: whatever
+    /// is loaded after it sees its exports.
+    ///
+    /// # Errors
+    /// Reports what loading any module does.
+    pub(crate) fn standard(prelude: &Path) -> Result<Self, Diagnostic> {
+        let mut loader = Self::default();
+        let root = loader.package_at(prelude);
+        let id = loader.load_module(prelude, Loading::Package(root), true)?;
+        loader.prelude = Some(loader.pending[id.index()].public.clone());
+        loader.standard = Some((id, prelude.to_path_buf()));
+        Ok(loader)
+    }
+
+    /// The modules loaded so far.
+    pub(crate) fn view(&self) -> Modules<'_> {
+        Modules {
+            sources: &self.sources,
+            symbols: &self.symbols,
+            modules: &self.pending,
+            prelude: self.prelude(),
+        }
+    }
+
+    /// The modules loaded so far, the sources they are read from, and the
+    /// symbols they and whatever names them intern.
+    pub(crate) fn parts(&mut self) -> (&[LoadedModule], &Sources, &mut Symbols) {
+        (&self.pending, &self.sources, &mut self.symbols)
+    }
+
+    /// Drop the syntax of every module loaded so far, once it is checked:
+    /// what is loaded after reads only their interfaces.
+    pub(crate) fn forget_syntax(&mut self) {
+        for module in &mut self.pending {
+            module.syntax.items = Vec::new();
+        }
+    }
+
+    /// The standard package's root module.
+    pub(crate) const fn prelude(&self) -> ModuleId {
+        self.standard
+            .as_ref()
+            .expect("the standard package loads first")
+            .0
+    }
+
+    /// Whether the module at `path` is already loaded, as one of the
+    /// standard package's is once it has.
+    pub(crate) fn holds(&self, path: &Path) -> bool {
+        crate::standard::built_in(path).map_or_else(
+            || {
+                path.canonicalize()
+                    .is_ok_and(|path| self.loaded.contains_key(&path))
+            },
+            |_| self.loaded.contains_key(path),
+        )
+    }
+
+    /// Go on to load the target's `host`, mounted as `std.host`, and the
+    /// package at `entry`, reading each URL dependency from where
+    /// `packages` says.
+    ///
+    /// # Errors
+    /// Reports what loading any module does.
+    pub(crate) fn rest(
+        mut self,
+        entry: &Path,
+        host: &Path,
+        packages: &Packages,
+    ) -> Result<LoadedProgram, Diagnostic> {
+        self.fetched = packages.clone();
+        let (prelude, written) = self
+            .standard
+            .clone()
+            .expect("the standard package loads first");
+        let root = self.package_at(&written);
+        let host_id = self.load_module(host, Loading::Package(root), false)?;
+        self.host = Some(host_id);
+        // The standard library as the entry is its own package.
+        let root = self.package_at(entry);
+        let entry_id = self.load_module(entry, Loading::Package(root), false)?;
+        Ok(self.into_loaded_program(entry_id, prelude, host_id))
+    }
+
     /// A new package rooted where the module at `path` is.
     fn package_at(&mut self, path: &Path) -> Root {
         self.packages += 1;
@@ -260,7 +357,7 @@ impl Loader {
         prelude: ModuleId,
         host: ModuleId,
     ) -> LoadedProgram {
-        let own = self.pending[entry.index()].package;
+        let own = self.packages_of[entry.index()];
         let mut dependencies: Vec<(ModuleId, bool)> = self
             .imported
             .iter()
@@ -272,26 +369,14 @@ impl Loader {
         let package = self
             .pending
             .iter()
-            .filter(|module| module.package == own)
-            .map(|module| module.id)
-            .collect();
-        let modules = self
-            .pending
-            .into_iter()
-            .map(|module| LoadedModule {
-                id: module.id,
-                path: module.path,
-                source: module.source,
-                syntax: module.syntax,
-                namespace: module.namespace,
-                scope: module.scope,
-                public: module.public,
-            })
+            .zip(&self.packages_of)
+            .filter(|&(_, &package)| package == own)
+            .map(|(module, _)| module.id)
             .collect();
         LoadedProgram {
             sources: self.sources,
             symbols: self.symbols,
-            modules,
+            modules: self.pending,
             entry,
             package,
             prelude,
@@ -366,17 +451,16 @@ impl Loader {
 
         // Reserve the slot before descending so module IDs remain stable and a
         // cycle can name the module being visited.
-        self.pending.push(PendingModule {
+        self.pending.push(LoadedModule {
             id,
-            package: root.package,
             path: path.clone(),
             source,
             syntax,
             namespace,
-            imports: Vec::new(),
             scope: Interface::default(),
             public: Interface::default(),
         });
+        self.packages_of.push(root.package);
         self.visiting.push(path.clone());
 
         let imports: Vec<(usize, Span, Vec<String>)> = self.pending[id.index()]
@@ -454,7 +538,6 @@ impl Loader {
         )?;
 
         let module = &mut self.pending[id.index()];
-        module.imports = linked_imports;
         module.scope = scope;
         module.public = public;
         self.loaded.insert(path, id);

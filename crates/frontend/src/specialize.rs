@@ -497,7 +497,7 @@ pub(crate) fn monomorphize_package(
     let specialized = || {
         let specializer = Specializer::new(program, cx);
         let entry = main
-            .map(|main| specializer.entry_key(main.symbol, Some(cx.host.host)))
+            .map(|main| specializer.entry_key(main.symbol, Some(cx.host().host)))
             .transpose()?;
         specializer.run(entry, package_roots(program, cx)?)
     };
