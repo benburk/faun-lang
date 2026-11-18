@@ -117,7 +117,12 @@ two small numbers is the small sum, so the common case costs a test of the
 tag. Where range analysis proves a value below a bound, it is held as a
 plain word with no test: in `spectralnorm` the row index, taken from
 `List.range`, is a word, while the column, a counter nothing bounds, is a
-natural ([spectral-norm](../spectralnorm-performance.md)). Running out of
+natural ([spectral-norm](../spectralnorm-performance.md)). A loop's
+natural gets its bound only from a guard, never from a guess at how far a
+program counts: where a walk steps `bit` by nine while `bit + 9 <= total`,
+the guard bounds `bit` by `total` less nine, and if `total` is bounded so
+is `bit`. A natural no guard bounds stays the tagged word, whose sum
+crosses into digits rather than wrap. Running out of
 memory for naturals ends the program with status 2.
 
 ## The words
