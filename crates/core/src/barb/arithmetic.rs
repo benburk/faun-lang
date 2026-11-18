@@ -620,16 +620,26 @@ impl<'a> Normal<'a> {
     /// term is copied each time it is read, so `n + n` holds two of `n`,
     /// and paying by size keeps a body that doubles what it is handed from
     /// building more than the budget.
-    fn run(&self, args: Vec<Term>) -> Option<Term> {
-        self.body(self.program.function(self.id).body()?, args, &mut 1024)
+    fn run(&self, mut args: Vec<Term>) -> Option<Term> {
+        self.body(self.program.function(self.id).body()?, &mut args, &mut 1024)
     }
-    fn body(&self, body: Body, mut locals: Vec<Term>, fuel: &mut u32) -> Option<Term> {
+    /// Normalize `body` with `locals` in scope, leaving `locals` as it
+    /// found them: an arm's fields and bindings are pushed for its body and
+    /// popped after, rather than every local copied for each arm.
+    fn body(&self, body: Body, locals: &mut Vec<Term>, fuel: &mut u32) -> Option<Term> {
+        let mark = locals.len();
+        let answer = self.bound(body, locals, fuel);
+        locals.truncate(mark);
+        answer
+    }
+    fn bound(&self, body: Body, locals: &mut Vec<Term>, fuel: &mut u32) -> Option<Term> {
         for &binding in self.program.bindings(body.bindings) {
-            locals.push(self.expr(binding, &locals, fuel)?);
+            let bound = self.expr(binding, locals, fuel)?;
+            locals.push(bound);
         }
-        self.expr(body.tail, &locals, fuel)
+        self.expr(body.tail, locals, fuel)
     }
-    fn expr(&self, id: super::ExprId, locals: &[Term], fuel: &mut u32) -> Option<Term> {
+    fn expr(&self, id: super::ExprId, locals: &mut Vec<Term>, fuel: &mut u32) -> Option<Term> {
         *fuel = fuel.checked_sub(1)?;
         let mut args = |range| {
             self.program
@@ -652,7 +662,7 @@ impl<'a> Normal<'a> {
                 })
             }
             Expr::Call(called, fields) => {
-                let fields = args(fields)?;
+                let mut fields = args(fields)?;
                 if called == self.id {
                     return Some(Term::Recursive(fields));
                 }
@@ -662,9 +672,9 @@ impl<'a> Normal<'a> {
                 if let Some(Some(op)) = self.walks.get(called.index()) {
                     return Some(Term::Walk(*op, fields));
                 }
-                self.body(self.program.function(called).body()?, fields, fuel)
+                self.body(self.program.function(called).body()?, &mut fields, fuel)
             }
-            Expr::Match(value, arms) => self.branch(&locals[value.0.index()], arms, locals, fuel),
+            Expr::Match(value, arms) => self.branch(value.0.index(), arms, locals, fuel),
         }
     }
 
@@ -687,12 +697,12 @@ impl<'a> Normal<'a> {
 
     fn branch(
         &self,
-        value: &Term,
+        value: usize,
         arms: super::Range,
-        locals: &[Term],
+        locals: &mut Vec<Term>,
         fuel: &mut u32,
     ) -> Option<Term> {
-        let parts = match value {
+        let parts = match &locals[value] {
             Term::Number(n) if n.is_zero() => Some((self.nil, vec![])),
             Term::Number(n) => Some((self.cons, vec![Term::Number(n - BigUint::one())])),
             Term::Succ(n) => Some((self.cons, vec![*n.clone()])),
@@ -705,9 +715,11 @@ impl<'a> Normal<'a> {
                 .arms(arms)
                 .iter()
                 .find(|arm| arm.ctor == ctor)?;
-            let mut inner = locals.to_vec();
-            inner.extend(fields);
-            return self.body(arm.body, inner, fuel);
+            let mark = locals.len();
+            locals.extend(fields);
+            let answer = self.body(arm.body, locals, fuel);
+            locals.truncate(mark);
+            return answer;
         }
         // Only an enum can be normalized without knowing its value;
         // fields of an unknown inductive value have no substitution.
@@ -716,9 +728,9 @@ impl<'a> Normal<'a> {
             if !self.program.fields(arm.ctor).is_empty() {
                 return None;
             }
-            choices.push((arm.ctor, self.body(arm.body, locals.to_vec(), fuel)?));
+            choices.push((arm.ctor, self.body(arm.body, locals, fuel)?));
         }
-        Some(Term::Match(Box::new(value.clone()), choices))
+        Some(Term::Match(Box::new(locals[value].clone()), choices))
     }
 }
 
