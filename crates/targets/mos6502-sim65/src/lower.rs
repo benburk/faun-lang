@@ -2837,14 +2837,19 @@ impl Lowering<'_> {
                     self.halve_sum(left, right, results[0]);
                     return;
                 }
-                let value = self.operand(*value, T0);
                 // What a shift down keeps comes from `by` bits further up,
-                // so it is worked out that much wider than it is read.
-                let reach = match direction {
-                    Direction::Up => 0,
-                    Direction::Down => *by,
+                // so it is worked out that much wider than it is read,
+                // where the value it moves has bits there.
+                let read = self.needed(results[0]);
+                let needed = match direction {
+                    Direction::Up => read,
+                    Direction::Down => read.max(
+                        read.saturating_add(*by)
+                            .min(bits(self.program.class(*value))),
+                    ),
                 };
-                let width = if self.needed(results[0]).saturating_add(reach) <= 8 {
+                let value = self.operand(*value, T0);
+                let width = if needed <= 8 {
                     Width::Byte
                 } else {
                     Width::Word
