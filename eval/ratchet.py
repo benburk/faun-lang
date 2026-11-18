@@ -120,7 +120,12 @@ WORKLOADS = [
     Workload("pidigits", GAME, "argument", sizes(500, 300, 20), 10, ("-lgmp",)),
     Workload("spectral-norm", GAME, "argument", sizes(300, 6, 2)),
     Workload("checksum", KERNELS, "bytes", sizes(1 << 22, 1 << 20, 1024)),
+    # Its table is a top-level constant, which the compiler works out again
+    # at every use, so a byte costs some two thousand times what it would: these
+    # sizes keep that to a fraction of a second, and a fix shows as a gain.
+    Workload("crc32", KERNELS, "bytes", sizes(1 << 13, 1 << 11, 16)),
     Workload("collatz", KERNELS, "argument", sizes(20_000, 10_000, 100)),
+    Workload("inflate", KERNELS, "argument", sizes(100_000, 30_000, 200)),
     Workload("queens", KERNELS, "argument", sizes(9, 8, 6)),
     Workload("sieve", KERNELS, "argument", sizes(1_000_000, 500_000, 1000)),
     Workload("sort", KERNELS, "argument", sizes(100_000, 30_000, 24)),

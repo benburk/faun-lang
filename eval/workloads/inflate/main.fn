@@ -1,0 +1,259 @@
+# Compress a text with DEFLATE and read it back: the text is words drawn
+# from a small generator, compressed as one block under the fixed Huffman
+# code, its matches found by LZ77 through short hash chains, and then
+# inflated. Prints the compressed length, the length read back and its
+# CRC-32.
+
+import std.host {Host}
+
+# The text: `size` bytes of words, each followed by a space, chosen by a
+# generator from a seed.
+text : Nat -> List(U8)
+text(size) -> (
+  words = ["the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "runs", "far", "away", "from", "a", "big", "cat"].map(|word| word.to_utf8())
+  words_until(words, size, 42, []).take(size)
+)
+
+words_until : (List(List(U8)), Nat, Nat, List(U8)) -> List(U8)
+words_until(_, size, _, out) if out.len() >= size -> out
+words_until(words, size, seed, out) -> (
+  word = words.get(seed / 256 % words.len()).ok_or([])
+  words_until(words, size, (seed * 25173 + 13849) % 65536, out.concat(word).append(' '))
+)
+
+# Each length symbol's least length from 257 on, and how many extra bits
+# follow it; then each distance symbol's least distance, and its extra
+# bits. RFC 1951's tables.
+length_bases : List(Nat)
+length_bases = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+
+length_extras : List(Nat)
+length_extras = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+
+distance_bases : List(Nat)
+distance_bases = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+
+distance_extras : List(Nat)
+distance_extras = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+
+# How many chain links a search follows, and how many hashes there are.
+chain_limit : Nat
+chain_limit = 8
+
+hashes : Nat
+hashes = 1024
+
+# --- Compression ---
+
+# The bits written so far: whole bytes in `out`, and `count` more in
+# `bits`, the first written the least significant.
+Writer = {out: List(U8), bits: Nat, count: Nat}
+
+# `value`'s low `width` bits written after the rest.
+put : (Writer, Nat, Nat) -> Writer
+put({out, bits, count}, value, width) -> flush({out, bits: bits + value.shift_left(count), count: count + width})
+
+# Every whole byte moved to `out`.
+flush : Writer -> Writer
+flush({out, bits, count}) if count >= 8 -> flush({out: out.append(U8.of_nat(bits % 256)), bits: bits / 256, count: count - 8})
+flush(writer) -> writer
+
+# The low `length` bits of `code` in the other order: a Huffman code is
+# written from its most significant bit.
+reversed : (Nat, Nat) -> Nat
+reversed(code, length) -> reversed_into(code, length, 0)
+
+reversed_into : (Nat, Nat, Nat) -> Nat
+reversed_into(_, 0, done) -> done
+reversed_into(code, Succ(left), done) -> reversed_into(code / 2, left, done * 2 + code % 2)
+
+# A literal or length symbol under the fixed code.
+put_symbol : (Writer, Nat) -> Writer
+put_symbol(writer, symbol) if symbol < 144 -> put(writer, reversed(0x30 + symbol, 8), 8)
+put_symbol(writer, symbol) if symbol < 256 -> put(writer, reversed(0x190 + symbol - 144, 9), 9)
+put_symbol(writer, symbol) if symbol < 280 -> put(writer, reversed(symbol - 256, 7), 7)
+put_symbol(writer, symbol) -> put(writer, reversed(0xc0 + symbol - 280, 8), 8)
+
+# The last symbol whose base is no more than `value`.
+symbol_of : (List(Nat), Nat, Nat) -> Nat
+symbol_of(bases, value, symbol) if bases.get(symbol + 1).ok_or(value + 1) <= value -> symbol_of(bases, value, symbol + 1)
+symbol_of(_, _, symbol) -> symbol
+
+# A match: its length's symbol and extra bits, then its distance's.
+put_match : (Writer, Nat, Nat) -> Writer
+put_match(writer, length, distance) -> (
+  l = symbol_of(length_bases, length, 0)
+  d = symbol_of(distance_bases, distance, 0)
+  with_length = put(put_symbol(writer, 257 + l), length - length_bases.get(l).ok_or(0), length_extras.get(l).ok_or(0))
+  with_code = put(with_length, reversed(d, 5), 5)
+  put(with_code, distance - distance_bases.get(d).ok_or(0), distance_extras.get(d).ok_or(0))
+)
+
+byte : (List(U8), Nat) -> Nat
+byte(input, at) -> input.get(at).ok_or(0).to_nat()
+
+# The hash of the three bytes from `at`.
+hash : (List(U8), Nat) -> Nat
+hash(input, at) -> ((byte(input, at) * 64) ^ (byte(input, at + 1) * 8) ^ byte(input, at + 2)) % hashes
+
+# The chains: for each hash, the latest position that had it, plus one,
+# and for each position, the one before it with the same hash, plus one.
+# Nought is none.
+Chains = {head: List(Nat), prev: List(Nat)}
+
+# `at` put at the head of its chain.
+insert : (List(U8), Chains, Nat) -> Chains
+insert(input, {head, prev}, at) if at + 3 <= input.len() -> (
+  key = hash(input, at)
+  latest = head.get(key).ok_or(0)
+  {head: head.put(key, at + 1), prev: prev.put(at, latest)}
+)
+insert(_, chains, _) -> chains
+
+# Every position from `at` below `end` inserted.
+insert_until : (List(U8), Chains, Nat, Nat) -> Chains
+insert_until(input, chains, at, end) if at < end -> insert_until(input, insert(input, chains, at), at + 1, end)
+insert_until(_, chains, _, _) -> chains
+
+# How many bytes from `a` and from `b` agree, up to `most`.
+matching : (List(U8), Nat, Nat, Nat, Nat) -> Nat
+matching(input, a, b, count, most) if count < most & input.get(a + count) == input.get(b + count) -> matching(input, a, b, count + 1, most)
+matching(_, _, _, count, _) -> count
+
+# The longest match for `at` along its chain from `candidate`, as its
+# length and distance, no more than `limit` links on.
+longest : (List(U8), List(Nat), Nat, Nat, Nat, (Nat, Nat)) -> (Nat, Nat)
+longest(_, _, _, 0, _, best) -> best
+longest(_, _, _, _, 0, best) -> best
+longest(input, prev, at, candidate, limit, (length, distance)) -> (
+  from = candidate - 1
+  if at - from > 32768 return (length, distance)
+  found = matching(input, from, at, 0, (input.len() - at).min(258))
+  best = if found > length then (found, at - from) else (length, distance)
+  longest(input, prev, at, prev.get(from).ok_or(0), limit - 1, best)
+)
+
+# The symbols from `at` on: a match of three bytes or more where the
+# chain finds one, and a literal where it does not.
+compress_from : (List(U8), Chains, Nat, Writer) -> Writer
+compress_from(input, _, at, writer) if at >= input.len() -> put_symbol(writer, 256)
+compress_from(input, chains, at, writer) -> (
+  candidate = if at + 3 <= input.len() then chains.head.get(hash(input, at)).ok_or(0) else 0
+  (length, distance) = longest(input, chains.prev, at, candidate, chain_limit, (0, 0))
+  inserted = insert(input, chains, at)
+  if length < 3 return compress_from(input, inserted, at + 1, put_symbol(writer, byte(input, at)))
+  compress_from(input, insert_until(input, inserted, at + 1, at + length), at + length, put_match(writer, length, distance))
+)
+
+# One final block under the fixed code, its last byte filled with noughts.
+compress : List(U8) -> List(U8)
+compress(input) -> (
+  chains = {head: List.repeat(0, hashes), prev: List.repeat(0, input.len())}
+  header = put({out: [], bits: 0, count: 0}, 3, 3)
+  {out, bits, count} = compress_from(input, chains, 0, header)
+  if count > 0 then out.append(U8.of_nat(bits)) else out
+)
+
+# --- Decompression ---
+
+# The bit at `at`, counting from the first byte's least significant.
+bit : (List(U8), Nat) -> Nat
+bit(input, at) -> byte(input, at / 8).shift_right(at % 8) % 2
+
+# `count` bits from `at`, the first the least significant.
+bits : (List(U8), Nat, Nat) -> Nat
+bits(_, _, 0) -> 0
+bits(input, at, Succ(count)) -> bit(input, at) + 2 * bits(input, at + 1, count)
+
+# `count` more bits of a Huffman code from `at`, the first the most
+# significant, after `code`.
+code_bits : (List(U8), Nat, Nat, Nat) -> Nat
+code_bits(_, _, 0, code) -> code
+code_bits(input, at, Succ(count), code) -> code_bits(input, at + 1, count, code * 2 + bit(input, at))
+
+# A literal or length symbol under the fixed code, and the bit after it:
+# its codes are seven, eight or nine bits long, and each length's codes
+# follow the shorter ones'.
+literal_symbol : (List(U8), Nat) -> (Nat, Nat)
+literal_symbol(input, at) -> (
+  seven = code_bits(input, at, 7, 0)
+  if seven < 0x18 return (256 + seven, at + 7)
+  eight = code_bits(input, at + 7, 1, seven)
+  if eight < 0xc0 return (eight - 0x30, at + 8)
+  if eight < 0xc8 return (280 + eight - 0xc0, at + 8)
+  (144 + code_bits(input, at + 8, 1, eight) - 0x190, at + 9)
+)
+
+InflateError = [BadBlock, BadSymbol, BadDistance]
+
+# The block's symbols from `at` to its end, appended to `out`.
+symbols : (List(U8), Nat, List(U8)) -> Result(List(U8), InflateError)
+symbols(input, at, out) -> (
+  (symbol, after) = literal_symbol(input, at)
+  if symbol < 256 return symbols(input, after, out.append(U8.of_nat(symbol)))
+  if symbol == 256 return Ok(out)
+  if symbol > 285 return Err(BadSymbol)
+  l = symbol - 257
+  extra = length_extras.get(l).ok_or(0)
+  length = length_bases.get(l).ok_or(0) + bits(input, after, extra)
+  d = code_bits(input, after + extra, 5, 0)
+  if d >= 30 return Err(BadSymbol)
+  d_extra = distance_extras.get(d).ok_or(0)
+  distance = distance_bases.get(d).ok_or(0) + bits(input, after + extra + 5, d_extra)
+  if distance > out.len() return Err(BadDistance)
+  symbols(input, after + extra + 5 + d_extra, copy(out, out.len() - distance, length))
+)
+
+# `length` bytes from `from` on appended one at a time, so a match may
+# overlap what it writes.
+copy : (List(U8), Nat, Nat) -> List(U8)
+copy(out, _, 0) -> out
+copy(out, from, Succ(left)) -> copy(out.append(out.get(from).ok_or(0)), from + 1, left)
+
+# The bytes of a stream of fixed blocks.
+inflate : List(U8) -> Result(List(U8), InflateError)
+inflate(input) -> blocks(input, 0, [])
+
+blocks : (List(U8), Nat, List(U8)) -> Result(List(U8), InflateError)
+blocks(input, at, out) -> (
+  if bits(input, at + 1, 2) != 1 return Err(BadBlock)
+  read = symbols(input, at + 3, out)?
+  if bit(input, at) == 1 then Ok(read) else Err(BadBlock)
+)
+
+# --- Checking ---
+
+# CRC-32 as zlib computes it, through a table of 256.
+crc32 : List(U8) -> U32
+crc32(bytes) -> (
+  table = List.range(256).map(|n| crc_entry(U32.of_nat(n), 8))
+  !bytes.fold(0xffffffff, |register, byte| table.get((register ^ U32.of_u8(byte)).to_nat() & 0xff).ok_or(0) ^ register.shift_right(8))
+)
+
+crc_entry : (U32, Nat) -> U32
+crc_entry(register, 0) -> register
+crc_entry(register, Succ(bits)) if (register & 1) == 1 -> crc_entry(0xedb88320 ^ register.shift_right(1), bits)
+crc_entry(register, Succ(bits)) -> crc_entry(register.shift_right(1), bits)
+
+report : Nat -> Str
+report(size) -> (
+  compressed = compress(text(size))
+  inflate(compressed) is (
+    Ok(out) then "${compressed.len()} ${out.len()} ${crc32(out)}"
+    Err(_) then "corrupt"
+  )
+)
+
+expect text(30) == "the and dog and and lazy big a".to_utf8()
+expect crc32("123456789".to_utf8()) == 0xcbf43926
+# Python's zlib.compress(b"a", wbits=-15), and "abcabcabcabc" with a match.
+expect compress("a".to_utf8()) == [0x4b, 0x04, 0x00]
+expect inflate([0x4b, 0x4c, 0x4a, 0x4e, 0x84, 0x21, 0x00]) == Ok("abcabcabcabc".to_utf8())
+expect [0, 1, 2, 3, 50, 1000].all(|n| inflate(compress(text(n))) == Ok(text(n)))
+
+main! : Host -> []
+main!(host) -> (
+  size = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!(report(size))
+  host.exit!(0)
+)

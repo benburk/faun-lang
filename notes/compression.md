@@ -526,33 +526,40 @@ fewest channels that hold an image exactly, grey and dropping alpha, is
 what keeps the suite's 162 images from 78,748 bytes, which Pillow writes
 saving them all as RGBA.
 
-## A ratchet workload, proposed
+## Two ratchet workloads
 
-The [ratchet](../RATCHET.md) improves the compiler against fourteen
-programs, each with a C twin. Compression would be a good fifteenth: a
-loop of words and table lookups with no allocation but a growing output,
-where this note's findings, a constant worked out at every use, a word's
-arithmetic left as calls and the search's spills, are each what a
-compiler change would move. It is not added, because `eval/` is
-protected: changing the suite starts a new series and needs approval.
-
-The proposal, for that decision:
+The [ratchet](../RATCHET.md) improves the compiler against a suite of
+programs, each with a C twin. Compression is two of them: loops of words
+and table lookups with no allocation but a growing output, where this
+note's findings, a constant worked out at every use, a word's arithmetic
+left as calls and the search's spills, are each what a compiler change
+would move.
 
 - **`crc32`**, a kernel in `eval/workloads` reading its input as bytes,
-  as `checksum` does: table-driven CRC-32 a byte at a time, the table
-  built in the program, against a C twin of 20 lines. Sizes 4 MB, 1 MB and
-  1 KB as `checksum`'s; it fits the 6502, its table 1 KB.
+  as `checksum` does: table-driven CRC-32 a byte at a time, the table a
+  top-level constant built in the program, against a C twin of 20 lines.
+  It was proposed at `checksum`'s sizes, 4 MB, 1 MB and 1 KB, but while a
+  constant is worked out at every use a byte costs some two thousand
+  times what it would, 6 µs on x86-64, so it measures 8 KB, 2 KB and 16
+  bytes, each a fraction of a second. Once a constant is worked out once
+  the table costs as much as the bytes, and the sizes can grow.
 - **`inflate`**, taking a size as its argument: the program writes a
-  deterministic text of that size, compresses it with fixed Huffman codes
-  and a short hash-chain search written in it, inflates the result and
-  prints the length and CRC-32 of what it read back. Both directions run
-  on every target with no input file; the C twin is the same 300 lines,
-  not zlib, so the twin measures how far the compiler is from C, not how
-  far the algorithm is from zlib's. On the 6502 at a few hundred bytes the
-  window and tables fit in 16 KB.
+  deterministic text of that size, compresses it as one block under the
+  fixed Huffman code through hash chains of 1024 heads searched 8 links
+  deep, inflates the result and prints the compressed length, the length
+  read back and its CRC-32. The C twin is the same algorithm, not zlib,
+  so it measures how far the compiler is from C, not how far the
+  algorithm is from zlib's; its stream reads back through Python's zlib.
+  It measures 100 KB on x86-64 and 30 KB on wasm32. Its 6502 image ends
+  near 170 KB, compression alone some 85 KB of it, so on the 6502 only its
+  twin runs, at 200 bytes, and its image counts by where it would end.
 
-`crc32` alone would have caught the first finding, the table rebuilt a
-byte, as a 500-fold regression.
+Writing the search turned up one more trap: the chains' insert as
+`{head: head.put(key, at + 1), prev: prev.put(at, head.get(key).ok_or(0))}`
+reads `head` after it is put, so `head` is shared when it is put and all
+1024 entries are copied a byte. Reading the old head first made 100 KB
+take 49 ms rather than 0.5 s. Nothing in the source says the order of a
+record's fields decides a copy.
 
 ## Related
 
