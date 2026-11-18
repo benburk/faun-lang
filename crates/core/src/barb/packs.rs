@@ -25,15 +25,18 @@ use super::{Shape, shape, single_field};
 const PACK: usize = 96;
 
 /// Which relations range analysis keeps, chosen by `FAUN_RANGES` for
-/// measuring what each costs and earns; octagons in every definition where
-/// nothing says.
+/// measuring what each costs and earns; octagons in loops where nothing
+/// says. Octagons in every definition cost twice the compiling of a program
+/// reaching the software float routines, whose long bodies relate dozens of
+/// values a pack, for a few hundredths of the naturals held as words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Relations {
     /// Intervals alone: no value is related to another.
     Intervals,
     /// Differences `x - y <= c` alone, in every definition: zones.
     Zones,
-    /// Octagons only in definitions that call themselves, the loops.
+    /// Octagons only in definitions that call themselves, the loops, and
+    /// intervals elsewhere.
     Loops,
     /// Octagons in every definition.
     Octagons,
@@ -45,8 +48,8 @@ impl Relations {
         *CHOSEN.get_or_init(|| match std::env::var("FAUN_RANGES").as_deref() {
             Ok("intervals") => Self::Intervals,
             Ok("zones") => Self::Zones,
-            Ok("loops") => Self::Loops,
-            _ => Self::Octagons,
+            Ok("octagons") => Self::Octagons,
+            _ => Self::Loops,
         })
     }
 }
@@ -372,7 +375,7 @@ impl Relating<'_> {
                 break;
             }
         }
-        let mut packs = Packing::new(values);
+        let mut packs = Packing::new(values, PACK);
         for group in &self.groups {
             for pair in group.windows(2) {
                 packs.union(pair[0], pair[1]);
@@ -435,13 +438,15 @@ fn counts(program: &Program, ty: super::TypeId) -> bool {
 struct Packing {
     parent: Vec<usize>,
     size: Vec<usize>,
+    most: usize,
 }
 
 impl Packing {
-    fn new(levels: usize) -> Self {
+    fn new(levels: usize, most: usize) -> Self {
         Self {
             parent: (0..levels).collect(),
             size: vec![1; levels],
+            most,
         }
     }
 
@@ -455,7 +460,7 @@ impl Packing {
 
     fn union(&mut self, a: usize, b: usize) {
         let (a, b) = (self.find(a), self.find(b));
-        if a == b || self.size[a] + self.size[b] > PACK {
+        if a == b || self.size[a] + self.size[b] > self.most {
             return;
         }
         let (keep, join) = if self.size[a] >= self.size[b] {
