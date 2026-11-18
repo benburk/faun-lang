@@ -593,6 +593,7 @@ fn walk(
     }
 
     let walk = FunctionWalk {
+        id,
         program,
         assumed,
         operations: &recognised.operations,
@@ -673,12 +674,21 @@ fn threshold(high: u64) -> Option<u64> {
     .find(|&width| width >= high)
 }
 
+/// How many tags an arm may answer and still say, for each, what it
+/// narrowed.
+const TAGS_TOLD: u64 = 8;
+
+/// How many sums down a narrowed sum's operands are narrowed in turn.
+const SUMMANDS: usize = 4;
+
 /// The most elements of a constant sequence read one by one for what its
 /// fields hold; past this, its fields could hold anything.
 const ELEMENTS_READ: u64 = 4096;
 
 /// One walk over one definition, with what it hands to what it calls.
 struct FunctionWalk<'a> {
+    /// The definition walked.
+    id: FnId,
     program: &'a Program,
     assumed: &'a Assumed,
     operations: &'a [Option<super::Operation>],
@@ -740,7 +750,8 @@ impl FunctionWalk<'_> {
                     match op {
                         Some(
                             op @ (super::Operation::Equals { .. }
-                            | super::Operation::LessThan { .. }),
+                            | super::Operation::LessThan { .. }
+                            | super::Operation::Add),
                         ) => {
                             let args = self.program.atoms(args);
                             Some((op, args[0].0.index(), args[1].0.index()))
@@ -868,7 +879,20 @@ impl FunctionWalk<'_> {
             (None, None) => self.results[called.index()].unwrap_or(Bounds::NOTHING),
         };
         let answer = self.answered(called, args, answer);
-        self.calls.push((called, held));
+        // A definition handing itself one of its own parameters unchanged
+        // hands it nothing it was not already handed. Said as nothing, a
+        // parameter a walk passes on settles at what its callers hand it,
+        // and a bound widened while they settled comes back down when they
+        // do, rather than holding itself up for ever.
+        let mut handed = held;
+        if called == self.id {
+            for (at, atom) in self.program.atoms(args).iter().enumerate() {
+                if atom.0.index() == at {
+                    handed[at] = Bounds::NOTHING;
+                }
+            }
+        }
+        self.calls.push((called, handed));
         if self
             .program
             .ctors(self.program.function(called).result)
@@ -1105,15 +1129,20 @@ impl FunctionWalk<'_> {
                 .map(|(at, (held, _))| (at, *held))
                 .collect()
         };
-        match answered {
-            Some(tags) => Some(
+        if let Some(tags) = answered {
+            return Some(
                 tags.into_iter()
                     .map(|(tag, extra)| (tag, narrowed(&extra)))
                     .collect(),
-            ),
-            None if found.high == Some(found.low) => Some(vec![(found.low, narrowed(&[]))]),
-            None => None,
+            );
         }
+        // An arm that could answer any of a few tags says what it narrowed
+        // of each of them: a guard `a & b` answers the second comparison's
+        // tag where the first held, so its `True` says the first held even
+        // though the arm does not know which tag it answers.
+        let high = found.high.filter(|high| high - found.low < TAGS_TOLD)?;
+        let held = narrowed(&[]);
+        Some((found.low..=high).map(|tag| (tag, held.clone())).collect())
     }
 
     fn enter(&mut self, scrutinee: usize, ctor: CtorId) -> bool {
@@ -1166,6 +1195,9 @@ impl FunctionWalk<'_> {
             if a.is_nothing() || b.is_nothing() {
                 return false;
             }
+            if !(self.summands(left, SUMMANDS) && self.summands(right, SUMMANDS)) {
+                return false;
+            }
         }
         // A wrapper's bound is what it wraps, not which constructor it is,
         // so only a value whose bound is its tag is told apart by one.
@@ -1189,7 +1221,40 @@ impl FunctionWalk<'_> {
         };
         for &(at, bound) in held {
             self.scope[at] = self.scope[at].and(bound);
-            if self.scope[at].is_nothing() {
+            if self.scope[at].is_nothing() || !self.summands(at, SUMMANDS) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Narrow what a sum's two operands can be to what the sum at `at` now
+    /// can: where `a + b` is no more than `h`, `a` is no more than `h` less
+    /// the least `b` can be, and at least the sum's least less the most `b`
+    /// can be; and the same of `b`. So a guard `bit + 9 <= total` bounds
+    /// `bit` itself, which is what a walk stepping it by nine hands on.
+    /// `depth` is how many sums down it follows an operand that is itself
+    /// one. Answers whether every operand can still be anything at all.
+    fn summands(&mut self, at: usize, depth: usize) -> bool {
+        let Some((super::Operation::Add, a, b)) = self.predicates[at] else {
+            return true;
+        };
+        if depth == 0 || a == at || b == at {
+            return true;
+        }
+        let sum = self.scope[at];
+        for (this, other) in [(a, b), (b, a)] {
+            let other = self.scope[other];
+            let bound = Bounds {
+                low: other.high.map_or(0, |high| sum.low.saturating_sub(high)),
+                high: sum.high.map(|high| high.saturating_sub(other.low)),
+            };
+            let narrowed = self.scope[this].and(bound);
+            if narrowed == self.scope[this] {
+                continue;
+            }
+            self.scope[this] = narrowed;
+            if narrowed.is_nothing() || !self.summands(this, depth - 1) {
                 return false;
             }
         }
