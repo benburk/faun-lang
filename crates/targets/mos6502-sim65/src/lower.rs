@@ -2838,7 +2838,13 @@ impl Lowering<'_> {
                     return;
                 }
                 let value = self.operand(*value, T0);
-                let width = if self.needed(results[0]) <= 8 {
+                // What a shift down keeps comes from `by` bits further up,
+                // so it is worked out that much wider than it is read.
+                let reach = match direction {
+                    Direction::Up => 0,
+                    Direction::Down => *by,
+                };
+                let width = if self.needed(results[0]).saturating_add(reach) <= 8 {
                     Width::Byte
                 } else {
                     Width::Word
