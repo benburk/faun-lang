@@ -340,8 +340,11 @@ fn prepare_counting<T: Target + ?Sized>(
         crate::ir::natural::Config {
             word_bits: target.word(),
             // The first arena the heap asks the target for; it grows
-            // from there, doubling, as far as the target has room.
-            heap_bytes: if target.word() == 16 { 1024 } else { 64 * 1024 },
+            // from there, doubling, as far as the target has room. A
+            // 16-bit heap grows by a quarter of itself, from a quarter of
+            // this or the first request, so what it writes is about what
+            // the program holds.
+            heap_bytes: if target.word() == 16 { 64 } else { 64 * 1024 },
             grows: true,
             // A 16-bit target runs short of room before it runs short of
             // time, and a call is smaller than the case it saves.

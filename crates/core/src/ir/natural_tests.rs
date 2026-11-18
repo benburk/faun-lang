@@ -497,6 +497,47 @@ fn a_heap_grown_a_run_at_a_time_answers_the_same() {
     }
 }
 
+/// A 16-bit heap asks for a quarter of what it counts itself as, and
+/// grows by a quarter, where a wider one asks for all of its first arena
+/// and doubles: for one product of two 160-bit numbers, 48 bytes, a 16-bit
+/// heap of 64 takes what the product wants and a 32-bit one all 1024.
+#[test]
+fn a_narrow_heap_takes_about_what_it_holds() {
+    for bits in [16, 32] {
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: if bits == 16 { 64 } else { 1024 },
+            grows: true,
+            inline_small: true,
+            inline_counts: false,
+            join_routines: false,
+        };
+        let (mut p, lib, _) = program(conf, Needs::from(ARITHMETIC));
+        let observer = observer(&mut p);
+        let product = lib.get(Helper::Mul).unwrap();
+        let check = p.declare("check", &[ADDRESS, ADDRESS], &[WORD]);
+        p.define(check, |b, args| {
+            let out = b.call_one(product, args);
+            observe_and_release(b, &lib, observer, out);
+            let zero = b.constant(WORD, 0);
+            b.ret(&[zero]);
+        });
+        let huge = (BigUint::from(1u8) << 160usize) - BigUint::from(1u8);
+        let da = natural::constant(&mut p, conf, &huge).unwrap();
+        let args = [data_address(&p, da), data_address(&p, da)];
+        let (evaluation, seen) = run(&p, check, &args, bits);
+        assert_eq!(seen, [&huge * &huge], "{bits}");
+        let taken = evaluation.globals.len() - p.globals().len();
+        if bits == 16 {
+            // Twenty 16-bit digits and two headers, and what the evaluator
+            // aligns its grants to.
+            assert!(taken < 64, "{taken} bytes for a 48-byte product");
+        } else {
+            assert!(taken >= 1024, "{taken} bytes: a first arena of 1024");
+        }
+    }
+}
+
 /// Every binary operation the runtime answers for naturals.
 const ARITHMETIC: [Helper; 8] = [
     Helper::Add,
