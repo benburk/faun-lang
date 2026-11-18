@@ -206,7 +206,11 @@ impl Elaborator<'_> {
             .get(&site)
             .expect("checking records each expression's type")
             .clone();
-        let kind = if let Some(literal) = self.facts.literals.get(&site) {
+        let kind = if let Some(unshown) = self.facts.unshown.get(&site) {
+            // A failed expectation's side with no `to_str`: its type's name.
+            let named = [&[0u8][..], unshown.as_bytes()].concat();
+            t::ExprKind::Literal(blessed::string(&named, self.prelude))
+        } else if let Some(literal) = self.facts.literals.get(&site) {
             t::ExprKind::Literal(literal.clone())
         } else if let Some(numeral) = self.facts.deferred_numerals.get(&site) {
             t::ExprKind::Numeral(numeral.clone())

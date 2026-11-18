@@ -47,6 +47,11 @@ fixed-Huffman test failed the same way, and finding that it answered
 length, failed the same way, each found by working the answer out by
 hand.
 
+Fixed: a failed comparison now says both sides, `left:  6` and
+`right: 7`, by each side's `to_str`, under `faun test` and in the test
+suite alike, and names the type of a side that has none
+([modules](forms/modules.md#expectations)).
+
 ### A natural in a hot loop costs several times a word
 
 "Small values cost almost nothing" holds for holding a `Nat`, not for
@@ -230,6 +235,11 @@ sized to the input, a hash of 8 to 15 bits and a window no longer than
 the input, which halved it; most of the rest is building each block's
 codes, a fixed cost of a few lists of 286. The expectations were cut to
 four levels, leaving every level and container to the native test.
+
+Fixed: the test entry now prints a record as each expectation is asked,
+so running out of steps names the expectation that did, by file and line,
+with the steps those before it took and the most of them; `faun test`
+names the expectation being asked when the program stops.
 
 ### A wrapper has no equality until it asks
 

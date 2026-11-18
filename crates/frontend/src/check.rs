@@ -124,6 +124,9 @@ struct Facts {
     readings: HashMap<h::SiteId, Reading>,
     bound_sites: HashMap<h::SiteId, (InferredType, Symbol)>,
     deferred_numerals: HashMap<h::SiteId, crate::typed::Numeral>,
+    /// Each `to_str` showing a failed expectation's side whose type, or a
+    /// part of it, has none: the name of the type that has none.
+    unshown: HashMap<h::SiteId, String>,
     /// Each method written without a signature, by its owner and spelling,
     /// as a signature names a signed one's.
     unsigned_members: HashMap<(Symbol, Symbol), Symbol>,
@@ -177,7 +180,7 @@ pub fn type_check(
 fn infer(program: &n::Program, cx: &Context) -> Result<Facts, Refusal> {
     declared::check(program, cx.host_module, &cx.symbols)?;
     effects::check(program, &cx.symbols)?;
-    Checker::new(program, &cx.symbols, &cx.prelude)?
+    Checker::new(program, &cx.symbols, &cx.prelude, &cx.sites)?
         .check(program)
         .map_err(|refused| precedence::hinted(refused, program, cx))
 }
@@ -284,6 +287,10 @@ struct PendingMethod {
     numeral: Option<Asked>,
     /// Where a written call's parts are, which says which does not fit.
     places: Option<Places>,
+    /// The `to_str` showing a failed expectation's side that this is, or
+    /// that owes it: one that cannot be met leaves that side unshown
+    /// rather than refusing the program.
+    shown: Option<usize>,
 }
 
 /// Where a written method call's or operator's parts are.
@@ -466,6 +473,8 @@ struct Checker<'a> {
     /// Each declared type, by its name.
     data: &'a HashMap<Symbol, n::Data>,
     visible_methods: &'a HashMap<ModuleId, HashSet<Symbol>>,
+    /// Which calls show a failed expectation's side.
+    sites: &'a h::Sites,
     pending_methods: Vec<PendingMethod>,
     /// The pending method whose implementation is being applied, which
     /// owes the bounds that implementation has.

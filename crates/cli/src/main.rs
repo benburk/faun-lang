@@ -20,8 +20,9 @@ use compiler::Compiler;
 use faun_aarch64_macos::Aarch64Macos;
 use faun_core::barb;
 use faun_core::targets::{Favour, SymbolTable, Target};
-use faun_frontend::diagnostic::{Diagnostic, Location};
+use faun_frontend::diagnostic::Diagnostic;
 use faun_frontend::packages::Packages;
+use faun_frontend::{Failure, Reporting, Side};
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
@@ -181,55 +182,65 @@ fn stopping_signal(_status: std::process::ExitStatus) -> Option<i32> {
 }
 
 /// Build a package's expectations for the machine this runs on, run them,
-/// and say where each one that does not hold was written.
+/// and say where each one that does not hold was written, and what each
+/// comparison among them saw.
 fn test(source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
     let target = compiler.host();
     let runner = runner(target)?;
-    let tests = faun_frontend::lower_tests_to_barb_using(source, target, &fetched(source)?)?;
+    let packages = fetched(source)?;
+    let mut tests =
+        faun_frontend::lower_tests_to_barb_using(source, target, &packages, Reporting::Each)?;
     let count = tests.expectations.len();
     if count == 0 {
         println!("no expectations");
         return Ok(());
     }
-    let image = compiler.compile(tests.barb, Favour::Speed, SymbolTable::Omitted)?;
+    let barb = std::mem::take(&mut tests.barb);
+    let image = compiler.compile(barb, Favour::Speed, SymbolTable::Omitted)?;
     let output = execute(target, runner, &image, Process::output)?;
+    let answered = tests.answered(&output.stdout).map_err(Diagnostic::new)?;
     if !output.status.success() {
+        tell_failures(&answered.failed);
+        // Each record is printed as its expectation is asked, so the one
+        // after the last is the one that stopped.
         let message = format!("the expectations stopped with {}", output.status);
-        return Err(Diagnostic::new(message));
+        let stopped = Diagnostic::new(message);
+        return Err(match tests.expectations.get(answered.asked) {
+            Some(location) => stopped
+                .at_location(location.clone())
+                .note("this expectation was being asked"),
+            None => stopped,
+        });
     }
-    let answered = String::from_utf8_lossy(&output.stdout);
-    let failed = failed(&answered, &tests.expectations)?;
-    report(&failed, count)
+    report(&answered.failed, count)
 }
 
-/// Where each expectation the test build `answered` as failing was written.
-fn failed<'a>(
-    answered: &str,
-    expectations: &'a [Location],
-) -> Result<Vec<&'a Location>, Diagnostic> {
-    let mut failed = Vec::new();
-    for number in answered.split_whitespace() {
-        let parsed = number.parse::<usize>().ok();
-        let index = parsed.and_then(|parsed| parsed.checked_sub(1));
-        let location = index.and_then(|index| expectations.get(index));
-        let Some(location) = location else {
-            let message = format!("the expectations answered `{number}`");
-            return Err(Diagnostic::new(message));
-        };
-        failed.push(location);
+/// Tell each expectation that failed, with what each comparison saw.
+fn tell_failures(failed: &[Failure<'_>]) {
+    for failure in failed {
+        let diagnostic = Diagnostic::new("this expectation does not hold");
+        let mut diagnostic = diagnostic.at_location(failure.location.clone());
+        match &failure.sides {
+            Some((Side::Shown(left), Side::Shown(right))) => {
+                diagnostic = diagnostic
+                    .note(format!("left:  {left}"))
+                    .note(format!("right: {right}"));
+            }
+            Some((Side::Unshown(ty), _) | (_, Side::Unshown(ty))) => {
+                diagnostic =
+                    diagnostic.note(format!("neither side is shown: `{ty}` has no `to_str`"));
+            }
+            None => {}
+        }
+        tell(diagnostic);
+        eprintln!();
     }
-    Ok(failed)
 }
 
 /// Tell each expectation that failed, and how many of `count` held: an
 /// error where any failed.
-fn report(failed: &[&Location], count: usize) -> Result<(), Diagnostic> {
-    for &location in failed {
-        let diagnostic = Diagnostic::new("this expectation does not hold");
-        let diagnostic = diagnostic.at_location(location.clone());
-        tell(diagnostic);
-        eprintln!();
-    }
+fn report(failed: &[Failure<'_>], count: usize) -> Result<(), Diagnostic> {
+    tell_failures(failed);
     let counted = if count == 1 {
         "1 expectation".to_owned()
     } else {

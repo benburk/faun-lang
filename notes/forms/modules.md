@@ -286,6 +286,32 @@ written. The expectations of the packages it depends on, the standard
 library's among them, are theirs to test: a package is tested by running
 `faun test` on it.
 
+An expectation whose last line is a comparison, `==`, `!=`, `<`, `<=`,
+`>` or `>=`, says what each side was where it does not hold, by its
+`to_str`, as Rust's `assert_eq!` does:
+
+```text
+error: this expectation does not hold
+ --> main.fn:4:1
+  |
+4 | expect double(3) == 7
+  | ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: left:  6
+  = note: right: 7
+```
+
+A side whose type has no `to_str`, or holds one that has none, is not a
+refusal: the note names that type, "neither side is shown: `Level` has no
+`to_str`". Any other expectation, `a == b & c == d` among them, says only
+that it does not hold; each side is worked out once, as `a == b` works it
+out. The test entry prints a record as each expectation is asked, so an
+expectation that stops the program, by running out of stack say, is named
+as the one being asked. The test suite asks a library's expectations on the
+reference interpreter, within 100 million of its steps for the file; one
+that runs out of them is named, with what those before it took and the
+most of them.
+
 ## Rationale
 
 ### Why are imports absolute?
@@ -429,10 +455,19 @@ needed; the standard library holds 83 expectations and the examples about
 780. What the compiler can settle while compiling it settles there, before
 the program runs.
 
-The cost: a failing expectation says where it is, not which values made it
-fail, and an expectation is pure, so a test of effects is a program of its
-own. Property tests are a library, `examples/libraries/proptest`, whose
+The cost: a failing expectation says which values made it fail only where
+its last line is a comparison, and an expectation is pure, so a test of
+effects is a program of its own. Property tests are a library, `examples/libraries/proptest`, whose
 `forall` takes a generator, a property and a shrinker as callbacks.
+
+## History
+
+- **2026-11-17:** a failed comparison came to say both its sides, a side
+  with no `to_str` naming its type, and the test entry to print a record
+  as each expectation is asked, so one that stops the program, or runs the
+  test suite's interpreter out of steps, is named. Before, a failed
+  expectation gave only its line, and running out of steps only
+  `FuelExhausted`.
 
 ## Related
 

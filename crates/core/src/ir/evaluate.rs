@@ -162,8 +162,17 @@ pub struct Memory<'a> {
     data: &'a [u8],
     globals: Vec<u8>,
     globals_base: u64,
+    /// The fuel left when the host was last called.
+    fuel: u64,
 }
 impl Memory<'_> {
+    /// The fuel left as the host is called: what a host keeping count of
+    /// a program's progress reads.
+    #[must_use]
+    pub const fn fuel_remaining(&self) -> u64 {
+        self.fuel
+    }
+
     fn locate(&self, address: u64, len: usize) -> Result<(Origin, std::ops::Range<usize>), Error> {
         let (origin, base, size) = if address >= self.globals_base {
             (Origin::Globals, self.globals_base, self.globals.len())
@@ -363,6 +372,7 @@ fn memory(program: &Program, config: Config) -> Result<Memory<'_>, Error> {
         data: &program.data,
         globals: program.globals.clone(),
         globals_base,
+        fuel: config.fuel,
     })
 }
 
@@ -1198,6 +1208,7 @@ impl<H: Host> Machine<'_, H> {
             vec![Number::from(self.memory.grow(bytes)?)]
         } else {
             let args: Vec<BigUint> = args.iter().map(Number::to_big).collect();
+            self.memory.fuel = self.config.fuel;
             match self.host.call(name, &args, &mut self.memory)? {
                 HostResult::Halt(values) => return Ok(Answer::Halt(values)),
                 HostResult::Return(values) => values.iter().map(Number::from).collect(),
