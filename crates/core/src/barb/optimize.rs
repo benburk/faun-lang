@@ -22,7 +22,9 @@ use super::{InlineLimits, Program};
 /// 7. First-element demand specialization.
 /// 8. List walks expressed through functional replacements.
 /// 9. Simplification, including constant evaluation and identities.
-/// 10. Specialization for known arguments, resimplifying changed definitions.
+/// 10. Specialization for constructions handed to a definition that takes
+///     them apart, then for known arguments, resimplifying changed
+///     definitions.
 /// 11. Joining recursive rounds through helper inlining.
 /// 12. Reachability sweep.
 /// 13. Effect-safe cleanup.
@@ -45,6 +47,7 @@ pub fn optimize(program: &mut Program) {
     super::head::heads(program);
     super::inplace::in_place(program);
     super::normalize::simplify(program);
+    super::unbuilt::constructions(program);
     super::specialize::specialize(program);
     super::normalize::join_rounds(program);
     super::sweep::sweep(program);

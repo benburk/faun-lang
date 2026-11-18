@@ -141,3 +141,55 @@ fn a_range_filtered_and_mapped_through_recursion_is_never_built() {
         ",
     );
 }
+
+#[test]
+fn a_list_literal_compared_is_never_built() {
+    // PNG's tRNS: a grey sample hidden where it is the key's one element.
+    as_cheap(
+        "unbuilt-literal",
+        5,
+        r"
+        key : Nat -> List(Nat)
+        key(at) -> if at % 3 == 0 then [] else [at % 5]
+
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> if key(at / 3) == [at % 5] then total + 1 else total
+        ",
+        r"
+        key : Nat -> List(Nat)
+        key(at) -> if at % 3 == 0 then [] else [at % 5]
+
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> if key(at / 3) is (
+          [k] then k == at % 5
+          _ then False
+        ) then total + 1 else total
+        ",
+    );
+}
+
+#[test]
+fn a_longer_literal_compared_is_taken_apart_an_element_at_a_time() {
+    // And an RGB sample, three elements against three.
+    as_cheap(
+        "unbuilt-literal-rgb",
+        2,
+        r"
+        key : Nat -> List(Nat)
+        key(at) -> if at % 4 == 0 then [] else [at % 2, at % 3, at % 5]
+
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> if key(at) == [at % 2, (at / 2) % 3, at % 5] then total + 1 else total
+        ",
+        r"
+        key : Nat -> List(Nat)
+        key(at) -> if at % 4 == 0 then [] else [at % 2, at % 3, at % 5]
+
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> if key(at) is (
+          [r, g, b] then r == at % 2 & g == (at / 2) % 3 & b == at % 5
+          _ then False
+        ) then total + 1 else total
+        ",
+    );
+}

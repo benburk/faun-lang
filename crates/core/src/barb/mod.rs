@@ -133,6 +133,7 @@ mod sweep;
 mod terms;
 mod tree;
 mod types;
+mod unbuilt;
 mod validate;
 mod walk;
 
