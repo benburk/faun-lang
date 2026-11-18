@@ -34,10 +34,9 @@
 //! tiers below hold what they must.
 
 use super::model::{CtorId, FnId, TypeId};
-use super::numeric::Numeric;
-use super::octagon::{Intervals, Octagon, Zone};
+use super::octagon::Octagon;
 use super::program::Program;
-use super::solve::{Scope, Solution, solve};
+use super::solve::{Solution, solve};
 use super::{Shape, shape, single_field};
 pub use crate::facts::Facts as Bounds;
 
@@ -56,25 +55,13 @@ pub(super) struct Ranges {
     pub fields: Vec<Bounds>,
 }
 
-/// Which relations range analysis keeps: octagons in loops where nothing
-/// says, and `FAUN_RANGES` chooses `octagons` everywhere, `zones` or
-/// `intervals`, for measuring what each costs and earns.
-fn solved(numeric: &Numeric) -> Solution {
-    match std::env::var("FAUN_RANGES").as_deref() {
-        Ok("octagons") => solve::<Octagon>(numeric, Scope::Everywhere),
-        Ok("zones") => solve::<Zone>(numeric, Scope::Everywhere),
-        Ok("intervals") => solve::<Intervals>(numeric, Scope::Everywhere),
-        _ => solve::<Octagon>(numeric, Scope::Loops),
-    }
-}
-
 pub(super) fn analyze(
     program: &Program,
     recognised: &super::facts::Recognised,
     assumed: &Assumed,
 ) -> Ranges {
     let numeric = super::numeric::extract(program, recognised, assumed);
-    mapped(program, assumed, solved(&numeric))
+    mapped(program, assumed, solve::<Octagon>(&numeric))
 }
 
 /// What the solver found, as the tier below reads it. A term nothing

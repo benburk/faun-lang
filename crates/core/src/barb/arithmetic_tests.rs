@@ -1123,3 +1123,22 @@ fn canonicalizing_first_recognizes_a_reversal_written_roundabout() {
         Some(SequenceOperation::ReverseOnto)
     );
 }
+
+/// Over real programs, octagons prove at least what differences alone and
+/// intervals alone do: the domains are chosen by type, and each test of
+/// one is a test of what the others lose.
+#[test]
+fn octagons_prove_at_least_what_zones_and_intervals_do() {
+    use super::octagon::{Intervals, Octagon, Zone};
+    use super::solve::{solve, tests::proves_at_least};
+    let mut programs = vec![counted_walk(1).0, counted_walk(2).0, boxed_reversal()];
+    for step in [Step::Succ, Step::OnePlus, Step::PlusElement, Step::FromOne] {
+        programs.push(counted(step, false).0);
+    }
+    for program in &programs {
+        let numeric = numeric::extract(program, &program.recognition(), &Assumed::default());
+        let octagons = solve::<Octagon>(&numeric);
+        assert!(proves_at_least(&octagons, &solve::<Zone>(&numeric)));
+        assert!(proves_at_least(&octagons, &solve::<Intervals>(&numeric)));
+    }
+}
