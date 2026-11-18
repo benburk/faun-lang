@@ -573,6 +573,7 @@ fn started<D: Domain>(layout: &Layout, entry: &Entry) -> Option<(State<D>, bool)
         packs,
         members,
         fresh,
+        narrowed: Vec::new(),
     };
     let holds = !empty && (0..layout.sizes.len()).all(|pack| state.sync(pack));
     Some((state, holds))
@@ -629,6 +630,7 @@ fn walk<D: Domain>(
         fields: &held.fields,
         found: Found::default(),
         implied: vec![None; count],
+        defined: vec![None; count],
         answered_implied: None,
         exact: vec![None; count],
         state,
@@ -689,6 +691,9 @@ struct State<D> {
     members: Vec<Vec<usize>>,
     /// Whether each value is related to nothing yet, but by its bounds.
     fresh: Vec<bool>,
+    /// The values narrowed since this was last emptied, which what they
+    /// were worked out from may learn from: see [`FunctionWalk::backward`].
+    narrowed: Vec<usize>,
 }
 
 impl<D: Domain> State<D> {
@@ -707,7 +712,10 @@ impl<D: Domain> State<D> {
             if narrowed.is_nothing() {
                 return false;
             }
-            self.values[level] = narrowed;
+            if narrowed != held {
+                self.values[level] = narrowed;
+                self.narrowed.push(level);
+            }
         }
         true
     }
@@ -728,6 +736,17 @@ impl<D: Domain> State<D> {
         Rc::make_mut(&mut self.packs[pack])
     }
 }
+
+/// How a value was worked out, where a bound on it says something of what
+/// it was worked out from.
+#[derive(Clone, Copy, Debug)]
+enum Defined {
+    Copy(Var),
+    Operation(Operation, Var, Var),
+}
+
+/// How many times round a narrowed answer narrows its operands, and theirs.
+const BACKWARD: usize = 4;
 
 /// Something one term said of the values before it, held to be said again
 /// where the term's answer is matched.
@@ -797,6 +816,9 @@ struct FunctionWalk<'a, D> {
     settled: bool,
     /// What each value being one tag says of the values before it.
     implied: Vec<Option<Rc<Implications>>>,
+    /// How each value was worked out, where from operands a narrowed
+    /// answer says something of: see [`super::backward`].
+    defined: Vec<Option<Defined>>,
     /// What the term last worked out says, where it says anything.
     answered_implied: Option<Rc<Implications>>,
     /// The natural each value is outright, where past what a bound says.
@@ -834,6 +856,15 @@ impl<D: Domain> FunctionWalk<'_, D> {
             let place = self.layout().place(statement.site);
             self.push(held, place);
             self.implied.push(implied);
+            self.defined.push(match &term.kind {
+                Kind::Call {
+                    operation: Some(op),
+                    args,
+                    ..
+                } if args.len() == 2 => Some(Defined::Operation(*op, args[0], args[1])),
+                Kind::Copy(from) => Some(Defined::Copy(*from)),
+                _ => None,
+            });
             self.exact.push(exact);
             self.relate(level, term);
             let held = self.state.values[level];
@@ -872,6 +903,7 @@ impl<D: Domain> FunctionWalk<'_, D> {
             return true;
         }
         self.state.values[level] = narrowed;
+        self.state.narrowed.push(level);
         let Some((pack, at)) = self.state.places[level] else {
             return true;
         };
@@ -1317,6 +1349,7 @@ impl<D: Domain> FunctionWalk<'_, D> {
             // borrows, so what it added is all there is to take away.
             self.state.clone_from(&outer);
             self.implied.truncate(level);
+            self.defined.truncate(level);
             self.exact.truncate(level);
             if !self.enter(on, arm) {
                 continue;
@@ -1341,6 +1374,7 @@ impl<D: Domain> FunctionWalk<'_, D> {
         }
         self.state = surviving.unwrap_or(outer);
         self.implied.truncate(level);
+        self.defined.truncate(level);
         self.exact.truncate(level);
         self.answered_implied = (!implications.is_empty()).then(|| Rc::new(implications));
         // Where no arm is reached, nothing is.
@@ -1384,11 +1418,48 @@ impl<D: Domain> FunctionWalk<'_, D> {
     /// Whether an arm can be reached, and if so what it says on entry: the
     /// value matched narrowed to what the constructor says, the fields
     /// bound, and what the value being that tag says of others.
+    fn enter(&mut self, on: Var, arm: &Arm) -> bool {
+        self.state.narrowed.clear();
+        self.entered(on, arm) && self.backward()
+    }
+
+    /// What a narrowed answer says of its operands, and theirs of theirs:
+    /// each value narrowed on entering an arm that was worked out by an
+    /// operation narrows what it was worked out from, a few times round.
+    fn backward(&mut self) -> bool {
+        for _ in 0..BACKWARD {
+            let mut narrowed = std::mem::take(&mut self.state.narrowed);
+            narrowed.retain(|&at| self.defined.get(at).copied().flatten().is_some());
+            if narrowed.is_empty() {
+                break;
+            }
+            narrowed.sort_unstable_by(|a, b| b.cmp(a));
+            narrowed.dedup();
+            for at in narrowed {
+                let held = self.state.values[at];
+                let holds = match self.defined[at] {
+                    Some(Defined::Copy(from)) => self.narrow(from, held),
+                    Some(Defined::Operation(op, a, b)) => {
+                        let operands = (self.state.values[a], self.state.values[b]);
+                        super::backward::operands(op, held, operands).is_none_or(
+                            |(first, second)| self.narrow(a, first) && self.narrow(b, second),
+                        )
+                    }
+                    None => true,
+                };
+                if !holds {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one arm for each test a constructor makes"
     )]
-    fn enter(&mut self, on: Var, arm: &Arm) -> bool {
+    fn entered(&mut self, on: Var, arm: &Arm) -> bool {
         let held = self.state.values[on];
         let reached = match arm.test {
             Test::Wrapper(_) => true,
@@ -1429,6 +1500,7 @@ impl<D: Domain> FunctionWalk<'_, D> {
             }
         }
         self.implied.resize(self.state.values.len(), None);
+        self.defined.resize(self.state.values.len(), None);
         self.exact.resize(self.state.values.len(), None);
         // Only a value whose bound is its tag is told apart by one.
         match arm.test {
