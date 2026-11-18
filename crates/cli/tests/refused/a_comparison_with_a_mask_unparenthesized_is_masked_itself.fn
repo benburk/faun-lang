@@ -1,0 +1,3 @@
+# `|` binds looser than `==`, so this is `(0 == flags) | 8`.
+plain : U8 -> Bool
+plain(flags) -> 0 == flags | 8

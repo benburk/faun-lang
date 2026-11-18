@@ -1,0 +1,8 @@
+error: a numeral cannot be a `Bool`
+ --> a_comparison_with_a_mask_unparenthesized_is_masked_itself.fn:3:30
+  |
+3 | plain(flags) -> 0 == flags | 8
+  |                              ^ expected `Bool`, found a numeral
+  |
+  = note: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`
+  = help: `|` binds looser than `==`: write `0 == (flags | 8)`

@@ -37,6 +37,8 @@
 //! - `unify`: types as inference holds them, and unification.
 //! - `pending`: what waits for a type to decide it, and settling it.
 //! - `joins`: where ways meet, and a way of type `[]` takes the others' type.
+//! - `precedence`: a bitwise operator's operand refused, read as its
+//!   author likely meant.
 //! - `elaborate`: the inferred facts written onto typed HIR.
 
 #![allow(clippy::too_many_lines)]
@@ -134,6 +136,7 @@ mod elaborate;
 mod environment;
 mod joins;
 mod pending;
+mod precedence;
 mod unify;
 
 use components::{binary_member, components, unary_member};
@@ -174,7 +177,9 @@ pub fn type_check(
 fn infer(program: &n::Program, cx: &Context) -> Result<Facts, Refusal> {
     declared::check(program, cx.host_module, &cx.symbols)?;
     effects::check(program, &cx.symbols)?;
-    Checker::new(program, &cx.symbols, &cx.prelude)?.check(program)
+    Checker::new(program, &cx.symbols, &cx.prelude)?
+        .check(program)
+        .map_err(|refused| precedence::hinted(refused, program, cx))
 }
 
 /// A method a type's block defines without a signature.
