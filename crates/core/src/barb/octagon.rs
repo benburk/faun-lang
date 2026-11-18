@@ -603,10 +603,12 @@ impl Domain for Octagon {
 }
 
 /// Differences `x - y <= c` alone: an octagon whose sums are forgotten
-/// after every step, for measuring what sums earn.
+/// after every step, for testing what sums earn.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Zone(Octagon);
 
+#[cfg(test)]
 impl Zone {
     /// Forget every constraint on a sum or a difference of negations.
     fn differences(&mut self) {
@@ -621,6 +623,7 @@ impl Zone {
     }
 }
 
+#[cfg(test)]
 impl Domain for Zone {
     fn top(variables: usize) -> Self {
         Self(Octagon::top(variables))
@@ -675,10 +678,12 @@ impl Domain for Zone {
     }
 }
 
-/// No relations: intervals alone.
+/// No relations: intervals alone, for testing what relations earn.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Intervals;
 
+#[cfg(test)]
 impl Domain for Intervals {
     const RELATES: bool = false;
     fn top(_: usize) -> Self {

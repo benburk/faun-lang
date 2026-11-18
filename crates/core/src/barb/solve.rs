@@ -42,15 +42,6 @@ const NARROWINGS: usize = 8;
 /// joining anything to it is that thing.
 const UNSAID: Bound = -INFINITE;
 
-/// Where the solver keeps relations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Scope {
-    /// Only in definitions that go round: the loops.
-    Loops,
-    /// In every definition.
-    Everywhere,
-}
-
 /// What the solver found, by the terms, definitions and slots of the
 /// numeric program. Nothing, `None` or [`Bounds::NOTHING`], is what no walk
 /// reached.
@@ -70,15 +61,15 @@ pub(super) struct Solution {
     pub slots: Vec<Option<Bounds>>,
 }
 
-/// Solve `numeric` over the relational domain `D`, keeping relations where
-/// `scope` says.
+/// Solve `numeric` over the relational domain `D`, relating values in every
+/// definition.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
     reason = "the climb, the narrowing and the walk reading what was handed, in order"
 )]
-pub(super) fn solve<D: Domain>(numeric: &Numeric, scope: Scope) -> Solution {
-    let plan = Plan::<D>::new(numeric, scope, D::RELATES);
+pub(super) fn solve<D: Domain>(numeric: &Numeric) -> Solution {
+    let plan = Plan::<D>::new(numeric, D::RELATES);
     let mut held = Propagation::<D>::start(numeric);
     let count = numeric.functions.len();
 
@@ -174,7 +165,7 @@ impl<D: Domain> Plan<D> {
         clippy::too_many_lines,
         reason = "the call graph, its rounds, the readers of each slot and each definition's packs, in one pass"
     )]
-    fn new(numeric: &Numeric, scope: Scope, relates: bool) -> Self {
+    fn new(numeric: &Numeric, relates: bool) -> Self {
         let count = numeric.functions.len();
         let mut calls = vec![Vec::new(); count];
         let mut readers = vec![Vec::new(); numeric.slots];
@@ -209,14 +200,12 @@ impl<D: Domain> Plan<D> {
             .iter()
             .enumerate()
             .map(|(at, function)| match &function.answer {
-                Answer::Body(body) if relates && (scope == Scope::Everywhere || recursive[at]) => {
-                    super::packs::layout(
-                        function,
-                        body,
-                        (at, &rank, recursive[at]),
-                        &numeric.functions,
-                    )
-                }
+                Answer::Body(body) if relates => super::packs::layout(
+                    function,
+                    body,
+                    (at, &rank, recursive[at]),
+                    &numeric.functions,
+                ),
                 _ => Layout::default(),
             })
             .collect();
@@ -1637,11 +1626,45 @@ fn exclude(held: Bounds, other: Bounds) -> Bounds {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::CtorId;
     use super::super::numeric::{Function, Site, Statement};
     use super::super::octagon::{Intervals, Octagon, Zone};
     use super::*;
+
+    /// Whether `tight` proves at least what `loose` does: every bound it
+    /// gives within the other's, nothing reached counting as no bound.
+    pub(in super::super) fn proves_at_least(tight: &Solution, loose: &Solution) -> bool {
+        let within = |tight: Bounds, loose: Bounds| {
+            let known = |held: Bounds| if held.is_nothing() { Bounds::ANY } else { held };
+            known(tight).within(known(loose))
+        };
+        let each = |tight: &[Bounds], loose: &[Bounds]| {
+            tight
+                .iter()
+                .zip(loose)
+                .all(|(&tight, &loose)| within(tight, loose))
+        };
+        let some = |tight: &[Option<Bounds>], loose: &[Option<Bounds>]| {
+            tight.iter().zip(loose).all(|(tight, loose)| {
+                within(tight.unwrap_or(Bounds::ANY), loose.unwrap_or(Bounds::ANY))
+            })
+        };
+        each(&tight.terms, &loose.terms)
+            && each(&tight.matched, &loose.matched)
+            && tight
+                .arguments
+                .iter()
+                .zip(&loose.arguments)
+                .all(|(tight, loose)| each(tight, loose))
+            && tight.takes.iter().zip(&loose.takes).all(|pair| match pair {
+                (Some(tight), Some(loose)) => each(tight, loose),
+                (_, None) => true,
+                (None, Some(loose)) => loose.iter().all(|&held| within(Bounds::ANY, held)),
+            })
+            && some(&tight.answers, &loose.answers)
+            && some(&tight.slots, &loose.slots)
+    }
 
     /// Terms numbered as they are written, so each is recorded apart.
     struct Terms(usize);
@@ -1770,19 +1793,16 @@ mod tests {
     #[test]
     fn a_count_beside_a_walk_is_bounded_by_its_length() {
         let program = counting(1000);
+        let (octagons, zones, intervals) = (
+            solve::<Octagon>(&program),
+            solve::<Zone>(&program),
+            solve::<Intervals>(&program),
+        );
+        assert!(proves_at_least(&octagons, &zones) && proves_at_least(&octagons, &intervals));
         let takes = |solution: Solution| solution.takes[0].clone().expect("handed")[1];
-        assert_eq!(
-            takes(solve::<Octagon>(&program, Scope::Loops)).high,
-            Some(1000)
-        );
-        assert_ne!(
-            takes(solve::<Intervals>(&program, Scope::Loops)).high,
-            Some(1000)
-        );
-        assert_ne!(
-            takes(solve::<Zone>(&program, Scope::Loops)).high,
-            Some(1000)
-        );
+        assert_eq!(takes(solve::<Octagon>(&program)).high, Some(1000));
+        assert_ne!(takes(solve::<Intervals>(&program)).high, Some(1000));
+        assert_ne!(takes(solve::<Zone>(&program)).high, Some(1000));
     }
 
     /// `walk(bit, total)`: while `bit + 9 < total`, the walk of `bit + 9`;
@@ -1850,7 +1870,7 @@ mod tests {
             terms: terms.0,
             ..Numeric::default()
         };
-        let solution = solve::<Octagon>(&program, Scope::Loops);
+        let solution = solve::<Octagon>(&program);
         let bit = solution.takes[0].clone().expect("handed")[0];
         assert!(bit.high.is_some_and(|high| high <= 4096), "{bit:?}");
         // What the call going round is handed is below the total.
