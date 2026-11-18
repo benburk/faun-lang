@@ -84,6 +84,8 @@ syntax shown on purpose, marks its fence `` ```ruby ignore ``.
   [JSON](json-performance.md) and
   [x86-64 code generation](x86-codegen-performance.md): performance
   investigations
+- [Compile time](compile-time.md): where a compile's work goes, and what
+  a standard library checked once would save
 - [Compression](compression.md): what checksums, DEFLATE and PNG found,
   and the compiler bugs their natural spelling exposes
 - [Faun and AI](ai-future.md)
