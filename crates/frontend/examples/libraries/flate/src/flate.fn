@@ -15,7 +15,7 @@ package {
 }
 
 import crc {crc32, adler32}
-import symbols {Tables, tables, fixed_literal_lengths, first_codes, reversed}
+import symbols {length_table, distance_table, fixed_literal_lengths, first_codes, reversed}
 import deflate {deflate, Level}
 
 export {
@@ -163,30 +163,30 @@ Bit = U64
 # its final block.
 inflate_at : (List(U8), Nat) -> Result((List(U8), Nat), InflateError)
 inflate_at(input, start) -> (
-  (out, end) = blocks(input, U64.of_nat(input.len() * 8), tables, U64.of_nat(start), [])?
+  (out, end) = blocks(input, U64.of_nat(input.len() * 8), U64.of_nat(start), [])?
   Ok((out, end.to_nat()))
 )
 
-blocks : (List(U8), Bit, Tables, Bit, List(U8)) -> Result((List(U8), Bit), InflateError)
-blocks(input, total, t, bit, out) -> (
+blocks : (List(U8), Bit, Bit, List(U8)) -> Result((List(U8), Bit), InflateError)
+blocks(input, total, bit, out) -> (
   if bit + 3 > total return Err(Truncated)
   header = peek(input, bit) & 7
-  (out2, end) = block(input, total, t, bit + 3, header.shift_right(1).to_nat(), out)?
-  if (header & 1) == 1 then Ok((out2, end)) else blocks(input, total, t, end, out2)
+  (out2, end) = block(input, total, bit + 3, header.shift_right(1).to_nat(), out)?
+  if (header & 1) == 1 then Ok((out2, end)) else blocks(input, total, end, out2)
 )
 
-block : (List(U8), Bit, Tables, Bit, Nat, List(U8)) -> Result((List(U8), Bit), InflateError)
-block(input, total, _, bit, 0, out) -> stored(input, total, bit, out)
-block(input, total, t, bit, 1, out) -> (
+block : (List(U8), Bit, Bit, Nat, List(U8)) -> Result((List(U8), Bit), InflateError)
+block(input, total, bit, 0, out) -> stored(input, total, bit, out)
+block(input, total, bit, 1, out) -> (
   literals = huffman(fixed_literal_lengths, True)?
   distances = huffman(List.repeat(5, 32), True)?
-  codes(input, total, t, literals, distances, bit, out)
+  codes(input, total, literals, distances, bit, out)
 )
-block(input, total, t, bit, 2, out) -> (
+block(input, total, bit, 2, out) -> (
   (literals, distances, start) = dynamic_header(input, total, bit)?
-  codes(input, total, t, literals, distances, start, out)
+  codes(input, total, literals, distances, start, out)
 )
-block(_, _, _, _, _, _) -> Err(BadBlockType)
+block(_, _, _, _, _) -> Err(BadBlockType)
 
 # A stored block: to the next byte, a length and its complement, and that
 # many bytes as they are.
@@ -358,19 +358,19 @@ code_lengths_read(input, total, code, bit, count, lengths) -> (
 
 # A block's symbols to its end: literals written, matches copied from the
 # output so far.
-codes : (List(U8), Bit, Tables, Huffman, Huffman, Bit, List(U8)) -> Result((List(U8), Bit), InflateError)
-codes(input, total, t, literals, distances, bit, out) -> (
+codes : (List(U8), Bit, Huffman, Huffman, Bit, List(U8)) -> Result((List(U8), Bit), InflateError)
+codes(input, total, literals, distances, bit, out) -> (
   (symbol, at) = decode(input, total, literals, bit)?
-  if symbol < 256 return codes(input, total, t, literals, distances, at, out.append(symbol.to_u8()))
+  if symbol < 256 return codes(input, total, literals, distances, at, out.append(symbol.to_u8()))
   if symbol == 256 return Ok((out, at))
-  t.lengths.get((symbol - 257).to_nat()) is Ok(length_entry) else return Err(BadCode)
+  length_table.get((symbol - 257).to_nat()) is Ok(length_entry) else return Err(BadCode)
   (length, after_length) = extra(input, total, length_entry, at)?
   (distance_symbol, at2) = decode(input, total, distances, after_length)?
-  t.distances.get(distance_symbol.to_nat()) is Ok(distance_entry) else return Err(BadDistance)
+  distance_table.get(distance_symbol.to_nat()) is Ok(distance_entry) else return Err(BadDistance)
   (distance, after) = extra(input, total, distance_entry, at2)?
   written = U64.of_nat(out.len())
   if distance > written return Err(BadDistance)
-  codes(input, total, t, literals, distances, after, copy(out, written - distance, length))
+  codes(input, total, literals, distances, after, copy(out, written - distance, length))
 )
 
 # A base read from its table's entry, plus its extra bits, and the bit

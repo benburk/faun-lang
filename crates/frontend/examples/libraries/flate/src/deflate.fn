@@ -9,7 +9,7 @@
 # `prev`, for each position in the window, the one before it with the
 # same hash, plus one. Nought is none.
 
-import symbols {tables, fixed_literal_lengths, first_codes, reversed}
+import symbols {length_table, distance_table, fixed_literal_lengths, first_codes, reversed}
 
 export {deflate, Level}
 
@@ -54,7 +54,7 @@ deflate(input, Level(level)) -> (
   # as it takes to tell its positions apart, from 8 to 15, and a window as
   # long as the input where that is shorter.
   bits = hash_bits(n, 8)
-  context = {input, n: U64.of_nat(n), search, shift: 32 - bits, codes: block_codes}
+  context = {input, n: U64.of_nat(n), search, shift: 32 - bits}
   head = List.repeat(U32.of_nat(0), 2.pow(bits))
   prev = List.repeat(U32.of_nat(0), n.min(32768))
   zero = U64.of_nat(0)
@@ -94,7 +94,7 @@ search_for(level) -> (
 
 # What a stream is compressed with, unchanged throughout it: `shift` is
 # how far a hash's product moves down to leave its bits.
-Context = {input: List(U8), n: Pos, search: Search, shift: Nat, codes: Codes}
+Context = {input: List(U8), n: Pos, search: Search, shift: Nat}
 
 hash_bits : (Nat, Nat) -> Nat
 hash_bits(n, bits) if bits < 15 & 2.pow(bits) < n -> hash_bits(n, bits + 1)
@@ -269,36 +269,26 @@ put_symbol(written, code, symbol) -> (
   put(written, entry & 0xffff, entry.shift_right(16).to_nat())
 )
 
-# The tables blocks are written with, built once a stream.
-Codes = {
-  # For each length less 3, its symbol less 257.
-  length_symbols: List(U8),
-  # For each distance less one below 256, its symbol; from 256 on, for
-  # each 128 distances from nought.
-  distance_symbols: List(U8),
-  # Each length symbol's and distance symbol's base and extra bits, as
-  # inflate reads them: the base times 16 plus the count.
-  lengths: List(U32),
-  distances: List(U32),
-  fixed_literals: Code,
-  fixed_distances: Code,
-}
-
-block_codes : Codes
-block_codes = (
-  t = tables
-  length_bases = bases(t.lengths)
-  distance_bases = bases(t.distances)
-  {
-    length_symbols: List.range(256).map(|less| symbol_at(length_bases, less + 3)),
-    distance_symbols: List.range(512).map(|i|
-      symbol_at(distance_bases, if i < 256 then i + 1 else (i - 256) * 128 + 1)),
-    lengths: t.lengths,
-    distances: t.distances,
-    fixed_literals: code_of(fixed_literal_lengths),
-    fixed_distances: code_of(List.repeat(5, 30)),
-  }
+# For each length less 3, its symbol less 257.
+length_symbols : List(U8)
+length_symbols = (
+  length_bases = bases(length_table)
+  List.range(256).map(|less| symbol_at(length_bases, less + 3))
 )
+
+# For each distance less one below 256, its symbol; from 256 on, for each
+# 128 distances from nought.
+distance_symbols : List(U8)
+distance_symbols = (
+  distance_bases = bases(distance_table)
+  List.range(512).map(|i| symbol_at(distance_bases, if i < 256 then i + 1 else (i - 256) * 128 + 1))
+)
+
+fixed_literals : Code
+fixed_literals = code_of(fixed_literal_lengths)
+
+fixed_distances : Code
+fixed_distances = code_of(List.repeat(5, 30))
 
 bases : List(U32) -> List(Nat)
 bases(entries) -> entries.map(|entry| entry.shift_right(4).to_nat())
@@ -308,20 +298,20 @@ symbol_at : (List(Nat), Nat) -> U8
 symbol_at(bases, value) -> U8.of_nat(bases.partition_point(|base| base <= value) - 1)
 
 # A match's length and distance symbols.
-symbols_of : (Codes, Nat, Nat) -> (Nat, Nat)
-symbols_of(codes, length, distance) -> (
+symbols_of : (Nat, Nat) -> (Nat, Nat)
+symbols_of(length, distance) -> (
   less = distance - 1
   at = if less < 256 then less else 256 + less / 128
-  (codes.length_symbols.get(length - 3).ok_or(0).to_nat(), codes.distance_symbols.get(at).ok_or(0).to_nat())
+  (length_symbols.get(length - 3).ok_or(0).to_nat(), distance_symbols.get(at).ok_or(0).to_nat())
 )
 
 # How often each literal and length symbol and each distance symbol comes.
-frequencies : (Codes, List(Symbol)) -> (List(Nat), List(Nat))
-frequencies(codes, symbols) -> (
+frequencies : List(Symbol) -> (List(Nat), List(Nat))
+frequencies(symbols) -> (
   (literals, distances) = symbols.fold((List.repeat(0, 286), List.repeat(0, 30)), |(literals, distances), symbol|
     if symbol < 65536 then (bump(literals, symbol.to_nat()), distances)
     else (
-      (l, d) = symbols_of(codes, symbol.shift_right(16).to_nat(), (symbol & 0xffff).to_nat())
+      (l, d) = symbols_of(symbol.shift_right(16).to_nat(), (symbol & 0xffff).to_nat())
       (bump(literals, 257 + l), bump(distances, d))
     ))
   (bump(literals, 256), distances)
@@ -334,8 +324,7 @@ bump(counts, i) -> counts.put(i, counts.get(i).ok_or(0) + 1)
 # `end`, written the smallest of the three ways.
 block : (Context, Writer, List(Symbol), Nat, Nat, Bool) -> Writer
 block(context, written, symbols, start, end, last) -> (
-  codes = context.codes
-  (literal_counts, distance_counts) = frequencies(codes, symbols)
+  (literal_counts, distance_counts) = frequencies(symbols)
   literal_lengths = huffman_lengths(literal_counts, 15)
   distance_lengths = huffman_lengths(distance_counts, 15)
   literal_count = used(literal_lengths, 257)
@@ -346,7 +335,7 @@ block(context, written, symbols, start, end, last) -> (
   order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
   ordered = order.map(|symbol| run_lengths_lengths.get(symbol).ok_or(0))
   order_count = used(ordered, 4)
-  extra = extra_bits(codes.lengths, literal_counts.drop(257)) + extra_bits(codes.distances, distance_counts)
+  extra = extra_bits(length_table, literal_counts.drop(257)) + extra_bits(distance_table, distance_counts)
   header_bits = 14 + 3 * order_count + cost(run_counts, run_lengths_lengths) + 2 * count_of(runs, 16) + 3 * count_of(runs, 17) + 7 * count_of(runs, 18)
   dynamic_bits = header_bits + cost(literal_counts, literal_lengths) + cost(distance_counts, distance_lengths) + extra
   fixed_bits = cost(literal_counts, fixed_literal_lengths) + 5 * distance_counts.sum() + extra
@@ -354,7 +343,7 @@ block(context, written, symbols, start, end, last) -> (
   final = if last then 1 else 0
   if stored_bits < fixed_bits.min(dynamic_bits) return stored(written, context.input, start, end, last)
   if fixed_bits <= dynamic_bits return
-    symbols_put(put(written, U64.of_nat(final + 2), 3), codes, symbols, codes.fixed_literals, codes.fixed_distances)
+    symbols_put(put(written, U64.of_nat(final + 2), 3), symbols, fixed_literals, fixed_distances)
   header = put(put(put(put(written, U64.of_nat(final + 4), 3), U64.of_nat(literal_count - 257), 5), U64.of_nat(distance_count - 1), 5), U64.of_nat(order_count - 4), 4)
   with_lengths = ordered.take(order_count).fold(header, |w, length| put(w, U64.of_nat(length), 3))
   run_code = code_of(run_lengths_lengths)
@@ -367,7 +356,7 @@ block(context, written, symbols, start, end, last) -> (
       _ then w2
     )
   ))
-  symbols_put(with_runs, codes, symbols, code_of(literal_lengths), code_of(distance_lengths))
+  symbols_put(with_runs, symbols, code_of(literal_lengths), code_of(distance_lengths))
 )
 
 # How many symbols a code needs sent: past its last used one, and at least
@@ -385,16 +374,16 @@ count_of : (List((Nat, Nat)), Nat) -> Nat
 count_of(runs, symbol) -> runs.count(|(s, _)| s == symbol)
 
 # Every symbol of a block written under the codes, and its end.
-symbols_put : (Writer, Codes, List(Symbol), Code, Code) -> Writer
-symbols_put(written, codes, symbols, literals, distances) -> (
+symbols_put : (Writer, List(Symbol), Code, Code) -> Writer
+symbols_put(written, symbols, literals, distances) -> (
   body = symbols.fold(written, |w, symbol|
     if symbol < 65536 then put_symbol(w, literals, symbol.to_nat())
     else (
       length = symbol.shift_right(16).to_nat()
       distance = (symbol & 0xffff).to_nat()
-      (l, d) = symbols_of(codes, length, distance)
-      w2 = put_with_extra(put_symbol(w, literals, 257 + l), codes.lengths.get(l).ok_or(0), length)
-      put_with_extra(put_symbol(w2, distances, d), codes.distances.get(d).ok_or(0), distance)
+      (l, d) = symbols_of(length, distance)
+      w2 = put_with_extra(put_symbol(w, literals, 257 + l), length_table.get(l).ok_or(0), length)
+      put_with_extra(put_symbol(w2, distances, d), distance_table.get(d).ok_or(0), distance)
     ))
   put_symbol(body, literals, 256)
 )
