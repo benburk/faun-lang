@@ -24,10 +24,13 @@
 //! ending a literal is, is taken as that constructor wherever it is read;
 //! other known values are [`super::specialize`]'s, which runs after.
 //!
-//! Only a construction read once, by the call, is followed, and only into
-//! a definition the entry reaches with a body, that is not answered as a
-//! recognized operation, and that takes the parameter apart with a match
-//! of two or more arms. Copying keeps every call and effect where it was.
+//! A body run at most once, as the entry's is, is left as it is: what it
+//! builds it builds once, and a copy for it would only make the program
+//! larger. Only a construction read once, by the call, is followed, and
+//! only into a definition the entry reaches with a body, that is not
+//! answered as a recognized operation, and that takes the parameter apart
+//! with a match of two or more arms. Copying keeps every call and effect
+//! where it was.
 
 use std::collections::HashMap;
 
@@ -37,8 +40,9 @@ use super::{Atom, Body, CtorId, Expr, ExprId, FnId, Local, Program, TypeId};
 
 /// The most copies made of one definition.
 const COPIES: usize = 8;
-/// The largest definition copied, in what copying it allocates.
-const LARGEST: usize = 4096;
+/// The most a construction's copies may copy, in what copying allocates:
+/// as much as inlining copies of one callee.
+const LARGEST: usize = 256;
 
 /// Send every call handing a definition a construction it takes apart, and
 /// that nothing else reads, to a copy taking the construction's fields.
@@ -46,6 +50,7 @@ pub(crate) fn constructions(program: &mut Program) {
     let recognised = program.recognised().clone();
     let entry = program.entry();
     let reached = super::sweep::reached(program, entry).0;
+    let once = super::once::made_once(program, entry, &reached);
     let mut unbuilt = Unbuilt {
         recognised,
         copies: HashMap::new(),
@@ -55,7 +60,7 @@ pub(crate) fn constructions(program: &mut Program) {
     let count = unbuilt.program.functions().len();
     for (at, &reached) in reached.iter().enumerate().take(count) {
         let id = FnId::at(at);
-        if reached && !unbuilt.answered(id) {
+        if reached && !once[at] && !unbuilt.answered(id) {
             unbuilt.rewrite(id);
         }
     }
@@ -81,9 +86,26 @@ struct Shape {
     fields: Vec<Option<Self>>,
 }
 
+impl Shape {
+    /// How many constructors it holds, itself among them.
+    fn nodes(&self) -> usize {
+        1 + self.fields.iter().flatten().map(Self::nodes).sum::<usize>()
+    }
+}
+
 /// What each parameter of a definition is handed, where it is handed a
 /// construction it takes apart.
 type Key = Vec<Option<Shape>>;
+
+/// What a local holds, where it is a construction nothing but one call
+/// reads, or a known value of a constructor with no fields: which was
+/// built.
+#[derive(Clone)]
+struct Made {
+    ctor: CtorId,
+    fields: Vec<Atom>,
+    built: bool,
+}
 
 /// A call handing a construction, found in a body.
 struct Site {
@@ -119,7 +141,10 @@ impl Unbuilt<'_> {
         };
         let mut sites = Vec::new();
         let mut known = vec![None; self.program.params(id).len()];
-        self.sites(body, &mut known, &mut sites);
+        // A copy hands on the rest of what it took apart, whose end may be
+        // a known value: there that is followed too.
+        let copied = self.made.contains_key(&id);
+        self.sites(body, copied, &mut known, &mut sites);
         for site in sites {
             if site.callee == id && !self.made.contains_key(&id) {
                 continue;
@@ -154,7 +179,8 @@ impl Unbuilt<'_> {
     fn sites(
         &self,
         body: Body,
-        known: &mut Vec<Option<(CtorId, Vec<Atom>)>>,
+        copied: bool,
+        known: &mut Vec<Option<Made>>,
         sites: &mut Vec<Site>,
     ) {
         let depth = known.len();
@@ -162,10 +188,12 @@ impl Unbuilt<'_> {
         let reads = self.live_reads(body, depth);
         for (at, &expr) in bindings.iter().chain([&body.tail]).enumerate() {
             let held = match self.program.expr(expr) {
-                Expr::Con(ctor, fields) if reads.get(at) == Some(&1) => {
-                    Some((ctor, self.program.atoms(fields).to_vec()))
-                }
-                Expr::Static(value) => self.fieldless(value),
+                Expr::Con(ctor, fields) if reads.get(at) == Some(&1) => Some(Made {
+                    ctor,
+                    fields: self.program.atoms(fields).to_vec(),
+                    built: true,
+                }),
+                Expr::Static(value) => self.fieldless(value, copied),
                 Expr::Call(callee, args) => {
                     let args = self.program.atoms(args).to_vec();
                     sites.extend(site(known, expr, callee, args));
@@ -175,7 +203,7 @@ impl Unbuilt<'_> {
                     for arm in self.program.arms(arms) {
                         let fields = self.program.fields(arm.ctor).len();
                         known.extend(std::iter::repeat_n(None, fields));
-                        self.sites(arm.body, known, sites);
+                        self.sites(arm.body, copied, known, sites);
                         known.truncate(known.len() - fields);
                     }
                     None
@@ -190,14 +218,18 @@ impl Unbuilt<'_> {
     /// The constructor a known value is, where it has no fields: such as
     /// the empty list ending a literal, which is that constructor however
     /// often it is read. A number is left to [`super::specialize`].
-    fn fieldless(&self, value: super::ConstId) -> Option<(CtorId, Vec<Atom>)> {
+    fn fieldless(&self, value: super::ConstId, copied: bool) -> Option<Made> {
         let ctor = self.program.constant(value).constructor();
         let owner = self.program.ctor(ctor).owner;
         let natural = matches!(
             super::type_shape(self.program, owner),
             super::TypeShape::Natural { .. }
         );
-        (self.program.fields(ctor).is_empty() && !natural).then(|| (ctor, Vec::new()))
+        (self.program.fields(ctor).is_empty() && !natural).then(|| Made {
+            ctor,
+            fields: Vec::new(),
+            built: copied,
+        })
     }
 
     /// How many times each binding of `body`, the first at level `base`, is
@@ -227,7 +259,7 @@ impl Unbuilt<'_> {
     fn key(&self, site: &Site) -> Option<Key> {
         let callee = site.callee;
         let body = self.program.function(callee).body()?;
-        if self.answered(callee) || super::inline::cost(self.program, body) > LARGEST {
+        if self.answered(callee) {
             return None;
         }
         let key: Key = site
@@ -236,7 +268,11 @@ impl Unbuilt<'_> {
             .enumerate()
             .map(|(param, shape)| shape.clone().filter(|_| self.taken_apart(body, param)))
             .collect();
-        key.iter().any(Option::is_some).then_some(key)
+        // Taking a construction apart may take a copy for each constructor
+        // in it, as a literal list takes one for each element.
+        let nodes: usize = key.iter().flatten().map(Shape::nodes).sum();
+        let cost = super::inline::cost(self.program, body);
+        (nodes > 0 && nodes.saturating_mul(cost) <= LARGEST).then_some(key)
     }
 
     /// Whether a body takes its parameter `param` apart with a match of two
@@ -315,17 +351,20 @@ impl Unbuilt<'_> {
 
 /// A call of `callee` with `args`, where it hands a construction `known`
 /// says nothing else reads.
-fn site(
-    known: &[Option<(CtorId, Vec<Atom>)>],
-    expr: ExprId,
-    callee: FnId,
-    args: Vec<Atom>,
-) -> Option<Site> {
+fn site(known: &[Option<Made>], expr: ExprId, callee: FnId, args: Vec<Atom>) -> Option<Site> {
     let (mut shapes, mut leaves) = (Vec::new(), Vec::new());
     for &atom in &args {
         let mut nodes = NODES;
         let mut made_of = Vec::new();
-        shapes.push(taken(known, atom, &mut nodes, &mut made_of));
+        // Only what is built is followed; a known value only inside it.
+        let shape = match &known[atom.0.index()] {
+            Some(made) if made.built => taken(known, atom, &mut nodes, &mut made_of),
+            _ => {
+                made_of.push(atom);
+                None
+            }
+        };
+        shapes.push(shape);
         leaves.push(made_of);
     }
     shapes.iter().any(Option::is_some).then_some(Site {
@@ -341,12 +380,13 @@ fn site(
 /// read only where it is handed on, taken apart while `nodes` lasts; the
 /// atoms at its leaves, or `atom` itself, pushed onto `leaves`.
 fn taken(
-    known: &[Option<(CtorId, Vec<Atom>)>],
+    known: &[Option<Made>],
     atom: Atom,
     nodes: &mut usize,
     leaves: &mut Vec<Atom>,
 ) -> Option<Shape> {
-    let Some((ctor, fields)) = known[atom.0.index()].as_ref().filter(|_| *nodes > 0) else {
+    let Some(Made { ctor, fields, .. }) = known[atom.0.index()].as_ref().filter(|_| *nodes > 0)
+    else {
         leaves.push(atom);
         return None;
     };
