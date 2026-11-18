@@ -1,0 +1,21 @@
+# The same symbols packed in a `U32` each, a literal below 65536 and a
+# match its length times 65536 plus its distance, as deflate.fn had them.
+package {}
+
+import std.host {Host}
+
+gather : (Nat, Nat, List(U32)) -> List(U32)
+gather(0, _, symbols) -> symbols
+gather(Succ(left), x, symbols) if x % 3 == 0 -> gather(left, (x * 5 + 1) % 65536, symbols.append(U32.of_nat((x % 256 + 3) * 65536 + x % 32768 + 1)))
+gather(Succ(left), x, symbols) -> gather(left, (x * 5 + 1) % 65536, symbols.append(U32.of_nat(x % 256)))
+
+weight : List(U32) -> Nat
+weight(symbols) -> symbols.fold(0, |total, symbol|
+  if symbol < 65536 then total + symbol.to_nat()
+  else total + symbol.shift_right(16).to_nat() + (symbol & 0xffff).to_nat())
+
+main! : Host -> []
+main!(host) -> (
+  printed = host.println!("${weight(gather(5000000, 1, []))}")
+  host.exit!(0)
+)

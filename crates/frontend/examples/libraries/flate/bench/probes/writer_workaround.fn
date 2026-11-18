@@ -1,0 +1,26 @@
+# The same codes through the writer deflate.fn had: up to 32 bits in a
+# `U64`, written out four bytes at a time.
+package {}
+
+import std.host {Host}
+
+Writer = {out: List(U8), bits: U64, count: Nat}
+
+put : (Writer, U64, Nat) -> Writer
+put({out, bits, count}, value, width) -> (
+  joined = bits | value.shift_left(count)
+  total = count + width
+  if total < 32 return {out, bits: joined, count: total}
+  (a, b, c, d, _, _, _, _) = joined.le_bytes()
+  {out: out.append(a).append(b).append(c).append(d), bits: joined.shift_right(32), count: total - 32}
+)
+
+walk : (Nat, Nat, Writer) -> Writer
+walk(0, _, written) -> written
+walk(Succ(left), x, written) -> walk(left, (x * 5 + 1) % 512, put(written, U64.of_nat(x), 9))
+
+main! : Host -> []
+main!(host) -> (
+  printed = host.println!("${walk(10000000, 1, {out: [], bits: U64.of_nat(0), count: 0}).out.len()}")
+  host.exit!(0)
+)

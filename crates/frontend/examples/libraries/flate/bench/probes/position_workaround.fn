@@ -1,0 +1,24 @@
+# The same bit reader with the position a `U64`, as flate.fn had it.
+package {}
+
+import std.host {Host}
+
+peek : (List(U8), U64) -> U64
+peek(input, bit) -> (
+  at = bit.shift_right(3).to_nat()
+  word = U64.of_le_bytes(input.get(at).ok_or(0), input.get(at + 1).ok_or(0), input.get(at + 2).ok_or(0), 0, 0, 0, 0, 0)
+  word.shift_right((bit & 7).to_nat())
+)
+
+walk : (List(U8), U64, U64, U64) -> U64
+walk(input, total, bit, sum) -> (
+  if bit + 9 > total return sum
+  walk(input, total, bit + 9, sum + (peek(input, bit) & 511))
+)
+
+main! : Host -> []
+main!(host) -> (
+  input = List.range(4000000).map(|i| U8.of_nat(i * 7919 % 251))
+  printed = host.println!("${walk(input, U64.of_nat(input.len() * 8), U64.of_nat(0), U64.of_nat(0))}")
+  host.exit!(0)
+)

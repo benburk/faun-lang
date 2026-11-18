@@ -1,0 +1,21 @@
+# The same question matching the key rather than building a list, as
+# png.fn had it.
+package {}
+
+import std.host {Host}
+
+hidden : (List(Nat), Nat, Nat, Nat) -> Nat
+hidden(_, 0, _, count) -> count
+hidden(key, Succ(left), x, count) -> (
+  is_key = key is (
+    [k] then k == x
+    _ then False
+  )
+  hidden(key, left, (x * 5 + 1) % 256, if is_key then count + 1 else count)
+)
+
+main! : Host -> []
+main!(host) -> (
+  printed = host.println!("${hidden([7], 10000000, 1, 0)}")
+  host.exit!(0)
+)

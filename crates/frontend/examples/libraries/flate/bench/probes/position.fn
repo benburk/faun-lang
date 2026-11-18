@@ -1,0 +1,28 @@
+# Reads 9-bit fields, least significant bit first, from 4 MB of bytes, the
+# position a natural: a bit reader as inflate writes one.
+package {}
+
+import std.host {Host}
+
+byte : (List(U8), Nat) -> Nat
+byte(input, at) -> input.get(at).ok_or(0).to_nat()
+
+peek : (List(U8), Nat) -> Nat
+peek(input, bit) -> (
+  at = bit / 8
+  word = byte(input, at) + byte(input, at + 1) * 256 + byte(input, at + 2) * 65536
+  word.shift_right(bit % 8)
+)
+
+walk : (List(U8), Nat, Nat, Nat) -> Nat
+walk(input, total, bit, sum) -> (
+  if bit + 9 > total return sum
+  walk(input, total, bit + 9, sum + peek(input, bit) % 512)
+)
+
+main! : Host -> []
+main!(host) -> (
+  input = List.range(4000000).map(|i| U8.of_nat(i * 7919 % 251))
+  printed = host.println!("${walk(input, input.len() * 8, 0, 0)}")
+  host.exit!(0)
+)

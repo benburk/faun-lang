@@ -1,0 +1,19 @@
+# Adler-32's sums over 16 MB, a byte at a time, as crc.fn now writes them.
+package {}
+
+import std.host {Host}
+
+adler_bytes : (U64, U64, Nat, List(U8)) -> (U64, U64)
+adler_bytes(low, high, _, []) -> (low % 65521, high % 65521)
+adler_bytes(low, high, 0, bytes) -> adler_bytes(low % 65521, high % 65521, 4194304, bytes)
+adler_bytes(low, high, Succ(left), [byte, *rest]) -> (
+  sum = low + U64.of_u8(byte)
+  adler_bytes(sum, high + sum, left, rest)
+)
+
+main! : Host -> []
+main!(host) -> (
+  input = List.repeat(U8.of_nat(0xab), 16000000)
+  printed = host.println!("${adler_bytes(U64.of_nat(1), U64.of_nat(0), 4194304, input)}")
+  host.exit!(0)
+)
