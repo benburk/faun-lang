@@ -42,6 +42,11 @@ impl Target for X86_64Linux {
         WORD_BITS
     }
 
+    /// A process is given the low 47 bits of address.
+    fn address(&self) -> u16 {
+        47
+    }
+
     /// SSE2 is part of x86-64: every processor it runs on has scalar
     /// binary32 and binary64 arithmetic, correctly rounded to nearest-even
     /// with exceptions masked, as the control word is when a process starts.
