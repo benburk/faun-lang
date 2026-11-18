@@ -84,7 +84,9 @@ pub(super) fn once(program: &mut Program) {
 }
 
 /// The constants the entry reaches that do some work: pure definitions
-/// taking nothing, calling something, and not reaching themselves.
+/// taking nothing, calling something, and not reaching themselves. One
+/// answering a type no value has never answers at all, and stands where
+/// the program cannot go, so it is left there.
 fn constants(program: &mut Program, entry: FnId, reached: &[bool]) -> Vec<FnId> {
     let recognised = program.recognised().clone();
     let pure = super::calls::pure(program, &recognised);
@@ -99,6 +101,10 @@ fn constants(program: &mut Program, entry: FnId, reached: &[bool]) -> Vec<FnId> 
                 && !recursive[id.index()]
                 && !recognised.answered(id)
                 && program.params(id).is_empty()
+                && !matches!(
+                    super::type_shape(program, function.result),
+                    super::TypeShape::Uninhabited
+                )
                 && function.body().is_some_and(|body| {
                     super::walk::within(program, body)
                         .any(|expr| matches!(program.expr(expr), Expr::Call(..)))
@@ -216,6 +222,7 @@ fn needs(program: &Program, handed: &[FnId]) -> Vec<BTreeSet<usize>> {
 /// What handing constants down needs to know: which constants, which each
 /// definition needs, and how many parameters each took before.
 struct Handing<'a> {
+    entry: FnId,
     handed: &'a [FnId],
     needs: &'a [BTreeSet<usize>],
     original: Vec<usize>,
@@ -227,6 +234,7 @@ struct Handing<'a> {
 /// it calls another needing them.
 fn hand_down(program: &mut Program, entry: FnId, handed: &[FnId], needs: &[BTreeSet<usize>]) {
     let handing = Handing {
+        entry,
         handed,
         needs,
         original: (0..needs.len())
@@ -306,8 +314,9 @@ impl Handing<'_> {
         if let Some(place) = self.handed.iter().position(|&id| id == callee) {
             return Expr::Atom(held[place].expect("a constant read where it is held"));
         }
+        // The entry works its constants out itself, whoever calls it.
         let needed = &self.needs[callee.index()];
-        if needed.is_empty() {
+        if needed.is_empty() || callee == self.entry {
             return expr;
         }
         let mut atoms = program.atoms(args).to_vec();
