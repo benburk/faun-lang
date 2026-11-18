@@ -104,3 +104,21 @@ folding a known shift, conversion, comparison and branch (`7809e77`, score
 - **The suite holds no list of small tags.** Packing a small sum's or pair's fields by their bits in the elements of a list built as the program runs, a block's symbols four bytes apart rather than six, changed no measure of the suite by a tenth of a percent: the win is on the flate probe, where `List([Literal(U8), Match(Nat, Nat)])` held 60 MB and now holds the 40 MB the packed-word workaround did, and ran 758 million instructions, now 743, against the workaround's 689.
 - **Giving up and claiming a run of elements in one routine each** is where the series' gains came from: fannkuch-redux 27% fewer instructions on x86-64 and 22% less fuel on wasm32, inflate 14% fewer, and the 6502 lab binary-trees fitting the machine, since one walk called from every release and copy is smaller than one written into each.
 - **Shrinking a 6502 image can raise its memory.** The 6502 lab sort image is 63,166 bytes on the trunk and 544 smaller with the routines above. On the trunk the heap's first request, the 1 KiB first arena, would reach the frames, so `grow` refuses it and the heap grows a block at a time exactly to what is held, 498 bytes. With the smaller image the 1 KiB arena fits, and the allocator, searching on from where the last allocation ended, writes through all of it before coming back: 1,022 bytes written at every size from 4 numbers to 32, with the same output, so 87% more memory by bytes written and the candidate rejected. Asking for a 512-byte first arena instead writes 1,243. Any change shrinking the sort image by some 400 bytes trips the same, until the 6502's heap asks for its first arena by what it needs or a search starts where blocks were freed.
+
+## Range analysis as octagons
+
+- **The lab collatz memory is where the heap's next arena falls.** With a
+  length bounded by memory or octagons in loops, `List.range(limit)`'s
+  elements are `0..2^47` rather than naturals, and the x86-64 lab collatz
+  holds 488 KiB at 20,000 rather than 376, measured by `eval/measure.c`.
+  The program is the same but for that element class, and which side holds
+  more turns over with the size: candidate against incumbent, it is 160 against 132 KiB at 5,000, 268 against 212
+  at 10,000, 308 against 336 at 15,000, 488 against 376 at 20,000, 564
+  against 616 at 30,000, 920 against 696 at 40,000 and 1,076 against 1,176
+  at 60,000, so a measurement artifact rather than a cost the change
+  carries. `strace` shows why: at 20,000 the candidate maps a fourth
+  arena of 512 KiB that the incumbent's buffers, grown by doubling, happen
+  to fit without, and at 15,000 both map three. Like the 6502 sort's first
+  arena, a heap growing an arena at a time measures where a buffer's
+  doubling lands against an arena's end, not what a program holds; the
+  rule's 16 KiB of slack does not cover a 512 KiB arena.
