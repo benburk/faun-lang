@@ -71,7 +71,12 @@ representation is chosen:
 
 When the last claim on an object goes, its fields are released and its
 block returns to a private heap. Where the heap is full, it asks the target
-for more; where there is no more, the program exits with status 2. Where a
+for more; where there is no more, the program exits with status 2. A wide
+target's heap starts with a 64 KiB arena and doubles. A 16-bit target's
+grows by a quarter of itself, from what its first request wants: the heap
+searches on from its last allocation, so it writes through all it has
+before it reuses what was freed, and on a 64 KiB machine whose memory is
+counted byte by byte, what it has is what it costs. Where a
 call goes deeper than the stack has room for, an x86-64 Linux or 6502
 program says `stack overflow` on standard error and exits with status 3.
 A 6502 program without recursion whose calls could go that deep is refused
@@ -238,12 +243,19 @@ updated, which a loop that binds a name again does.
 
 ## History
 
+- **2026-11-18:** a 16-bit heap asks for its first arena by what it is
+  asked and grows by a quarter, in whole words, rather than taking 1 KiB
+  and doubling. The 6502's programs write 46% fewer bytes by geometric
+  mean for 2% more cycles, and sort's memory no longer jumps by an arena
+  when its image shrinks enough for 1 KiB to fit.
+
 - **2026-11-18:** a cell's fields and a sequence's elements lie widest
   first, leaves as wide in the order the type names them, so nothing is
   padded between them; before, they lay in the order named, each waiting
   for an offset its width divides, so a byte before a word took eight. The
   fields of a record are named in the order of their names, not the order
   the compiler first met them, so the layout is the type's alone.
+
 - **2026-11-18:** an element of a list built as the program runs lays
   its small numbers out packed by their bits where that takes fewer bytes
   than a byte or more each, so a block's symbols, `[Literal(U8),
