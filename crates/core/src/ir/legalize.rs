@@ -953,10 +953,49 @@ impl Pass<'_> {
         at: usize,
         old: ValueId,
     ) -> ValueId {
+        self.take_times(b, scopes, live, (at, 1), old)
+    }
+
+    /// Claims to each of `olds` for a use at `at` that takes them all: a
+    /// value read nowhere else there and last there gives its own claim to
+    /// its first place and a new one to each other, so a buffer joined to a
+    /// run of itself, `out.concat(out.drop(k).take(n))`, is held twice and
+    /// not three times.
+    fn take_all(
+        &self,
+        b: &mut Builder,
+        scopes: &mut [Scope],
+        live: &Liveness,
+        at: usize,
+        olds: &[ValueId],
+    ) -> Vec<ValueId> {
+        olds.iter()
+            .enumerate()
+            .map(|(place, &old)| {
+                let times = olds.iter().filter(|&&other| other == old).count();
+                if olds.iter().position(|&other| other == old) == Some(place) {
+                    self.take_times(b, scopes, live, (at, times), old)
+                } else {
+                    let class = self.source.class(old);
+                    self.retained(b, class, self.value(old))
+                }
+            })
+            .collect()
+    }
+
+    /// [`Self::take`] for a use at `at` reading `old` `times` times.
+    fn take_times(
+        &self,
+        b: &mut Builder,
+        scopes: &mut [Scope],
+        live: &Liveness,
+        (at, times): (usize, usize),
+        old: ValueId,
+    ) -> ValueId {
         let class = self.source.class(old);
         let scope = top(scopes);
         if managed(class)
-            && live.only_last(old, at)
+            && live.last_times(old, at, times)
             && let Some(held) = scope.held.iter().position(|&value| value == old)
         {
             scope.held.remove(held);
@@ -1113,8 +1152,10 @@ impl Pass<'_> {
             }
             Op::BufferPrepend { operands, shape } => {
                 let operands = self.source.values(operands);
-                let buffer = self.take(b, scopes, live, at, operands[0]);
-                let from = self.take(b, scopes, live, at, operands[3]);
+                let [buffer, from] = self
+                    .take_all(b, scopes, live, at, &[operands[0], operands[3]])
+                    .try_into()
+                    .expect("two claims");
                 let [start, len, from_start, count] =
                     [1, 2, 4, 5].map(|at| word(b, v(operands[at])));
                 return self
@@ -1131,8 +1172,10 @@ impl Pass<'_> {
             }
             Op::BufferExtend { operands, shape } => {
                 let operands = self.source.values(operands);
-                let first = self.take(b, scopes, live, at, operands[0]);
-                let then = self.take(b, scopes, live, at, operands[3]);
+                let [first, then] = self
+                    .take_all(b, scopes, live, at, &[operands[0], operands[3]])
+                    .try_into()
+                    .expect("two claims");
                 let [first_start, first_len, then_start, then_len] =
                     [1, 2, 4, 5].map(|at| word(b, v(operands[at])));
                 return self
@@ -1142,8 +1185,11 @@ impl Pass<'_> {
                     .extend(
                         b,
                         self.shapes.packed(shape),
-                        (first, first_start, first_len),
-                        (then, then_start, then_len),
+                        (
+                            (first, first_start, first_len),
+                            (then, then_start, then_len),
+                        ),
+                        operands[0] == operands[3],
                     )
                     .to_vec();
             }

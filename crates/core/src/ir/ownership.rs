@@ -84,12 +84,13 @@ impl Liveness {
         }
     }
 
-    /// Whether instruction `at` is the only reading of `value` from there on:
-    /// its last use, and read there exactly once, so taking its claim leaves
-    /// nothing else in that instruction reading a released value.
-    pub(super) fn only_last(&self, value: ValueId, at: usize) -> bool {
+    /// Whether instruction `at` is the last use of `value` and reads it
+    /// exactly `times` times, each a use that takes a claim: one of them may
+    /// then take its own, and the rest new ones, leaving nothing else in
+    /// that instruction reading a released value.
+    pub(super) fn last_times(&self, value: ValueId, at: usize, times: usize) -> bool {
         self.last.get(&value) == Some(&at)
-            && self.uses[at].iter().filter(|&&read| read == value).count() == 1
+            && self.uses[at].iter().filter(|&&read| read == value).count() == times
     }
 }
 

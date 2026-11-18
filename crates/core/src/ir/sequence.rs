@@ -106,6 +106,18 @@ struct Copies {
     reverse: FunctionId,
 }
 
+/// How two sequences neither of which is empty are joined.
+#[derive(Clone, Copy)]
+enum Joining {
+    /// The second written after the first.
+    After,
+    /// The second grown at its front where that is cheaper.
+    Either,
+    /// The second, a run of the first's buffer, written after the first
+    /// where it lies.
+    Run,
+}
+
 /// Where a grown buffer puts the sequence it copies: at its end, with room
 /// before for what is put in front, or at its start, with room after for
 /// what follows.
@@ -314,34 +326,41 @@ impl Library {
     /// second and it has room before or is strictly longer, so a sequence built
     /// by joining pieces before it is copied a bounded number of times.
     ///
+    /// Where `run` says both are held in the same buffer value, as
+    /// `out.concat(out.drop(k).take(n))` holds them, the join is written
+    /// out as [`Library::joined_run`] does it.
+    ///
     /// # Panics
     /// If the layout was not said to be extended.
     pub(super) fn extend(
         &self,
         b: &mut Builder<'_>,
         element: &Packed,
-        first: (ValueId, ValueId, ValueId),
-        then: (ValueId, ValueId, ValueId),
+        (first, then): ((ValueId, ValueId, ValueId), (ValueId, ValueId, ValueId)),
+        run: bool,
     ) -> [ValueId; 2] {
         match self.routines.get(&(Growth::Join, key(element))) {
-            Some(&join) => {
+            Some(&join) if !run => {
                 let args = [first.0, first.1, first.2, then.0, then.1, then.2];
                 let joined = b.call(join, &args);
                 [joined[0], joined[1]]
             }
-            None => self.extended(b, element, first, then, false),
+            _ => {
+                let joining = if run { Joining::Run } else { Joining::After };
+                self.extended(b, element, first, then, joining)
+            }
         }
     }
 
-    /// [`Library::extend`] written out, `either` saying whether the second
-    /// sequence may grow at its front.
+    /// [`Library::extend`] written out, `joining` saying how two sequences
+    /// neither of which is empty are joined.
     fn extended(
         &self,
         b: &mut Builder<'_>,
         element: &Packed,
         (first, first_start, first_len): (ValueId, ValueId, ValueId),
         (then, then_start, then_len): (ValueId, ValueId, ValueId),
-        either: bool,
+        joining: Joining,
     ) -> [ValueId; 2] {
         let zero = number(b, 0);
         let no_first = b.compare(Relation::Equal, first_len, zero);
@@ -364,10 +383,10 @@ impl Library {
                     |b| {
                         let first = (first, first_start, first_len);
                         let then = (then, then_start, then_len);
-                        let joined = if either {
-                            self.joined_either(b, element, first, then)
-                        } else {
-                            self.joined(b, element, first, then)
+                        let joined = match joining {
+                            Joining::After => self.joined(b, element, first, then),
+                            Joining::Either => self.joined_either(b, element, first, then),
+                            Joining::Run => self.joined_run(b, element, first, then),
                         };
                         b.yield_(&joined);
                     },
@@ -446,6 +465,63 @@ impl Library {
         b.call(copies.copy, &[from, into, then_len, room]);
         b.call(self.release, &[then]);
         [room, start]
+    }
+
+    /// Two sequences neither of which is empty, held in the same buffer
+    /// value, joined as [`Library::extend`] joins them.
+    ///
+    /// Where the second is a run of the first, as
+    /// `out.concat(out.drop(k).take(n))` is, its claim is given up
+    /// first, which never frees the buffer, since the first holds it too;
+    /// so where nothing else holds the buffer the first is written after
+    /// where it lies, its run read from before where the writing starts,
+    /// rather than the whole of it copied because two claims hold it. Where
+    /// the first is copied to a new buffer, its run is read from the copy.
+    fn joined_run(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (first, first_start, first_len): (ValueId, ValueId, ValueId),
+        (then, then_start, then_len): (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 2] {
+        let after = self.routines[&(Growth::Extend, key(element))];
+        let copies = self.copies.expect("growing by a sequence copies one");
+        let inside = run_of(b, (first_start, first_len), (then_start, then_len));
+        self.release_where(b, (inside, true), then);
+        let room = b.call_one(after, &[first, first_start, first_len, then_len]);
+        let start = kept_start(b, (first, room), first_start);
+        let end = b.binary(Binary::Add, start, first_len);
+        let into = self.element(b, room, element.size, end);
+        let source = b.if_(
+            inside,
+            &[A, W],
+            |b| {
+                let offset = b.binary(Binary::Sub, then_start, first_start);
+                let at = b.binary(Binary::Add, start, offset);
+                b.yield_(&[room, at]);
+            },
+            |b| b.yield_(&[then, then_start]),
+        );
+        let from = self.element(b, source[0], element.size, source[1]);
+        b.call(copies.copy, &[from, into, then_len, room]);
+        self.release_where(b, (inside, false), then);
+        [room, start]
+    }
+
+    /// Give up `buffer`'s claim where `condition` is `yes`.
+    fn release_where(
+        &self,
+        b: &mut Builder<'_>,
+        (condition, yes): (ValueId, bool),
+        buffer: ValueId,
+    ) {
+        let release = |b: &mut Builder<'_>, here: bool| {
+            if here {
+                b.call(self.release, &[buffer]);
+            }
+            b.yield_(&[]);
+        };
+        b.if_(condition, &[], |b| release(b, yes), |b| release(b, !yes));
     }
 
     /// Two sequences neither of which is empty, the second grown at its
@@ -532,6 +608,23 @@ impl Library {
         let stride = number(b, stride);
         element_at(b, buffer, (stride, index), self.word_bits)
     }
+}
+
+/// Whether `then`, held in the same buffer as `first`, is a run of it: from
+/// no earlier than `first` starts to no later than it ends.
+fn run_of(
+    b: &mut Builder<'_>,
+    (first_start, first_len): (ValueId, ValueId),
+    (then_start, then_len): (ValueId, ValueId),
+) -> ValueId {
+    let one = number(b, 1);
+    let before = b.compare(Relation::Less, then_start, first_start);
+    let from_first = b.binary(Binary::Sub, one, before);
+    let first_end = b.binary(Binary::Add, first_start, first_len);
+    let then_end = b.binary(Binary::Add, then_start, then_len);
+    let past = b.compare(Relation::Less, first_end, then_end);
+    let to_end = b.binary(Binary::Sub, one, past);
+    b.binary(Binary::Mul, from_first, to_end)
 }
 
 /// Where a sequence of `start` in `buffer` starts once room after it is
@@ -673,7 +766,7 @@ fn define_joins(program: &mut Program, library: &mut Library, joins: &[Packed]) 
         program.define(id, |b, args| {
             let first = (args[0], args[1], args[2]);
             let then = (args[3], args[4], args[5]);
-            let joined = library.extended(b, element, first, then, true);
+            let joined = library.extended(b, element, first, then, Joining::Either);
             b.ret(&joined);
         });
         library.routines.insert((Growth::Join, key(element)), id);
