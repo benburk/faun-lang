@@ -185,9 +185,61 @@ examples, and each is the same before and after, both ways.
 The `--small` column falls with the tail calls alone; the other two steps
 leave it as it was.
 
+## Comparisons asked as written, and constants decided
+
+Two changes in machine IR, which every target reads, measured by the
+ratchet's suite in x86-64 instructions on the stock backend, each against
+the commit before it.
+
+A comparison of two naturals worked out their order as a number, nought,
+one or two, from a `Less` and an `Equal` of the words holding them, and
+then compared that number with the one the comparison wanted. Where both
+are immediates, it is now the one word comparison it was written as, and
+only an object asks the helper for the order. A loop over naturals then
+branches on the comparison: sieve ran 428 M instructions and runs 367 M,
+collatz 389 M and 340 M, queens 92.5 M and 84.6 M, binary-trees 844 M and
+802 M; on wasm32 sieve burns 17% less fuel and queens 12% less.
+
+Legalization writes a small natural constant as a word doubled, converted
+to a handle and back, and asks its low bit whether it names an object
+before every use and every claim given up. Nothing folded a shift, a
+conversion or a branch, so each `3 * n` in collatz shifted three at run
+time, tested it, and branched round a release. Simplification now works
+out a shift, a conversion and a comparison of numbers known before the
+program runs, and a branch on one is the arm it takes, written in its
+place. A number is followed to a word only from an address, the handle
+such a constant is. collatz runs 282 M instructions rather than 340 M,
+sieve 348 M rather than 367 M, mandelbrot 128 M rather than 137 M, and
+every image is 3 to 10% smaller on every target; fasta runs 1.9% more, its
+loop's registers allocated differently.
+
+Tried and not kept, each with the ratchet's verdict in
+[`ratchet/log.tsv`](../ratchet/log.tsv):
+
+- **Threading in selection.** An edge carrying a number to a block that
+  only compares it and branches goes straight to the side the branch
+  takes, and the block is dropped where nothing else reaches it, so `a &
+  b` branches on `a`'s and `b`'s comparisons rather than writing nought or
+  one into a join and testing it. Deflate at level 9 ran 10% fewer
+  instructions, queens 2.6% and mandelbrot 1.5 to 2.4%, and nothing ran
+  more, but x86-64 alone is one group of the score's thirteen: neutral.
+  Copying the join's branch into an edge that carries a comparison made
+  images larger and was rejected; moving a comparison a branch alone reads
+  down beside it added a little and stayed neutral.
+- **A move for a small constant.** A push and a pop are three bytes and
+  two instructions, the pop waiting on the store; a move is five or six
+  bytes and one. Favouring speed it ran 0.9% fewer instructions and made
+  images 1.5% larger, 0.9% written only in loops: rejected.
+
 ## Left
 
 - Spectral norm's spills: an allocator that keeps a loop's values in
   registers ahead of code outside it would take back its 5%.
 - A count could stay out of line where the use is cold, which would take
   back much of the size.
+- The deflate search's spills. Its loop takes nine values and calls
+  `nat.compare` and `nat.release` on a cold path for its chain count, a
+  `Nat`, and `perf annotate` shows its values stored to the stack where
+  it starts and read back before it goes round. Keeping a loop's values in
+  registers past a call off its common path would keep the chain walk in
+  registers.
