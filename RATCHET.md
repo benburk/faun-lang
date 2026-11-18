@@ -43,7 +43,7 @@ Each target measures at its own input size, in `eval/ratchet.py`'s table, small 
 - where the run was timed, no x86-64 program takes longer, as below;
 - it changes no protected path.
 
-So a small regression is paid for by a gain twice its size somewhere else, and a large one by nothing. A candidate that passes all of these but improves the score by less than a tenth of a percent is `neutral`: logged, not promoted, so the incumbent does not move for noise-sized wins. A rejected change I still want is my call: log it as `override`. Only a committed candidate, scored on the whole suite by the pinned evaluator, is promoted: the summary names anything else under `not a promotion`.
+So a small regression is paid for by a gain twice its size somewhere else, and a large one by nothing. A candidate that passes all of these but improves the score by less than a tenth of a percent is `neutral`: logged, not promoted, so the incumbent does not move for noise-sized wins. A rejected change I still want is my call: log it as `override`. Only a committed candidate, scored on the whole suite by the pinned evaluator, is promoted: the summary names anything else under `not a promotion`. So does a run whose two compilers are one file though built from different sources.
 
 **Repairs.** A measure the candidate has and the incumbent lacks counts as a halving: a program that starts to fit the 6502, or to run at all. A 6502 program too large for the machine's 64 KiB on both sides still counts by where its image would end, so shrinking one towards fitting is a gain.
 
@@ -51,7 +51,7 @@ So a small regression is paid for by a gain twice its size somewhere else, and a
 
 **Time.** Instructions are not seconds: a change can run fewer and take longer. `just eval --time <cpu>` also times the x86-64 images, pinned to that CPU: after a run to warm each, the candidate, the incumbent and the twin take turns, one run each in turning order, for at least five turns and as many as take a quarter of a second. A run's time is the processor time it was given. A program takes longer where both the candidate's quickest run and its median run are more than 10%, and a quarter of a millisecond, over the incumbent's: on a busy CPU a lucky run fools the quickest and a burst the median, seldom both. Times only reject; they earn nothing. Time a candidate before promoting it wherever its x86-64 instruction counts moved, on an idle CPU where there is one.
 
-Every run writes a new JSON report to `ratchet/reports/` in the main checkout (gitignored, never overwritten). It holds both commits and compilers' hashes, the evaluator's commit, the machine, the tools, the seed, every cell's measures for both sides and the twin, the score and the verdict.
+Every run writes a new JSON report to `ratchet/reports/` in the main checkout (gitignored, never overwritten). It holds both commits, the hashes of their compilers and of the sources they were built from, the evaluator's commit, the machine, the tools, the seed, every cell's measures for both sides and the twin, the score and the verdict.
 
 ## Climbing
 
@@ -72,7 +72,7 @@ Every run writes a new JSON report to `ratchet/reports/` in the main checkout (g
 
 ## Protected paths
 
-The evaluator runs from an export of `origin/main`, never from the working tree: what is merged there is what I approved. So a candidate cannot run its own judge, and the programs, twins and sizes it measures are the trunk's as of the last fetch. It exports other revisions, such as the incumbent, into `~/.cache/faun-ratchet` and caches their compilers per commit, so it creates no git worktrees. `eval/protected.txt` lists the evaluator, the suite, the tools' versions and these rules. `just eval` rejects a candidate whose branch changes them. Changing one needs my approval, is a pull request of its own, and starts a new series in the log once it is merged.
+The evaluator runs from an export of `origin/main`, never from the working tree: what is merged there is what I approved. So a candidate cannot run its own judge, and the programs, twins and sizes it measures are the trunk's as of the last fetch. It exports other revisions, such as the incumbent, into `~/.cache/faun-ratchet`, so it creates no git worktrees, and builds each one's compiler once, from nothing, in a target directory of its own, keeping only the compiler. A shared target directory would let cargo, which judges freshness by time, take one export's build for another's, since `git archive` dates every file to its commit. `eval/protected.txt` lists the evaluator, the suite, the tools' versions and these rules. `just eval` rejects a candidate whose branch changes them. Changing one needs my approval, is a pull request of its own, and starts a new series in the log once it is merged.
 
 `just eval --unpinned` runs the working tree's evaluator instead, for working on the evaluator itself. Its verdict is a measurement, never a promotion.
 

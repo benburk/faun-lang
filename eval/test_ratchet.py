@@ -1,8 +1,14 @@
 """Decision boundaries of the ratchet. Run with python3 -B test_ratchet.py."""
 
+import os
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+from unittest import mock
 
-from ratchet import MOS, WASM, X86, decide, ratio, score, slower
+import ratchet
+from ratchet import MOS, WASM, X86, decide, ratio, score, same_compiler, slower
 
 
 def cell(
@@ -166,6 +172,69 @@ class Ratchet(unittest.TestCase):
         # One lucky run of the incumbent's, or one burst in the candidate's.
         self.assertFalse(slower(timed(100, 150, image="old"), timed(150)))
         self.assertFalse(slower(old, timed(100, 150)))
+
+
+class Compilers(unittest.TestCase):
+    """Each revision's compiler is built from that revision's sources."""
+
+    def test_an_older_revision_is_not_given_a_newer_ones_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo, cache = Path(directory, "repo"), Path(directory, "cache")
+            (repo / "src").mkdir(parents=True)
+            (repo / "Cargo.toml").write_text(
+                '[package]\nname = "faun"\nversion = "0.1.0"\nedition = "2024"\n'
+            )
+            (repo / "src/main.rs").touch()
+            subprocess.run(
+                ["cargo", "generate-lockfile", "--offline", "--quiet"],
+                cwd=repo,
+                check=True,
+            )
+
+            def commit(says, when):
+                main = 'fn main() { println!("' + says + '"); }\n'
+                (repo / "src/main.rs").write_text(main)
+                dated = os.environ | {
+                    "GIT_AUTHOR_DATE": when,
+                    "GIT_COMMITTER_DATE": when,
+                }
+                for command in (["init", "-q"], ["add", "."], ["commit", "-qm", says]):
+                    subprocess.run(
+                        ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+                        + ["-c", "commit.gpgsign=false", *command],
+                        cwd=repo,
+                        env=dated,
+                        check=True,
+                    )
+                said = ["git", "rev-parse", "HEAD"]
+                return subprocess.check_output(said, cwd=repo, text=True).strip()
+
+            # The older commit's files are older than the newer's build.
+            older = commit("older", "2001-01-01T00:00:00Z")
+            newer = commit("newer", "2002-01-01T00:00:00Z")
+            with mock.patch.multiple(ratchet, REPO=repo, CACHE=cache):
+                sides = [ratchet.Side(newer), ratchet.Side(older)]
+                for side in sides:
+                    side.build()
+                said = [
+                    subprocess.check_output([side.binary], text=True).strip()
+                    for side in sides
+                ]
+                described = [side.describe() for side in sides]
+            self.assertEqual(said, ["newer", "older"])
+            self.assertFalse(same_compiler(*described))
+            # A build's target directory goes once its compiler is kept.
+            self.assertEqual(list((cache / "builds").iterdir()), [])
+
+    def test_one_compiler_from_two_sources_is_not_a_promotion(self):
+        def side(source, compiler):
+            return {"source": source, "compiler_sha256": compiler}
+
+        self.assertTrue(same_compiler(side("a", "x"), side("b", "x")))
+        self.assertFalse(same_compiler(side("a", "x"), side("b", "y")))
+        self.assertFalse(same_compiler(side("a", "x"), side("a", "x")))
+        # An uncommitted checkout's source is not known.
+        self.assertFalse(same_compiler(side("a", "x"), side(None, "x")))
 
 
 if __name__ == "__main__":
