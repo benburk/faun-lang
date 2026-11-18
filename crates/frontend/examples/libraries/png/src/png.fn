@@ -535,58 +535,54 @@ reduce(_, _, out) -> out
 # Every row with its filter byte before it. `per` is the bytes a pixel,
 # and so how far back the byte to the left is.
 #
-# A row is walked as four lists side by side rather than read by index:
-# the row's bytes `x`, the bytes `a` to their left, those above them, `b`,
-# and those above `a`, `c`. Before the first row, and left of the first
-# pixel, there are noughts, so each row is walked twice: its first pixel
-# against noughts, then the rest against the row itself and the row above.
+# A row is walked as four lists side by side: the row's bytes `x`, the
+# bytes `a` to their left, those above them, `b`, and those above `a`, `c`.
+# Before the first row, and left of the first pixel, there are noughts.
 filtered : (List(U8), Nat, Nat, Filtering) -> List(U8)
-filtered(samples, stride, per, filtering) -> (
-  zeros = List.repeat(U8.of_nat(0), stride)
-  filter_rows(samples, zeros, zeros, stride, per, filtering, samples.len() / stride, [])
-)
+filtered(samples, stride, per, filtering) ->
+  filter_rows(samples, List.repeat(0, stride), stride, per, filtering, samples.len() / stride, [])
 
-filter_rows : (List(U8), List(U8), List(U8), Nat, Nat, Filtering, Nat, List(U8)) -> List(U8)
-filter_rows(_, _, _, _, _, _, 0, out) -> out
-filter_rows(row, above, zeros, stride, per, filtering, Succ(rows), out) -> (
+filter_rows : (List(U8), List(U8), Nat, Nat, Filtering, Nat, List(U8)) -> List(U8)
+filter_rows(_, _, _, _, _, 0, out) -> out
+filter_rows(samples, above, stride, per, filtering, Succ(rows), out) -> (
+  row = samples.take(stride)
+  left = List.repeat(0, per).concat(row)
+  above_left = List.repeat(0, per).concat(above)
   filter = filtering is (
     Unfiltered then 0
-    Adaptive then best_filter(row, above, zeros, stride, per)
+    Adaptive then best_filter(row, left, above, above_left)
   )
-  head = residuals(row, zeros, above, zeros, per, filter, out.append(U8.of_nat(filter)))
-  done = residuals(row.drop(per), row, above.drop(per), above, stride - per, filter, head)
-  filter_rows(row.drop(stride), row, zeros, stride, per, filtering, rows, done)
+  done = residuals(row, left, above, above_left, filter, out.append(U8.of_nat(filter)))
+  filter_rows(samples.drop(stride), row, stride, per, filtering, rows, done)
 )
 
 # The filter whose row of residuals, each taken as signed, sums smallest,
 # ties going to the lower filter. Every filter is scored in one walk, which
 # reads each byte and its neighbours once.
-best_filter : (List(U8), List(U8), List(U8), Nat, Nat) -> Nat
-best_filter(row, above, zeros, stride, per) -> (
-  head = costs(row, zeros, above, zeros, per, (0, 0, 0, 0, 0))
-  (none, sub, up, average, paeth_sum) = costs(row.drop(per), row, above.drop(per), above, stride - per, head)
+best_filter : (List(U8), List(U8), List(U8), List(U8)) -> Nat
+best_filter(row, left, above, above_left) -> (
+  (none, sub, up, average, paeth_sum) = costs(row, left, above, above_left, (0, 0, 0, 0, 0))
   [(none, 0), (sub, 1), (up, 2), (average, 3), (paeth_sum, 4)].min().map_ok(|(_, filter)| filter).ok_or(0)
 )
 
 Costs = (Nat, Nat, Nat, Nat, Nat)
 
-costs : (List(U8), List(U8), List(U8), List(U8), Nat, Costs) -> Costs
-costs([x, *xs], [a, *rest_a], [b, *rest_b], [c, *rest_c], Succ(count), (none, sub, up, average, paeth_sum)) ->
-  costs(xs, rest_a, rest_b, rest_c, count, (
+costs : (List(U8), List(U8), List(U8), List(U8), Costs) -> Costs
+costs([x, *xs], [a, *rest_a], [b, *rest_b], [c, *rest_c], (none, sub, up, average, paeth_sum)) ->
+  costs(xs, rest_a, rest_b, rest_c, (
     none + signed(x),
     sub + signed(x - a),
     up + signed(x - b),
     average + signed(x - mean(a, b)),
     paeth_sum + signed(x - paeth(a, b, c)),
   ))
-costs(_, _, _, _, _, sums) -> sums
+costs(_, _, _, _, sums) -> sums
 
-# `count` bytes of `x` less what `filter` predicts of each, appended to
-# `out`.
-residuals : (List(U8), List(U8), List(U8), List(U8), Nat, Nat, List(U8)) -> List(U8)
-residuals([x, *xs], [a, *rest_a], [b, *rest_b], [c, *rest_c], Succ(count), filter, out) ->
-  residuals(xs, rest_a, rest_b, rest_c, count, filter, out.append(x - predicted(a, b, c, filter)))
-residuals(_, _, _, _, _, _, out) -> out
+# Each byte of `x` less what `filter` predicts of it, appended to `out`.
+residuals : (List(U8), List(U8), List(U8), List(U8), Nat, List(U8)) -> List(U8)
+residuals([x, *xs], [a, *rest_a], [b, *rest_b], [c, *rest_c], filter, out) ->
+  residuals(xs, rest_a, rest_b, rest_c, filter, out.append(x - predicted(a, b, c, filter)))
+residuals(_, _, _, _, _, out) -> out
 
 predicted : (U8, U8, U8, Nat) -> U8
 predicted(_, _, _, 0) -> 0
