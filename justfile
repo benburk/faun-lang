@@ -82,16 +82,19 @@ bench cpu *args:
     cargo build --release -q -p faun
     python3 crates/frontend/examples/bench/run.py --cpu {{ cpu }} {{ args }}
 
-# Score this checkout (or a revision) against the incumbent: the branch's last accepted commit, or origin/main; see RATCHET.md
+# Score this checkout (or a revision) against origin/main, or a named incumbent; `--log IDEA` appends the row; see RATCHET.md
+[positional-arguments]
 eval *args:
-    nix develop .#eval --command python3 eval/ratchet.py eval {{ args }}
+    nix develop .#eval --command python3 eval/ratchet.py eval "$@"
 
 # Measure the incumbent against itself: any difference is the evaluator's noise
+[positional-arguments]
 noise *args:
-    nix develop .#eval --command python3 eval/ratchet.py noise {{ args }}
+    nix develop .#eval --command python3 eval/ratchet.py noise "$@"
 
-# Write ratchet/standings.md, Faun beside C on every target, from the newest report
+# On the trunk after a merge: measure origin/main against itself and write ratchet/standings.md, Faun beside C, from that report
 standings:
+    just noise
     python3 eval/ratchet.py standings > ratchet/standings.md
 
 # Write every refused program's .err, and Barb's table of the standard's float code, from what the compiler says now; read the diff

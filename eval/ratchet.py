@@ -10,7 +10,6 @@ used, and the bytes of its image. See RATCHET.md for the rules.
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-import csv
 from datetime import datetime, timezone
 import hashlib
 import importlib.metadata
@@ -40,7 +39,7 @@ PROTECTED = [
 REPO = Path(os.environ.get("RATCHET_REPO", ROOT))
 CACHE = Path(os.environ.get("RATCHET_CACHE", Path.home() / ".cache/faun-ratchet"))
 # What is merged into the trunk is what was approved: its evaluator judges,
-# and it is the incumbent of a branch that has had nothing accepted yet.
+# and it is the incumbent unless another revision is named.
 APPROVED = "origin/main"
 TRUNK = os.environ.get("RATCHET_TRUNK", APPROVED)
 
@@ -142,34 +141,6 @@ def main_checkout():
 
 # Reports live in the main checkout, so they outlast per-idea worktrees.
 REPORTS = Path(os.environ.get("RATCHET_REPORTS", main_checkout() / "ratchet/reports"))
-
-
-def holds(commit, ancestor):
-    """Whether a commit's history holds another: no, where either is unknown."""
-    asked = ["git", "merge-base", "--is-ancestor", ancestor, commit]
-    return subprocess.run(asked, cwd=REPO, capture_output=True).returncode == 0
-
-
-def incumbent_of(candidate):
-    """The revision a candidate must beat: the newest commit its branch's log
-    calls accepted, where the trunk does not hold that commit yet, and
-    otherwise the trunk. The log and the trunk are the record; no tag is."""
-    shown = subprocess.run(
-        ["git", "show", f"{candidate.commit}:ratchet/log.tsv"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-    )
-    rows = csv.DictReader(shown.stdout.splitlines(), delimiter="\t")
-    accepted = [
-        row.get("commit") or ""
-        for row in rows
-        if (row.get("verdict") or "").startswith(("accept", "override"))
-    ]
-    newest = accepted[-1] if accepted else ""
-    if holds(candidate.commit, newest) and not holds(TRUNK, newest):
-        return newest
-    return TRUNK
 
 
 def export(commit, dest):
@@ -906,7 +877,7 @@ def standings(report):
 def evaluate(args):
     kind = "noise" if args.command == "noise" else "eval"
     candidate = Side(args.candidate if kind == "eval" else ".")
-    incumbent = Side(args.incumbent or incumbent_of(candidate))
+    incumbent = Side(args.incumbent or TRUNK)
     if kind == "noise":
         candidate = incumbent
     print(f"incumbent: {incumbent.spec}, {incumbent.commit[:7]}", file=sys.stderr)
@@ -1016,7 +987,38 @@ def evaluate(args):
         for metric in METRICS
     }
     print(json.dumps(summary, indent=1))
+    row = log_row(summary, args.log or "IDEA")
+    if args.log:
+        with (REPO / "ratchet/log.tsv").open("a") as file:
+            file.write(row + "\n")
+        print("logged to ratchet/log.tsv", file=sys.stderr)
+    else:
+        print("log row, for --log or to paste:", row, sep="\n", file=sys.stderr)
     return verdict == "quiet" or (verdict == "accept" and not caveats)
+
+
+# The columns of ratchet/log.tsv, as RATCHET.md states them.
+LOG = ("series", "idea", "score", *METRICS, "worst", "verdict", "report")
+
+
+def log_row(summary, idea):
+    """A run's row of ratchet/log.tsv, in the series of the log's last row."""
+    try:
+        rows = (REPO / "ratchet/log.tsv").read_text().splitlines()
+        series = rows[-1].split("\t")[0] if len(rows) > 1 else "0"
+    except OSError:
+        series = "0"
+    verdict = summary["verdict"]
+    if summary["reasons"]:
+        verdict += ": " + "; ".join(summary["reasons"])
+    if summary["not a promotion"]:
+        verdict += ";" if summary["reasons"] else ":"
+        verdict += " not a promotion: " + ", ".join(summary["not a promotion"])
+    fields = {"series": series, "idea": idea, "verdict": verdict}
+    fields["report"] = Path(summary["report"]).name
+    for column in ("score", *METRICS, "worst"):
+        fields[column] = f"{summary[column]:.5f}"
+    return "\t".join(fields[column].replace("\t", " ") for column in LOG)
 
 
 def parser():
@@ -1039,7 +1041,12 @@ def parser():
         s.add_argument(
             "incumbent",
             nargs="?",
-            help="default the branch's last accepted commit, or the trunk",
+            help="default the trunk",
+        )
+        s.add_argument(
+            "--log",
+            metavar="IDEA",
+            help="append the run's row to ratchet/log.tsv with this idea",
         )
         s.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
         s.add_argument("--seed", type=int, help="default a fresh one")
