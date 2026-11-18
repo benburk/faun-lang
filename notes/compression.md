@@ -697,6 +697,12 @@ gathered and counted, takes 757 million against 688 and 60 MB against 40.
 A list of a small tag would hold each tag and its fields in its own
 buffer, as a list of words does, rather than a cell an element.
 
+Fixed in memory, and a fifth of the instructions: a list built as the
+program runs packs each element's tag and small fields by their bits
+([memory](machine/memory.md#history)). The probe now takes 743 million
+instructions and 40 MB, against the workaround's 689 million and 40 MB,
+where it took 758 million and 60 MB.
+
 ### A table's elements carry no bound, and a power is a loop
 
 DEFLATE's length and distance tables as RFC 1951 gives them, a base and

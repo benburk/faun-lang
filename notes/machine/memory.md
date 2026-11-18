@@ -218,6 +218,14 @@ updated, which a loop that binds a name again does.
 
 ## History
 
+- **2026-11-18:** an element of a list built as the program runs lays
+  its small numbers out packed by their bits where that takes fewer bytes
+  than a byte or more each, so a block's symbols, `[Literal(U8),
+  Match(Nat, Nat)]`, lie four bytes apart rather than six; a cell or a
+  table laid out in the image is read as before. Giving up and claiming
+  what a run of elements holds is one routine each, `seq.give` and
+  `seq.claim`, an immediate natural costing one test.
+
 - **2026-11-17:** a list made only to be walked once, or only to be
   compared, is not built: a range folded is one loop and a literal
   compared is read where its elements were made, so neither reserves nor
