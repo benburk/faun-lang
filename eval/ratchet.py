@@ -179,6 +179,7 @@ def export(commit, dest):
         ["git", "archive", commit], cwd=REPO, stdout=subprocess.PIPE
     )
     subprocess.run(["tar", "-x", "-C", str(dest)], stdin=archive.stdout, check=True)
+    archive.stdout.close()
     if archive.wait():
         sys.exit(f"git archive failed for {commit}")
 
@@ -216,31 +217,83 @@ class Side:
             self.path = CACHE / "trees" / self.commit
             if not self.path.exists():
                 export(self.commit, self.path)
-            # Exports share one target directory so dependencies build once.
-            self.target = CACHE / "target"
-            self.binary = CACHE / "bin" / self.commit / "faun"
+            self.target = None
+            self.binary = CACHE / "compilers" / self.commit / "faun"
+        self.source = source_of(self.commit) if not self.dirty else None
 
     def build(self):
-        cached = self.target == CACHE / "target"
-        if cached and self.binary.exists():
+        """Build the compiler: a checkout in its own target directory, and a
+        revision once, from nothing, in a target directory of its own.
+
+        `git archive` gives every file its commit's time, and cargo judges a
+        build fresh by its sources being older than it, so exports sharing a
+        target directory took each other's builds: a revision could get a
+        compiler built partly from another. A build of its own costs the
+        dependencies once per revision, and leaves nothing another
+        evaluator running beside this one could be reading."""
+        if self.target:
+            cargo_build(self.path, self.target)
             return
-        subprocess.run(
-            ["cargo", "build", "--locked", "--release", "--quiet", "-p", "faun"],
-            cwd=self.path,
-            env=os.environ | {"CARGO_TARGET_DIR": str(self.target)},
-            check=True,
-        )
-        if cached:
+        if self.binary.exists():
+            return
+        builds = CACHE / "builds"
+        builds.mkdir(parents=True, exist_ok=True)
+        target = Path(tempfile.mkdtemp(prefix=f"{self.commit[:12]}-", dir=builds))
+        try:
+            cargo_build(self.path, target)
             self.binary.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(self.target / "release/faun", self.binary)
+            # Whole or not at all, should another evaluator build it too.
+            staged = target / "faun"
+            shutil.copy2(target / "release/faun", staged)
+            os.replace(staged, self.binary)
+        finally:
+            shutil.rmtree(target, ignore_errors=True)
 
     def describe(self):
         return {
             "spec": self.spec,
             "commit": self.commit,
             "dirty": self.dirty,
+            "source": self.source,
             "compiler_sha256": sha(self.binary),
         }
+
+
+def cargo_build(path, target):
+    subprocess.run(
+        ["cargo", "build", "--locked", "--release", "--quiet", "-p", "faun"],
+        cwd=path,
+        env=os.environ | {"CARGO_TARGET_DIR": str(target)},
+        check=True,
+    )
+
+
+# What the compiler is built from. Not every change here changes the binary,
+# a test or a comment, but a change to the binary is a change here.
+SOURCES = ("crates", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml")
+
+
+def source_of(commit):
+    """A hash of what a commit builds its compiler from."""
+    trees = [
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{commit}:{path}"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        for path in SOURCES
+    ]
+    return hashlib.sha256(" ".join(trees).encode()).hexdigest()
+
+
+def same_compiler(incumbent, candidate):
+    """Whether two sides' compilers are one file though built from different
+    sources: a build taken for another's, unless the change was one the
+    binary does not hold, which then measures as no change."""
+    built = incumbent["source"] and candidate["source"]
+    differ = built and incumbent["source"] != candidate["source"]
+    return bool(differ) and incumbent["compiler_sha256"] == candidate["compiler_sha256"]
 
 
 def protected_changes(candidate, evaluator):
@@ -913,6 +966,8 @@ def evaluate(args):
             caveats.append("uncommitted changes in the candidate")
         if args.only:
             caveats.append(f"only the workloads holding `{args.only}`")
+        if same_compiler(report["incumbent"], report["candidate"]):
+            caveats.append("the same compiler built from different sources")
     report |= {
         "seconds": round(time.time() - started, 1),
         "timed_cpu": args.time,
