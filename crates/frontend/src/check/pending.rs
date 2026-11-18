@@ -135,6 +135,10 @@ impl Checker<'_> {
             owing: None,
             numeral: None,
             places,
+            shown: self
+                .sites
+                .is_shown(site)
+                .then_some(self.pending_methods.len()),
         });
         result
     }
@@ -186,6 +190,9 @@ impl Checker<'_> {
                 owing: self.obliging,
                 numeral: bound.numeral,
                 places: None,
+                shown: self
+                    .obliging
+                    .and_then(|index| self.pending_methods[index].shown),
             });
         }
         Ok(())
@@ -672,6 +679,7 @@ impl Checker<'_> {
             owing: None,
             numeral: Some(asked),
             places: None,
+            shown: None,
         });
         if numeral.negative {
             let neg = self.method_symbol(numeral.module, numeral.span, "neg")?;
@@ -689,6 +697,7 @@ impl Checker<'_> {
                 owing: None,
                 numeral: Some(Asked::Negation),
                 places: None,
+                shown: None,
             });
         }
         if let Some(site) = numeral.site {
@@ -1104,6 +1113,13 @@ impl Checker<'_> {
                         self.pending_methods[index].resolved = true;
                         progress = true;
                     }
+                    // A failed expectation's side whose type has no
+                    // `to_str` is left unshown, its type named instead.
+                    [] if let Some(root) = pending.shown => {
+                        self.unshow(root, &pending);
+                        self.pending_methods[index].resolved = true;
+                        progress = true;
+                    }
                     [] => {
                         let name = self.symbols.text(pending.name);
                         let refused = match self.infer.resolve(&pending.receiver) {
@@ -1153,12 +1169,31 @@ impl Checker<'_> {
                         Ty::Var(variable) if generic.contains(&variable))
                 });
                 if final_pass && let Some(&index) = waiting {
-                    return Err(self.undecided(&self.pending_methods[index]));
+                    let pending = self.pending_methods[index].clone();
+                    let Some(root) = pending.shown else {
+                        return Err(self.undecided(&pending));
+                    };
+                    self.unshow(root, &pending);
+                    self.pending_methods[index].resolved = true;
+                    next.retain(|&waiting| waiting != index);
+                    unresolved = next;
+                    continue;
                 }
                 return Ok(());
             }
             unresolved = next;
         }
+    }
+
+    /// Leave the failed expectation's side `root` shows unshown, as
+    /// `pending`, which it is or owes, cannot be met: the receiver's type
+    /// is named in its place.
+    fn unshow(&mut self, root: usize, pending: &PendingMethod) {
+        let site = self.pending_methods[root]
+            .site
+            .expect("a shown side is a written call");
+        let receiver = show(&self.infer.resolve(&pending.receiver), self.symbols);
+        self.checked.unshown.entry(site).or_insert(receiver);
     }
 
     /// How a declared type asks for `member`, where it is one the compiler
@@ -1519,6 +1554,7 @@ impl Checker<'_> {
                 owing: None,
                 numeral: None,
                 places: None,
+                shown: pending.shown,
             });
         }
         if let Some(site) = pending.site {

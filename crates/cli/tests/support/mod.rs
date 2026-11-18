@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
@@ -157,51 +158,137 @@ pub(crate) fn run_handling(entry: &std::path::Path) -> (u32, Handled) {
     (status, handled)
 }
 
+/// The steps of the reference interpreter a file's expectations share.
+const EXPECTATION_FUEL: u64 = 100_000_000;
+
 /// Build the package at `entry` as `faun test` does and run it: the lines,
 /// `path:line`, of the expectations that do not hold, and how many there are.
+/// What each comparison among them saw is written to standard error, which
+/// a failing test shows.
 pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
-    let tests = faun_frontend::lower_tests_to_barb(entry, &X86_64Linux)
-        .unwrap_or_else(|error| panic!("{}", error.message));
-    let count = tests.expectations.len();
-    let (status, written) = run_barb(tests.barb, &[], None);
-    assert_eq!(status, 0, "{written}");
-    let failed = written
-        .split_whitespace()
-        .map(|number| {
-            let location = &tests.expectations[number.parse::<usize>().unwrap() - 1];
-            format!(
-                "{}:{}",
-                location.path.file_name().unwrap().to_string_lossy(),
-                location.line
-            )
-        })
-        .collect();
-    (failed, count)
+    told(entry, false, EXPECTATION_FUEL)
 }
 
 /// As [`test_file`], with every float operation answering by its body
 /// rather than by the host's instruction: the standard's own arithmetic,
 /// asked the same questions.
 pub(crate) fn test_file_by_definitions(entry: &std::path::Path) -> (Vec<String>, usize) {
-    let mut tests = faun_frontend::lower_tests_to_barb(entry, &X86_64Linux)
-        .unwrap_or_else(|error| panic!("{}", error.message));
-    tests.barb.walk_floats();
-    let count = tests.expectations.len();
     // Software arithmetic takes the interpreter many steps an operation.
-    let (status, written) = run_barb_fueled(tests.barb, &[], None, 20_000_000_000);
-    assert_eq!(status, 0, "{written}");
-    let failed = written
-        .split_whitespace()
-        .map(|number| {
-            let location = &tests.expectations[number.parse::<usize>().unwrap() - 1];
-            format!(
-                "{}:{}",
-                location.path.file_name().unwrap().to_string_lossy(),
-                location.line
-            )
-        })
-        .collect();
-    (failed, count)
+    told(entry, true, 20_000_000_000)
+}
+
+/// Each expectation that does not hold, as [`test_file`] tells it: where
+/// it was written, and what a comparison saw.
+fn told(entry: &std::path::Path, by_definitions: bool, fuel: u64) -> (Vec<String>, usize) {
+    let (failed, count) =
+        ask(entry, by_definitions, fuel).unwrap_or_else(|error| panic!("{error}"));
+    for (_, said) in &failed {
+        eprintln!("{said}");
+    }
+    (failed.into_iter().map(|(at, _)| at).collect(), count)
+}
+
+/// As [`test_file`], given `fuel` steps of the reference interpreter for
+/// all of them: what each expectation that does not hold says, where it
+/// was written and what a comparison saw, and how many there are; or, where
+/// they run out of steps, which one did.
+pub(crate) fn test_file_within(
+    entry: &std::path::Path,
+    fuel: u64,
+) -> Result<(Vec<String>, usize), String> {
+    let (failed, count) = ask(entry, false, fuel)?;
+    Ok((failed.into_iter().map(|(_, said)| said).collect(), count))
+}
+
+/// `path:line` of where an expectation was written.
+fn written(location: &faun_frontend::diagnostic::Location) -> String {
+    format!(
+        "{}:{}",
+        location.path.file_name().unwrap().to_string_lossy(),
+        location.line
+    )
+}
+
+/// Ask the expectations of the package at `entry` on the reference
+/// interpreter, given `fuel` steps among them; `by_definitions` takes
+/// every float operation by its body. Each that does not hold, where it
+/// was written and what it says, and how many there are; or, where they do
+/// not finish within `fuel`, which expectation ran out and what those
+/// before it took.
+fn ask(
+    entry: &std::path::Path,
+    by_definitions: bool,
+    fuel: u64,
+) -> Result<(Vec<(String, String)>, usize), String> {
+    let mut tests = faun_frontend::lower_tests_to_barb_using(
+        entry,
+        &X86_64Linux,
+        &faun_frontend::packages::Packages::default(),
+        faun_frontend::Reporting::Each,
+    )
+    .unwrap_or_else(|error| panic!("{}", error.message));
+    if by_definitions {
+        tests.barb.walk_floats();
+    }
+    let count = tests.expectations.len();
+    let mut barb = std::mem::take(&mut tests.barb);
+    let mut streams = Streams::default();
+    let ran = try_run_on(&mut barb, &mut streams, fuel);
+    let answered = tests.answered(&streams.output)?;
+    match ran {
+        Ok(status) => assert_eq!(status, 0),
+        Err(Error::FuelExhausted) => {
+            return Err(ran_out(&tests.expectations, &streams.spent(fuel), fuel));
+        }
+        Err(error) => panic!("{error:?}"),
+    }
+    let failed = answered.failed.iter().map(said).collect();
+    Ok((failed, count))
+}
+
+/// Where `failure` was written, and what it says: that, and what a
+/// comparison saw.
+fn said(failure: &faun_frontend::Failure<'_>) -> (String, String) {
+    let at = written(failure.location);
+    let saw = match &failure.sides {
+        Some((faun_frontend::Side::Shown(left), faun_frontend::Side::Shown(right))) => {
+            format!("\n  left:  {left}\n  right: {right}")
+        }
+        Some((faun_frontend::Side::Unshown(ty), _) | (_, faun_frontend::Side::Unshown(ty))) => {
+            format!("\n  neither side is shown: `{ty}` has no `to_str`")
+        }
+        None => String::new(),
+    };
+    let said = format!("{at}: this expectation does not hold{saw}");
+    (at, said)
+}
+
+/// Which expectation ran out of `fuel`, the steps they share, and what
+/// each before it took: `spent` holds the latter, in order.
+fn ran_out(
+    expectations: &[faun_frontend::diagnostic::Location],
+    spent: &[u64],
+    fuel: u64,
+) -> String {
+    let Some(location) = expectations.get(spent.len()) else {
+        return format!("the expectations ran out of their {fuel} steps after the last one");
+    };
+    let mut said = format!(
+        "{}: this expectation ran out of fuel, the {fuel} steps of the reference \
+         interpreter a file's expectations share",
+        written(location)
+    );
+    let most = spent.iter().enumerate().max_by_key(|&(_, &steps)| steps);
+    if let Some((at, steps)) = most {
+        let before: u64 = spent.iter().sum();
+        let _ = write!(
+            said,
+            "; the {} before it took {before}, the most {} with {steps}",
+            spent.len(),
+            written(&expectations[at])
+        );
+    }
+    said
 }
 
 fn run_barb(barb: faun_core::barb::Program, input: &[u8], errno: Option<u64>) -> (u32, String) {
@@ -228,7 +315,9 @@ fn run_barb_fueled(
 
 /// Run `barb` against `streams`: the status it exits with.
 fn run_on(barb: &mut faun_core::barb::Program, streams: &mut Streams, fuel: u64) -> u32 {
-    run_spending(barb, streams, fuel).0
+    try_run_spending(barb, streams, fuel)
+        .unwrap_or_else(|error| panic!("{error:?}"))
+        .0
 }
 
 /// The same, and how much of `fuel` it spent.
@@ -237,6 +326,25 @@ fn run_spending(
     streams: &mut Streams,
     fuel: u64,
 ) -> (u32, u64) {
+    try_run_spending(barb, streams, fuel).unwrap_or_else(|error| panic!("{error:?}"))
+}
+
+/// The status, or why the interpreter stopped short.
+fn try_run_on(
+    barb: &mut faun_core::barb::Program,
+    streams: &mut Streams,
+    fuel: u64,
+) -> Result<u32, Error> {
+    try_run_spending(barb, streams, fuel).map(|(status, _)| status)
+}
+
+/// The status and how much of `fuel` it spent, or why the interpreter
+/// stopped short.
+fn try_run_spending(
+    barb: &mut faun_core::barb::Program,
+    streams: &mut Streams,
+    fuel: u64,
+) -> Result<(u32, u64), Error> {
     faun_core::barb::optimize(barb);
     let machine = faun_core::lower_to_machine_ir(barb, &X86_64Linux.routines())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -255,13 +363,12 @@ fn run_spending(
             ..evaluate::Config::default()
         },
         streams,
-    )
-    .unwrap_or_else(|error| panic!("{error:?}"));
+    )?;
     let halted = evaluation.halted().expect("a program that exits");
-    (
+    Ok((
         u32::try_from(&halted[0]).expect("a status"),
         fuel - evaluation.fuel_remaining,
-    )
+    ))
 }
 
 impl Drop for Package {
@@ -286,6 +393,9 @@ struct Streams {
     /// How many times a descriptor past the standard three was read,
     /// written or closed when it was not open.
     misused: usize,
+    /// The fuel left as each record separator, `0x1e`, was written to
+    /// standard output: as each expectation finished, in a test build.
+    records: Vec<u64>,
 }
 
 struct Opened {
@@ -301,6 +411,20 @@ const O_TRUNC: u64 = 0o1000;
 const O_APPEND: u64 = 0o2000;
 
 impl Streams {
+    /// What each expectation took of `fuel`, from the fuel left as each
+    /// record ended.
+    fn spent(&self, fuel: u64) -> Vec<u64> {
+        let mut left = fuel;
+        self.records
+            .iter()
+            .map(|&now| {
+                let took = left - now;
+                left = now;
+                took
+            })
+            .collect()
+    }
+
     fn opened(&mut self, fd: u64) -> Option<&mut Opened> {
         let at = usize::try_from(fd.checked_sub(3)?).ok()?;
         let found = self.open.get_mut(at)?.as_mut();
@@ -401,6 +525,11 @@ impl Host for Streams {
             // All of it, every time: how many.
             "write_fd!" => {
                 let bytes = memory.read(word(&args[1]), count(&args[2]))?.to_vec();
+                if word(&args[0]) == 1 {
+                    let ended = bytes.split(|&byte| byte == 0x1e).skip(1).count();
+                    let fuel = memory.fuel_remaining();
+                    self.records.extend(std::iter::repeat_n(fuel, ended));
+                }
                 self.put(word(&args[0]), &bytes)
                     .map(|went| u64::try_from(went).expect("a count"))
             }

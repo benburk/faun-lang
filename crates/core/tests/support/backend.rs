@@ -1835,7 +1835,8 @@ fn the_medicine_queue_orders_estimated_costs() {
 }
 
 /// A package's expectations, built as `faun test` builds them, say which
-/// do not hold, whatever the target: here the third.
+/// do not hold, whatever the target: here the third, a comparison, with
+/// both its sides.
 #[test]
 fn it_runs_a_packages_expectations() {
     let text = "bucket : Nat -> Nat
@@ -1856,7 +1857,10 @@ fn it_runs_a_packages_expectations() {
     let program = TARGET
         .prepare(&program)
         .expect("a program this machine holds");
-    assert_eq!(execute(&program), (0, "3 ".to_owned()));
+    assert_eq!(
+        execute(&program),
+        (0, "3-\u{1f}[1, 2, 3]\u{1f}[3, 2, 1]\u{1e}".to_owned())
+    );
 }
 
 /// Generated builder lambdas share a span but keep their own identities,

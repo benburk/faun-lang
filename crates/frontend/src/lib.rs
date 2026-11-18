@@ -77,6 +77,7 @@ mod test_uses;
 pub mod typed;
 
 pub use diagnostic::Diagnostic;
+pub use expectations::Reporting;
 pub use modules::ModuleId;
 pub use parse::{ParseError, parse, parse_in};
 pub use source::{Source, SourceId, Sources};
@@ -162,16 +163,97 @@ pub fn lower_to_barb_using(
 /// A package's expectations, built to be run.
 #[derive(Debug)]
 pub struct Tests {
-    /// An application whose `main!` prints the number of each expectation
-    /// that does not hold, each followed by a space, and exits with status
-    /// nought.
+    /// An application whose `main!` prints a record of each expectation
+    /// it asks, as its [`Reporting`] says, and exits with status nought:
+    /// [`Self::answered`] reads what it prints.
     pub barb: barb::Program,
     /// Where each expectation was written, the first numbered one.
     pub expectations: Vec<diagnostic::Location>,
 }
 
+/// What the expectations' records say: how many were asked, and each that
+/// does not hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Answered<'a> {
+    /// How many records were whole: under [`Reporting::Each`], how many
+    /// expectations were asked to the end, in order.
+    pub asked: usize,
+    pub failed: Vec<Failure<'a>>,
+}
+
+/// An expectation that does not hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Failure<'a> {
+    pub location: &'a diagnostic::Location,
+    /// Both sides, where its last line is a comparison.
+    pub sides: Option<(Side, Side)>,
+}
+
+/// A side of a comparison that does not hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// Written by its `to_str`.
+    Shown(String),
+    /// Of the named type, which has no `to_str` (or holds one that has
+    /// none).
+    Unshown(String),
+}
+
+impl Tests {
+    /// Read what the expectations printed: each whole record, and where
+    /// the expectation it numbers was written.
+    ///
+    /// # Errors
+    /// A record that does not number an expectation, or does not say
+    /// whether it held.
+    pub fn answered(&self, printed: &[u8]) -> Result<Answered<'_>, String> {
+        let mut answered = Answered {
+            asked: 0,
+            failed: Vec::new(),
+        };
+        let mut records: Vec<&[u8]> = printed
+            .split(|&byte| byte == expectations::RECORD)
+            .collect();
+        // What follows the last separator was cut short.
+        records.pop();
+        for record in records {
+            let text = String::from_utf8_lossy(record);
+            let mut units = text.split(char::from(expectations::UNIT));
+            let opening = units.next().unwrap_or_default();
+            let refused = || format!("the expectations answered `{}`", text.escape_debug());
+            let (number, held) = match opening.strip_suffix('+') {
+                Some(number) => (number, true),
+                None => (opening.strip_suffix('-').ok_or_else(refused)?, false),
+            };
+            let location = number
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| number.checked_sub(1))
+                .and_then(|index| self.expectations.get(index))
+                .ok_or_else(refused)?;
+            answered.asked += 1;
+            if held {
+                continue;
+            }
+            let side = |unit: &str| {
+                unit.strip_prefix('\0').map_or_else(
+                    || Side::Shown(unit.to_owned()),
+                    |named| Side::Unshown(named.to_owned()),
+                )
+            };
+            let sides = match (units.next(), units.next()) {
+                (Some(left), Some(right)) => Some((side(left), side(right))),
+                _ => None,
+            };
+            answered.failed.push(Failure { location, sides });
+        }
+        Ok(answered)
+    }
+}
+
 /// Check the Faun package at `source` as [`lower_to_barb`] does, and lower it
-/// to Barb whose entry asks every `expect` in the package.
+/// to Barb whose entry asks every `expect` in the package, printing a
+/// record only of each that does not hold.
 ///
 /// The entry takes the place of the package's `main!`, if it has one, which
 /// is checked all the same.
@@ -179,11 +261,11 @@ pub struct Tests {
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
 pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, Diagnostic> {
-    lower_tests_to_barb_using(source, target, &Packages::default())
+    lower_tests_to_barb_using(source, target, &Packages::default(), Reporting::Failures)
 }
 
 /// [`lower_tests_to_barb`], reading each URL dependency from where
-/// `packages` says.
+/// `packages` says, and printing the records `reporting` asks for.
 ///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
@@ -191,6 +273,7 @@ pub fn lower_tests_to_barb_using(
     source: &Path,
     target: &dyn Target,
     packages: &Packages,
+    reporting: Reporting,
 ) -> Result<Tests, Diagnostic> {
     let mut loaded = load(source, target, packages)?;
     let application = Main::find_in(&loaded)?;
@@ -199,7 +282,7 @@ pub fn lower_tests_to_barb_using(
     let (program, mut cx) = resolve(loaded)?;
     test_uses::check(&program, &cx, &facts)?;
     let program = host::sign_main(program, &cx, application.as_ref());
-    let (program, expectations) = expectations::enter(program, &mut cx, &main);
+    let (program, expectations) = expectations::enter(program, &mut cx, &main, reporting);
     let Package::Application(barb) = lower(program, cx, Some(&main), target)? else {
         unreachable!("the expectations' runner is an application")
     };

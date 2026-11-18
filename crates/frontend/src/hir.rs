@@ -150,6 +150,10 @@ pub(crate) struct Sites {
     /// The `to_str` calls splices were written as. Each is a splice's text:
     /// the value itself where specialization finds it a `Str`.
     spliced: HashSet<SiteId>,
+    /// The `to_str` calls a failed expectation shows its sides with. Where
+    /// a side's type has no `to_str`, that type's name, after a nought
+    /// byte, stands in its place rather than the program being refused.
+    shown: HashSet<SiteId>,
 }
 
 impl Sites {
@@ -167,6 +171,17 @@ impl Sites {
     /// Whether `site` is a written splice's text.
     pub(crate) fn is_spliced(&self, site: SiteId) -> bool {
         self.spliced.contains(&site)
+    }
+
+    /// Mark `site`, a `to_str` call, as one showing a failed expectation's
+    /// side.
+    pub(crate) fn show(&mut self, site: SiteId) {
+        self.shown.insert(site);
+    }
+
+    /// Whether `site` shows a failed expectation's side.
+    pub(crate) fn is_shown(&self, site: SiteId) -> bool {
+        self.shown.contains(&site)
     }
 
     pub(crate) const fn expr(&mut self, span: Span, kind: ExprKind) -> Expr {

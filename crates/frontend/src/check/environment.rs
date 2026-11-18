@@ -21,6 +21,7 @@ impl<'a> Checker<'a> {
         program: &'a n::Program,
         symbols: &'a Symbols,
         prelude: &'a PreludeIds,
+        sites: &'a h::Sites,
     ) -> Result<Self, Refusal> {
         let mut checker = Self {
             symbols,
@@ -33,6 +34,7 @@ impl<'a> Checker<'a> {
             fields: HashMap::new(),
             data: &program.data,
             visible_methods: &program.visible_methods,
+            sites,
             pending_methods: Vec::new(),
             obliging: None,
             pending_numerals: Vec::new(),

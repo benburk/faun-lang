@@ -252,7 +252,8 @@ fn a_package_without_expectations_has_nothing_to_ask() {
 }
 
 /// `faun test` tells an expectation that does not hold as it tells any
-/// diagnostic, at the line it was written, and fails with how many did.
+/// diagnostic, at the line it was written, with both sides where it is a
+/// comparison, and fails with how many did.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[test]
 fn a_failing_expectation_is_told_as_a_diagnostic() {
@@ -275,12 +276,97 @@ fn a_failing_expectation_is_told_as_a_diagnostic() {
          --> {}:5:1\n  \
          |\n\
          5 | expect 1 + 1 == 3\n  \
-         | ^^^^^^^^^^^^^^^^^\n\
+         | ^^^^^^^^^^^^^^^^^\n  \
+         |\n  \
+         = note: left:  2\n  \
+         = note: right: 3\n\
          \n\
          error: 1 of 2 expectations does not hold\n",
         package.entry().display()
     );
     assert_eq!(told, expected);
+}
+
+/// A failed expectation whose last line is a comparison says what each
+/// side was, by its `to_str`, as Rust's `assert_eq!` does; a side whose
+/// type has no `to_str`, or holds one that has none, is named by that type
+/// rather than the build being refused. Any other expectation says only
+/// that it does not hold.
+#[test]
+fn a_failed_comparison_says_both_sides() {
+    let package = Package::new(
+        "failed-comparison",
+        "Level : Nat.(
+           of_nat : Nat -> Level
+           of_nat(n) -> Level(n)
+
+           equals : (Level, Level) -> Bool
+         )
+
+         double : Nat -> Nat
+         double(n) -> n * 2
+
+         expect double(2) == 4
+         expect double(3) == 7
+         expect [\"a\", \"b\"] != [\"a\", \"b\"]
+         expect (
+           tripled = double(3) + 3
+           tripled < 9
+         )
+         expect U8.of_nat(250) + 10 >= 255
+         expect Level.of_nat(1) == Level.of_nat(2)
+         expect [Level.of_nat(1)] == []
+         expect double(1) == 2 & double(2) == 5",
+    );
+    let told = support::test_file_within(&package.entry(), 100_000_000).unwrap();
+    assert_eq!(
+        told,
+        (
+            vec![
+                "main.fn:14: this expectation does not hold\n  left:  6\n  right: 7".to_owned(),
+                "main.fn:15: this expectation does not hold\n  left:  [\"a\", \"b\"]\n  right: [\"a\", \"b\"]".to_owned(),
+                "main.fn:16: this expectation does not hold\n  left:  9\n  right: 9".to_owned(),
+                "main.fn:20: this expectation does not hold\n  left:  4\n  right: 255".to_owned(),
+                "main.fn:21: this expectation does not hold\n  neither side is shown: `Level` has no `to_str`".to_owned(),
+                "main.fn:22: this expectation does not hold\n  neither side is shown: `Level` has no `to_str`".to_owned(),
+                "main.fn:23: this expectation does not hold".to_owned(),
+            ],
+            8
+        )
+    );
+}
+
+/// Expectations asked on the reference interpreter share a budget of its
+/// steps; the one that runs out of them is named, with what those before
+/// it took, the most of them named too.
+#[test]
+fn the_expectation_that_runs_out_of_steps_is_named() {
+    let package = Package::new(
+        "out-of-steps",
+        "count : (Nat, Nat) -> Nat
+         count(0, total) -> total
+         count(n, total) -> count(n - 1, total + 1)
+
+         expect count(10, 0) == 10
+         expect count(1000, 0) == 1000
+         expect count(100000000, 0) == 100000000
+         expect count(1, 0) == 1",
+    );
+    let refused = support::test_file_within(&package.entry(), 1_000_000).unwrap_err();
+    let (named, before) = refused.split_once("; ").expect("what those before it took");
+    assert_eq!(
+        named,
+        "main.fn:9: this expectation ran out of fuel, the 1000000 steps of the reference \
+         interpreter a file's expectations share"
+    );
+    let took = before
+        .strip_prefix("the 2 before it took ")
+        .expect("how many were asked before it");
+    let (total, most) = took
+        .split_once(", the most main.fn:8 with ")
+        .expect("the most");
+    let (total, most): (u64, u64) = (total.parse().unwrap(), most.parse().unwrap());
+    assert!(most < total && total < 1_000_000, "{refused}");
 }
 
 /// The standard library is a package like any other, and holds what it
