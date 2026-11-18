@@ -185,7 +185,6 @@ impl<const N: usize> From<[Helper; N]> for Needs {
 pub(super) enum Inline {
     Add,
     Monus,
-    Compare,
 }
 
 /// Claims counted where they are taken and given up, as
@@ -336,14 +335,10 @@ impl Library {
 
     /// `a op c` for two naturals, with the case of two immediates whose
     /// answer is one written here and anything else left to the helper:
-    /// a sum below half a word, a monus, or an order.
+    /// a sum below half a word, or a monus.
     ///
     /// The helper answers the same where both are immediates; this is only
     /// the call it saves, which for a count in a loop is most of its work.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "each operation inlines its own immediate case beside the shared fallback"
-    )]
     pub(super) fn inline(
         &self,
         b: &mut Builder<'_>,
@@ -354,15 +349,11 @@ impl Library {
         let helper = match op {
             Inline::Add => self.require(Helper::Add),
             Inline::Monus => self.require(Helper::Sub),
-            Inline::Compare => self.require(Helper::Compare),
         };
         if !self.inline_small {
             return b.call_one(helper, &[a, c]);
         }
-        let result = match op {
-            Inline::Add | Inline::Monus => A,
-            Inline::Compare => W,
-        };
+        let result = A;
         let objects = either_object(b, a, c);
         let called = |b: &mut Builder<'_>| {
             let out = b.call_one(helper, &[a, c]);
@@ -393,18 +384,50 @@ impl Library {
                     let held = b.convert(A, rest);
                     b.yield_(&[held]);
                 }
-                Inline::Compare => {
-                    let less = lt(b, x, y);
-                    let same = eq(b, x, y);
-                    let one = number(b, 1);
-                    let apart = sub(b, one, same);
-                    let up = add(b, one, apart);
-                    let order = sub(b, up, less);
-                    let order = sub(b, order, less);
-                    b.yield_(&[order]);
-                }
             }
         })[0]
+    }
+
+    /// Whether `a` is equal to or less than `c`, as `relation` asks, for two
+    /// naturals: nought or one. Two immediates are ordered as the words
+    /// holding them are, so where both are, the question is one comparison
+    /// of those words; anything else asks the helper for the order and
+    /// compares that with the one wanted.
+    ///
+    /// Asking the immediates the question itself, rather than working out
+    /// their order as a number and asking that, leaves a target nothing to
+    /// branch on but the comparison.
+    pub(super) fn compare(
+        &self,
+        b: &mut Builder<'_>,
+        relation: Relation,
+        a: ValueId,
+        c: ValueId,
+    ) -> ValueId {
+        let helper = self.require(Helper::Compare);
+        let ordered = |b: &mut Builder<'_>| {
+            let order = b.call_one(helper, &[a, c]);
+            let wanted = b.constant(W, u64::from(relation == Relation::Equal));
+            b.compare(Relation::Equal, order, wanted)
+        };
+        if !self.inline_small {
+            return ordered(b);
+        }
+        let objects = either_object(b, a, c);
+        b.if_(
+            objects,
+            &[W],
+            |b| {
+                let answer = ordered(b);
+                b.yield_(&[answer]);
+            },
+            |b| {
+                let x = b.convert(W, a);
+                let y = b.convert(W, c);
+                let answer = b.compare(relation, x, y);
+                b.yield_(&[answer]);
+            },
+        )[0]
     }
 
     pub(super) const fn get(&self, helper: Helper) -> Option<FunctionId> {

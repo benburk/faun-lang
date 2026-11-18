@@ -30,7 +30,7 @@ use super::region::{self, Chunks, Plan};
 use super::sequence::{self, Growth, Library as SequenceLibrary};
 use super::word_comparisons::{Word, word_values};
 use super::{
-    Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, Relation, ShapeId,
+    Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, ShapeId,
     Terminator, ValueId, Width, validate,
 };
 
@@ -1391,9 +1391,7 @@ impl Pass<'_> {
                 if let Some(&limit) = self.checked_words.limits.get(&results[0]) {
                     natural::below_power_of_two(b, v(left), limit, self.word_bits())
                 } else {
-                    let ordering = self.library.inline(b, Inline::Compare, v(left), v(right));
-                    let wanted = b.constant(Class::Word, u64::from(relation == Relation::Equal));
-                    b.compare(Relation::Equal, ordering, wanted)
+                    self.library.compare(b, relation, v(left), v(right))
                 }
             }
             Op::Compare {
