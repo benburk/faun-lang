@@ -2,7 +2,8 @@
 
 This note owns what running a Faun program means: strict evaluation in the
 order written, purity, the rule that pure work nothing needs may be left
-out, termination not being checked, and iteration as tail calls.
+out, a constant worked out once, termination not being checked, and
+iteration as tail calls.
 
 ## Strict evaluation
 
@@ -78,6 +79,39 @@ So does a test of whether it is empty, a `filter` or a `map` read for its
 first element, and a search over it that stops at what it accepts, as
 `find`, `any` and `all` do: `!models(formula).is_empty()` and
 `models(formula).filter(fits).first()` stop at the first model they need.
+
+## A constant is worked out once
+
+A definition taking nothing is a constant, and its body is worked out at
+most once a run, however often and wherever it is named. A table built by
+a walk may be named inside the walk reading it:
+
+```ruby
+squares : List(Nat)
+squares = List.range(1000).map(|n| n * n)
+
+total : (List(Nat), Nat) -> Nat
+total([], sum) -> sum
+total([n, *rest], sum) -> total(rest, sum + squares.get(n).ok_or(0))
+
+expect total([1, 2, 3], 0) == 14
+```
+
+The compiler settles each constant that does work in one of three ways
+([Barb](machine/barb.md)'s constants stage):
+
+- One it can work out while compiling, within the budget constant folding
+  has, is a known value, laid out in the image as a literal is.
+- One named at one place that itself runs at most once, in no walk, is
+  worked out there, where it may be fused with what reads it.
+- Any other is worked out once, by the program's entry before the work
+  that reads it, and handed to every definition reaching it as one more
+  parameter.
+
+A constant is pure, so all that can be seen of where it is worked out is
+time, and whether a run that never needs it can hang on it: one only some
+paths read may be worked out on a path that does not, and one that never
+comes back then hangs the program there.
 
 ## Termination is not checked
 
@@ -180,6 +214,65 @@ whole, `order = order.append(node)`, and effects need `Host` threaded to
 them. In-place update is the compiler's to find: a list nothing else holds
 is written where it lies.
 
+### Why work a constant out once?
+
+Because a program reads as though a constant were a value, and the
+compiler had made it a call. Before, a definition taking nothing was
+worked out at every call, and inlining copied its body into the walks that
+named it: CRC-32's 256-entry table named inside the byte walk was built
+once a byte, 6.3 seconds for 4 MB, 10 through a recursive walk, against
+12 ms with the table bound once and passed down by hand. The workaround
+was invisible from the source, so nothing told a programmer to reach for
+it. Haskell's top-level values and OCaml's are worked out once as well.
+
+### Why before what reads it, rather than on first use?
+
+Working a constant out on first use needs a place written as the program
+runs, a test at every read of whether it is filled yet, and that place on
+every target: a global in wasm32's linear memory, an address the 6502's
+image sets aside, each with its own way to say it is not yet filled. That
+is the one write to shared state a pure language would have, made below
+the tiers that reason about purity.
+
+Handing a constant down needs nothing from the tiers below: it is an
+ordinary value bound in the entry and passed as a parameter, which a
+definition passing it on as it came borrows, so a round of a walk reads
+it for the cost of a register. Cleanup moves the entry's binding into the
+one arm that reads it where only one does, so a run taking another path
+does not pay for it.
+
+The cost is a constant some paths read and others do not, where no single
+arm holds them all: it is worked out on every run that reaches the entry,
+needed or not, as a strict language's top-level bindings are. A huge one
+read only by a rare path is built anyway, and one that never comes back
+hangs the program before the work that would have read it. The recourse is
+to make it a definition taking what it depends on, which is worked out
+where it is called, every time.
+
+### Why not hold a constant in a static place for the whole run?
+
+A value laid out in the image before the run has a count marking it
+static, never written and never freed
+([memory](machine/memory.md#what-is-counted)). A constant worked out as
+the program runs would need a third kind: built and counted at first, and
+then never freed. Handed down as a parameter it needs none. Its count
+means what any count means: a write in place copies it while anything else
+holds it, and it is freed once nothing still running can read it, so a
+table needed only by the first half of a program is not held through the
+second.
+
+The cost is a parameter for every definition between the entry and the
+reads, one more value each call carries; on the 6502, whose calls carry
+four, it can be what makes a call spill.
+
+### Why leave a constant read once where it is read?
+
+So fusion still sees it. `total = List.range(n).map(f).sum()` named once is
+fused with its reader into one walk that builds no list; worked out ahead
+and handed down, the list would be built in full first. A constant named
+at one place, in a definition made at most once, is worked out at most
+once a run wherever it stands, so leaving it there costs nothing.
+
 ### Why may unneeded work be left out?
 
 Because the optimizer needs it, and nothing more. Fusion skips what a
@@ -251,6 +344,11 @@ language where the question could not be observed.
 - **2026-11-03:** the skip was promised and given to the operators. Until
   then the compiler found `and` and `or` by name, so every spelling skipped;
   since, `a.and(b)`, `a.or(b)` and `Bool.and(a, b)` are ordinary calls.
+- **2026-11-17:** a constant came to be worked out once. Until then a
+  definition taking nothing was worked out at every call, and CRC-32's
+  table named in its byte walk was built once a byte
+  ([compression](compression.md)); now the constants stage folds it, leaves
+  it where it runs once, or has the entry work it out and hand it down.
 
 ## Related
 

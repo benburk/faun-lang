@@ -13,17 +13,21 @@ stands.
 
 ### A constant is worked out again wherever it is named
 
-A top-level constant that is not a literal, such as CRC-32's 256-entry
-table built by `List.range(256).map(…)`, is computed afresh at every use.
-Named inside the byte loop, the table was built once a byte: 4 MB took
-6.3 seconds, and 10 seconds through a recursive walk rather than a `fold`.
-Bound once to a local and passed down, the same loop took 12 ms.
+Fixed. A top-level constant that is not a literal, such as CRC-32's
+256-entry table built by `List.range(256).map(…)`, was computed afresh at
+every use. Named inside the byte loop, the table was built once a byte:
+4 MB took 6.3 seconds, and 10 seconds through a recursive walk rather than
+a `fold`. Bound once to a local and passed down, the same loop took 12 ms.
 
-Nothing says so: no note mentions it, and the program reads as if the
-table were a value. The workaround, in `crc.fn`, binds the table at the
-top of `update` and threads it through the walk as a parameter. The fix
-belongs in the compiler: a constant without parameters is worked out once,
-before `main` or on first use, as Haskell's CAFs and Rust's `static`s are.
+Nothing said so, and the program read as if the table were a value. The
+workaround in `crc.fn` bound the table at the top of `update` and threaded
+it through the walk as a parameter. Barb now does that itself: a constant
+that does work and cannot be folded is worked out once by the entry and
+handed down to every definition reaching it
+([computation](computation.md#a-constant-is-worked-out-once)). `crc.fn`
+names `crc_table` inside `lookup` again, and its example checksums 16 MB in
+40 ms, CRC-32 and Adler-32 together, as fast as with the workaround; the
+same source built before the fix took 0.6 seconds for 100 KB.
 
 ### Random access into a list is constant time
 
