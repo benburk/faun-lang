@@ -115,7 +115,11 @@ Shape the program:
 Remove list work:
 
 6. **Fusion.** A list built by one walk and read once by another is never
-   built.
+   built. The building walk may walk a number down rather than a list, as
+   `List.range` does, and may push one value every round from either end,
+   as `List.repeat` does; a chain written inside a fused walk's step, as a
+   recursion through `map` writes one, is fused there too. So
+   `List.range(n).fold(...)` is one loop counting up.
 7. **First element.** A list read only for its first element, such as a
    search, stops once it has it.
 8. **In place.** A walk rebuilding a list element for element becomes
@@ -126,8 +130,12 @@ Fold what is known:
 
 9. **Simplification.** Callee-first constant folding, identities, and
    sharing repeated calls, so a caller sees its callees' answers.
-10. **Specialization.** Copy a loop for each known value its callers pass,
-    where that decides a match, then simplify again.
+10. **Specialization.** A construction nothing but one call reads, handed
+    to a definition that takes it apart, goes to a copy of the definition
+    taking its fields, where simplifying the copy decides a match: so
+    `key == [grey]` compares without building `[grey]`. Then copy a loop
+    for each known value its callers pass, where that decides a match, and
+    simplify again.
 11. **Joining rounds.** Inline again where specializing left two
     definitions calling each other, so the loop calls itself.
 
@@ -140,3 +148,55 @@ Tidy up:
 
 Pure work can be dropped or moved freely. Calls reaching a declaration are
 effects and keep their order, count and path.
+
+## Rationale
+
+### Why is a range built front to back?
+
+`List.range(n)` was built from the end, `range_into(n, [])` pushing each
+count left in front, and fusion reads only a walk handing elements in the
+order a reader takes them. Built front to back, an element for each step
+down what is left, `range` is a producer like `map`, and a fold reading it
+reads each element as it is made. Its elements are still bounded by
+`count`: a count kept beside a walk down what is left never passes what
+the two start as together
+([counters](../../crates/core/src/barb/counters.rs)).
+
+`List.repeat` was left building from the end. Front to back, evaluating
+a known repeat at compile time appends to a list a walk at a time, which
+cost a third more compiling for inflate's table of noughts; and a walk
+pushing the same value every round builds the same list from either end,
+so fusion takes it as it is.
+
+### Why copy a definition for a construction rather than inline it?
+
+`equals` calls itself, so inlining stops at it, and a recursion over a
+list is what most definitions taking a list apart are. A copy taking the
+construction's fields is what inlining one round would leave, with the
+rest of the recursion still the original's. Each copy's own calls are read
+again, so a literal of three elements takes three copies, one for each
+element, and the last hands on the known empty end.
+
+The cost is size. A copy is kept only where it decides a match, only for a
+body that may run more than once, since one run once builds its
+construction once, and only where a copy for each constructor of the
+construction copies no more than inlining copies of one callee. md5's
+four-word digest flattened through `flat_map` would take four copies of a
+walk for a list built once; it takes none.
+
+### Why not recognize `range` or `==` by name?
+
+Barb recognizes by shape. A program's own walk counting a number down
+while building front to back fuses as `range` does, and its own
+comparison of a list it builds is taken apart as `equals` is.
+
+## History
+
+- **2026-11-17:** a range or a repeat read once by a fold, a `map` or a
+  `filter` is never built, and neither is a list literal only compared.
+  Queens, whose range is filtered and mapped through recursion, runs 27%
+  fewer instructions on x86-64, 23% fewer cycles on the 6502, and is 16%
+  smaller; a 1024 by 1024 interlaced PNG decoded through
+  `List.range(width).fold` and `key == [grey]` takes 2.37 billion
+  instructions rather than 3.75, within 6% of the decoder written as
+  recursion and a match.

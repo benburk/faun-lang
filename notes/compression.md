@@ -308,7 +308,7 @@ failures in one tag with `map_err`, changes what callers match on.
 
 ### A list built in a loop is built, even to be compared
 
-Interlaced decoding first read each pixel through `List.range(width).fold`
+Fixed. Interlaced decoding first read each pixel through `List.range(width).fold`
 a row, and asked whether a grey sample was tRNS's key with
 `format.key == [grey]`. Both allocate in the loop: a list of every column
 each row, and a one-element list each pixel, each freed at once. On a
@@ -323,6 +323,20 @@ compared and dropped, and a range only folded, could each be left
 unbuilt, as a cell whose fields are its only readers already is. The
 decoder writes both naturally again, and they are
 [two of the natural spelling's bugs](#a-range-only-folded-is-built).
+
+Both now are ([Barb](machine/barb.md#the-schedule)). The standard builds a
+range front to back, an element for each step down what is left, and
+fusion takes a walk down a number as it takes one down a list, so
+`List.range(width).fold` is one loop counting columns; `List.repeat` fuses
+too, pushing one value from either end. A call handing `equals` a list
+nothing else reads goes to a copy of `equals` taking the list's elements,
+which simplifying decides, so `format.key == [grey]` and
+`format.key == [red, green, blue]` compare where the samples were read and
+build nothing. With the decoder written that way in a probe, both in the
+loop, a 1024 by 1024 interlaced RGB image decodes in 2.37 billion
+instructions rather than 3.75, against 2.24 for the library as it is, and
+holds 28 MB rather than 37; a grey one with a tRNS key in 1.48 billion
+rather than 2.31, against 1.35.
 
 ### Writing in place makes a scatter cheap
 
