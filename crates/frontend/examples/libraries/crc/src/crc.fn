@@ -2,6 +2,9 @@
 # reflected, polynomial 0xEDB88320), and Adler-32 as zlib's container
 # does. Neither is a cryptographic hash: each catches accidents, not
 # tampering.
+#
+# Written in the most natural Faun spelling: where that runs slowly, the
+# compiler has a bug to fix, and notes/compression.md lists them.
 
 package {}
 
@@ -31,7 +34,9 @@ Crc32 : U32.(
 # Eight bytes a step, slicing-by-8 as zlib and crc32fast read them: the
 # register mixed with the first four, and eight table lookups, one a
 # byte, each table the register after its byte and as many noughts as the
-# table's place. The bytes left over go one at a time.
+# table's place. The bytes left over go one at a time. The eight tables are
+# the algorithm, not an unrolling: no compiler derives them from the
+# byte-at-a-time one.
 crc_bytes : (U32, List(U8)) -> U32
 crc_bytes(register, [a, b, c, d, e, f, g, h, *rest]) -> (
   one = register ^ U32.of_le_bytes(a, b, c, d)

@@ -7,6 +7,9 @@
 # first, so nothing holds a bit buffer: a read of up to 17 bits takes the
 # three bytes it can span. The output is the window: a match copies from
 # the output already written, which `List.get` reads in constant time.
+#
+# Written in the most natural Faun spelling: where that runs slowly, the
+# compiler has a bug to fix, and notes/compression.md lists them.
 
 package {
   uses: {

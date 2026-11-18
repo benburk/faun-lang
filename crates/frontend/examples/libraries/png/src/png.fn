@@ -16,6 +16,9 @@
 # only where some pixel is not opaque. Each row is filtered as libpng
 # chooses, by the smallest sum of its bytes taken as signed, and the rows
 # are compressed through the flate library's deflate.
+#
+# Written in the most natural Faun spelling: where that runs slowly, the
+# compiler has a bug to fix, and notes/compression.md lists them.
 
 package {
   uses: {

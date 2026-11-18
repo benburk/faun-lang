@@ -9,6 +9,14 @@ finding is a workaround the code carries, an error that misled, or
 something the standard library lacked, with what it cost and where it
 stands.
 
+The libraries are written in the most natural Faun spelling, always: a
+position is a `Nat`, a table is a constant, a symbol is a tag, a row's
+pixels are a fold over its columns. Where that spelling runs slowly, the
+compiler has a bug to fix, and the library is not bent around it; fixed
+widths stay only where the format is fixed-width, a CRC register, a
+checksum, a byte. [The natural spelling's bugs](#the-natural-spellings-bugs)
+lists what it costs today, each with a probe.
+
 ## Findings
 
 ### A constant is worked out again wherever it is named
@@ -62,14 +70,12 @@ position grows with the input, so every `bit / 8`, `bit % 8` and
 9-bit fields from a 20 MB buffer took 280 ms with the position a `Nat` and
 45 ms with it a `U64`, the loop otherwise the same.
 
-Inflate carries the workaround: positions are `U64` (named `Bit` in
-`flate.fn`), Huffman tables `List(U16)`, the length and distance tables
-`List(U32)`, and each crosses to `Nat` only to index a list, with
-`.to_nat()`. On 50 MB of text that took inflate from 1.10 s to 0.63 s.
-The cost is a conversion at every boundary, since `List.get`, `len` and
-`take` speak `Nat`. A fix in the compiler would bound a position by what
-it indexes, `input.len() * 8`, which range analysis does not yet carry
-through a loop's state.
+Inflate carried the workaround: positions were `U64`, Huffman tables
+`List(U16)`, the length and distance tables `List(U32)`, and each crossed
+to `Nat` only to index a list, with `.to_nat()`. On 50 MB of text that
+took inflate from 1.10 s to 0.63 s. It carries it no longer: positions are
+naturals again, and the cost is the first of
+[the natural spelling's bugs](#a-natural-a-loop-carries-is-never-a-word).
 
 ### Bitwise and binds as loosely as Boolean and
 
@@ -106,7 +112,7 @@ precedence one above.
 
 ### Results and tuples answered per symbol cost nothing
 
-Decoding a symbol answers `Result((U64, Bit), …)`, a tuple in a result,
+Decoding a symbol answers `Result((Nat, Nat), …)`, a tuple in a result,
 once for every symbol of the stream, and its caller takes it apart with
 `?`. Writing the decode out by hand in the loop, with no result and no
 tuple, changed 1.10 s to 1.09 s: the compiler builds neither. The clean
@@ -151,8 +157,8 @@ and searches away.
 The PNG decoder kept its positions and sample values as `Nat`, and
 `nat.to_word`, `nat.from_word` and `nat.mul` are 12% of decoding an
 interlaced image, where each pixel's place is worked out by
-multiplication. Inflate's workaround, `U64` positions, would serve here
-too; it is left undone, since inflate is most of the time.
+multiplication. Inflate's old workaround, `U64` positions, would serve here
+too; it is not taken, as no library takes it now.
 
 ### Profiling works
 
@@ -184,8 +190,9 @@ level 6 took 610 ms, and the profile was the search and
 `nat.to_word`/`nat.from_word`. With the search's positions, lengths and
 distances `U64`, the same took 343 ms, and level 9 went from 2.4 s to
 1.1 s; moving the rest of the loop to words as well took 6% more off.
-`deflate.fn` names the word `Pos` and crosses to `Nat` only to index a
-list.
+`deflate.fn` named the word `Pos` and crossed to `Nat` only to index a
+list, and now writes naturals again, at the cost the
+[first bug](#a-natural-a-loop-carries-is-never-a-word) gives.
 
 ### Nothing compares bytes several at a time
 
@@ -297,7 +304,9 @@ took it to 0.12 s, with the scatter below.
 Nothing in the source says which of these allocates: `[grey]` reads as a
 value to compare, and `List.range(n).fold` as a loop. A list literal only
 compared and dropped, and a range only folded, could each be left
-unbuilt, as a cell whose fields are its only readers already is.
+unbuilt, as a cell whose fields are its only readers already is. The
+decoder writes both naturally again, and they are
+[two of the natural spelling's bugs](#a-range-only-folded-is-built).
 
 ### Writing in place makes a scatter cheap
 
@@ -391,9 +400,10 @@ barb` shows why: Barb parted the clauses into `adler_bytes` and
 are calls, not a loop. In the cases tried it happened with a list pattern
 of five elements or more and five bindings or more in its body; with four
 of either the walk stayed one function. Writing the reduction last keeps
-it whole, and `crc.fn` says why beside it. A tail call between the parts
-of one walk could be a jump, as a call to itself is; until then nothing
-warns, and a test on a small input passes.
+it whole. A tail call between the parts of one walk could be a jump, as a
+call to itself is; until then nothing warns, and a test on a small input
+passes. Adler-32 now takes a byte at a time, its clauses in the order one
+reads them, the end and the reduction first, and holds on 17 MB.
 
 ### A word's arithmetic is a call in the profile
 
@@ -428,11 +438,13 @@ from one pixel on, took level 0 from 1.02 s to 0.59 s, and the profile's
 `nat.from_word` and `nat.to_word`, 11% before, went away.
 
 `drop` shares the buffer, so each cursor costs nothing to make, and a
-pattern reads its head with no `Result` and no index to work out. What
-the walk loses is the edges: before the first row and left of the first
-pixel there are noughts, so the encoder keeps one row of noughts and
-walks each row twice, its first pixel against noughts and the rest
-against itself. The decoder's `unfilter_row` indexes into the output as
+pattern reads its head with no `Result` and no index to work out. The
+edges are noughts: before the first row there is a row of them, and the
+bytes to the left of a row, and above and to the left, are that row led by
+a pixel of noughts, `List.repeat(0, per).concat(row)`, one copy of a row
+for each row. The encoder first walked each row twice instead, its first
+pixel against noughts and the rest against itself, which was no faster.
+The decoder's `unfilter_row` indexes into the output as
 it grows, which is why it cannot do the same: the bytes to its left are
 not written until it gets there.
 
@@ -476,28 +488,32 @@ program that only reads the same input. zlib's is on bytes in memory. In
 megabytes a second of the larger side, input for checksums and deflate,
 output for inflate and PNG, on x86-64:
 
-| Work            | Before | Now  | zlib  | zlib over now |
-| --------------- | ------ | ---- | ----- | ------------- |
-| CRC-32          | 460    | 829  | 8954  | 10.8          |
-| Adler-32        | 213    | 1590 | 5461  | 3.4           |
-| inflate, raw    | 81     | 130  | 606   | 4.7           |
-| inflate, zlib   | 60     | 122  | 560   | 4.6           |
-| inflate, gzip   | 73     | 115  | 571   | 5.0           |
-| inflate, stored | 1353   | 1689 | 23369 | 13.8          |
-| deflate, 1      | 34     | 36   | 180   | 5.0           |
-| deflate, 6      | 5.4    | 5.4  | 21    | 3.9           |
-| deflate, 9      | 3.6    | 3.6  | 14    | 3.9           |
-| PNG decode      | 35     | 44   | 372   | 8.4           |
+| Work            | Worked around | Natural | zlib  | zlib over natural |
+| --------------- | ------------- | ------- | ----- | ----------------- |
+| CRC-32          | 796           | 848     | 8586  | 10.1              |
+| Adler-32        | 1293          | 1123    | 5235  | 4.7               |
+| inflate, raw    | 137           | 43      | 584   | 13.5              |
+| inflate, zlib   | 131           | 42      | 532   | 12.6              |
+| inflate, gzip   | 122           | 42      | 556   | 13.4              |
+| inflate, stored | 1327          | 1488    | 32607 | 21.9              |
+| deflate, 1      | 34            | 14      | 173   | 12.5              |
+| deflate, 6      | 5.3           | 2.2     | 20    | 9.3               |
+| deflate, 9      | 3.5           | 1.5     | 13    | 9.0               |
+| PNG decode      | 41            | 20      | 355   | 17.9              |
 
-"Before" is the libraries as each stage left them, "now" after the two
-changes this section's findings give: inflate's tables and words, and the
-checksums eight bytes a step. Inflate of a zlib stream gained the most,
-since its Adler-32 was over a quarter of its time. The PNG's zlib column
-is the inflate of its image data alone, a floor under any decoder; Pillow,
-on libpng, decoded a 2048 by 2048 RGBA image at 380 MB/s. Deflate's speed
-is its search's, which this section left alone: the repeated fixture text
-holds many more matches than prose, so deflate is slower on it than on the
-repository's own source, 13.7 MB/s at level 6, and zlib slower too.
+"Worked around" is the libraries with every workaround for speed they
+used to carry, words for positions, tables bound once and handed down,
+numbers packed into words, Adler-32 unrolled eight bytes a step; "natural"
+is the libraries as they are, each written as one would write it. The
+gap is the compiler's to close, and
+[the natural spelling's bugs](#the-natural-spellings-bugs) part it among
+its causes. CRC-32 is the same program in both, slicing-by-8 being an
+algorithm, not an unrolling; its row says how much a run moves. The PNG's
+zlib column is the inflate of its image data alone, a floor under any
+decoder; Pillow, on libpng, decoded a 2048 by 2048 RGBA image at 380 MB/s.
+Deflate's speed is its search's: the repeated fixture text holds many more
+matches than prose, so deflate is slower on it than on the repository's
+own source, and zlib slower too.
 
 zlib's CRC-32 reads its eight bytes a step as two words, where Faun's
 reads them as eight `get`s, each checked against the list's length; its
@@ -560,6 +576,129 @@ bytes where Pillow, saving each in the colour type `topng` chose, writes
 fewest channels that hold an image exactly, grey and dropping alpha, is
 what keeps the suite's 162 images from 78,748 bytes, which Pillow writes
 saving them all as RGBA.
+
+## The natural spelling's bugs
+
+Each change that wrote a library naturally was measured on its own, in
+instructions run in user mode on the benchmark's inputs, deflate at levels
+6 and 9 on its first megabyte. Where the natural spelling ran slower, a
+probe in `crates/frontend/examples/libraries/flate/bench/probes/` holds
+the natural program, `name.fn`, beside the workaround it replaced,
+`name_workaround.fn`, each a page, printing the same answer:
+
+```sh
+faun build probes/match.fn -o match && perf stat -e instructions:u ./match
+```
+
+Ranked by what each costs the libraries, most first:
+
+### A natural a loop carries is never a word
+
+Inflate's bit position, deflate's positions, lengths and distances, and
+deflate's bit writer, all `Nat`, as one writes them:
+
+```ruby ignore
+peek(input, bit) -> (
+  at = bit / 8
+  word = byte(input, at) + byte(input, at + 1) * 256 + byte(input, at + 2) * 65536
+  word.shift_right(bit % 8)
+)
+```
+
+The workaround was `U64` throughout, `bit.shift_right(3).to_nat()` and
+`(bit & 7).to_nat()`, crossing to `Nat` only to index. Written naturally,
+inflate went from 2.49 to 6.26 billion instructions on 16 MB of text, 2.5
+times; deflate at level 1 from 13.4 to 29.9 billion, at 6 from 4.8 to 14.3
+and at 9 from 7.2 to 21.5, three times; the bit writer, fewer than eight
+bits in a natural and a byte written as it fills where a `U64` held 32,
+cost 0.6 billion more at level 1. The probes `position`, `match` and
+`writer` take 2.07 billion against 0.77, 15.3 against 3.47, and 1.71
+against 0.68: every `+`, `/ 8` and `% 8` is a natural's general path,
+`nat.to_word`, `nat.from_word` and `nat.div_word` in the profile.
+
+Every such natural is bounded by what it is compared with: a position by
+`input.len() * 8` or `n`, each a list's length, so a word. The compiler
+would carry that bound through a walk's tail calls, a position that only
+grows by bounded steps while it is below a length staying below it, and
+work the natural out as a word, `/ 8` a shift and `% 8` a mask.
+
+### A list of tags is a cell a tag
+
+A block's symbols as tags, `[Literal(U8), Match(Nat, Nat)]`, and a code
+to write with as pairs, `List((Nat, Nat))`, where the workaround packed
+each into a `U32`, a literal below 65536 and a match its length times
+65536 plus its distance. Deflate at level 1 went from 30.5 to 36.4
+billion instructions, a fifth more, PNG encoding at level 1 from 15.4 to
+17.7, and level 6 by 2%. The probe `symbols`, five million symbols
+gathered and counted, takes 757 million against 688 and 60 MB against 40.
+A list of a small tag would hold each tag and its fields in its own
+buffer, as a list of words does, rather than a cell an element.
+
+### A table's elements carry no bound, and a power is a loop
+
+DEFLATE's length and distance tables as RFC 1951 gives them, a base and
+a count of extra bits a symbol, `length_table : List((Nat, Nat))`, where
+the workaround packed the base times 16 plus the count into a `U32`.
+Inflate went from 6.26 to 8.61 billion instructions, a third more; level 1
+deflate 4% more. Nearly all of it is reading a symbol's extra bits,
+`peek(input, bit) % 2.pow(count)`: with `count` a `U32`'s low four bits
+the compiler knows it is below 16, and read from a list of naturals it
+knows nothing, so `2.pow(count)` is a loop of general multiplications,
+`nat.mul` in the profile. Bounding it by hand, `count % 16`, took inflate
+back to 6.64 billion. The probe `power`, `x % 2.pow(k)` with `k` the same
+every step but known only at run time, takes 9.39 billion instructions
+against 1.02 with `2.pow(k)` worked out before the walk: it is neither a
+shift nor moved out of the walk. A constant table's elements are known,
+every count here at most 13, and the compiler would carry their bound to
+what reads them; `2.pow(n)` would be a shift wherever it fits a word, and
+an expression of a walk's unchanging arguments worked out once.
+
+### A range only folded is built
+
+The PNG decoder reads a row's pixels by
+`List.range(width).fold(out, |out, column| …)` and a pass's rows the same
+way, where the workaround counted columns and rows by recursion. A
+1024 by 1024 RGB Adam7 image went from 5.63 to 7.35 billion instructions,
+a third more, and 8-bit grey with a tRNS key, read pixel by pixel, from
+1.91 to 2.36. The probe `range` takes 220 million against 156: a list of
+every column is built for each row and dropped. A range that is only
+folded would be a counted walk, which the `ratchet/unbuilt-lists` branch
+is making it.
+
+### A list literal only compared is built
+
+Whether a pixel is tRNS's key, `format.key == [grey]` and
+`format.key == [red, green, blue]`, where the workaround matched the key's
+elements, `format.key is ([k] then k == grey, _ then False)`. The RGB
+Adam7 image went from 4.81 to 5.63 billion instructions, a sixth more,
+and the grey image from 1.44 to 1.91, a third. The probe `key` takes 3.75
+billion against 0.31, twelve times: a list of one element is built for
+every pixel to be compared and freed. Compared element by element against
+a list the literal never has to exist; the `ratchet/unbuilt-lists` branch
+takes this too.
+
+### A constant handed down by the compiler costs a little more than by hand
+
+The length and distance tables, the symbols deflate looks up and its
+fixed codes are top-level constants, where the workaround bound a record
+of them once a stream and passed it down. Deflate ran 4% fewer
+instructions, and inflate 3% more, 2.49 billion against 2.42, with more
+of its time in `seq.release` and calls to `List.get` from its loop. Each
+table becomes a buffer in the program's data, read where it is named; a
+probe reading such a table in a walk ran as fast as handing it down, so
+what costs inflate the 3% is not yet found.
+
+### A byte at a time walks a list a step at a time
+
+Adler-32 a byte at a time, where the workaround took eight a step,
+unrolled by hand with a list pattern of eight: 384 million instructions
+for 16 MB against 332, a sixth more. The probe `adler` is the two walks,
+879 million against 825 with the input built. Matching eight elements
+tests the list's length once for eight; a walk taking a list apart one
+element at a time could be unrolled by the compiler the same way. CRC-32
+keeps slicing-by-8: its eight tables are another algorithm, which no
+compiler derives from the byte-at-a-time one, as zlib and crc32fast chose
+it.
 
 ## Two ratchet workloads
 
