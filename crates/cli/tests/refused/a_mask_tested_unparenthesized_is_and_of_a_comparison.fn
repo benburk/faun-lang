@@ -1,0 +1,3 @@
+# `&` binds looser than `==`, so this is `flags & (4 == 0)`.
+compressed : Nat -> Bool
+compressed(flags) -> flags & 4 == 0

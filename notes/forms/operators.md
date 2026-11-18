@@ -218,7 +218,35 @@ Because combining comparisons is what conditions do: `x == 3 & y == 5` and
 at the same place, and the cost is the one C has, that a mask test needs
 parentheses, `(b & mask) == mask`. In C the unparenthesized form compiles
 and does the wrong thing; in Faun it is a `U8` and a `Bool` handed to one
-`and`, which is a type error.
+`and`, which is a type error. The error is a type's, at the operand, so it
+says what the precedence is and what to write:
+
+```text
+error: mismatched types
+ --> flate.fn:3:30
+  |
+3 | compressed(flags) -> flags & 4 == 0
+  |                      -----   ^^^^^^ expected `Nat`, found `Bool`
+  |                      |
+  |                      expected because this is `Nat`
+  |
+  = help: `&` binds looser than `==`: write `(flags & 4) == 0`
+```
+
+and the same for `|` and `^`, and for a comparison on the left,
+`0 == flags & 4`, which is `(0 == flags) & 4`.
+
+The alternative is Rust's: the bit operators on a level of their own above
+comparison, `+` and `-` < `&` < `^` < `|` < `==`, with `&` on `Bool` then
+binding tighter than `==` too. A mask test would need no parentheses, but
+`a == 1 & b == 2` would read `(a == (1 & b)) == 2`, a type error, so
+every condition joining comparisons would need them instead:
+conditions are written far more often than masks. Splitting the symbol,
+`&&` for `Bool` loose and `&` for bits tight, would answer both at the cost
+of a second spelling of one method, which the previous answer declines.
+The inflate that met the trap wrote ten mask tests unparenthesized before
+parenthesizing all of them; with the help, each costs one reading of a
+refusal rather than a search.
 
 ### Why do `&` and `|` on `Bool` skip their right side?
 
@@ -256,6 +284,14 @@ as method names, and their precedence are fixed by the language. Haskell's
 and Scala's user operators trade that away for libraries that read like
 their domain. Faun keeps the trade the other way; a named method says what
 it does.
+
+## History
+
+- **2026-11-17:** a type error at the operand of `&`, `|` or `^` whose
+  other side, or whose right, is a comparison written without parentheses
+  came to say the precedence and the parenthesized form, after inflate met
+  "expected `Nat`, found `Bool`" at `header & 1 == 1`. The precedence
+  itself is unchanged; Rust's, above, is the alternative.
 
 ## Related
 

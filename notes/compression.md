@@ -86,6 +86,12 @@ it is a known trap there; Rust binds `&` above `==`. Either the operator
 note gives the bit operators their own level above comparison, or a test
 `x & k == v` on numbers is refused with a message saying to parenthesize.
 
+Fixed the second way: the refusal now adds "`&` binds looser than `==`:
+write `(header & 1) == 1`", and the same for `|`, `^` and a comparison on
+the left. The precedence is unchanged; the
+[operator note](forms/operators.md#why-do--and--sit-looser-than-comparisons)
+weighs Rust's against it.
+
 ### A binding cannot leave, and says what to write
 
 `[cmf, flg, *] = input else return Err(Truncated)` is refused with "a

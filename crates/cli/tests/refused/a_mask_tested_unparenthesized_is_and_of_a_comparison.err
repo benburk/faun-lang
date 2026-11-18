@@ -1,0 +1,9 @@
+error: mismatched types
+ --> a_mask_tested_unparenthesized_is_and_of_a_comparison.fn:3:30
+  |
+3 | compressed(flags) -> flags & 4 == 0
+  |                      -----   ^^^^^^ expected `Nat`, found `Bool`
+  |                      |
+  |                      expected because this is `Nat`
+  |
+  = help: `&` binds looser than `==`: write `(flags & 4) == 0`
