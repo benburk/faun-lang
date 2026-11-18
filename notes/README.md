@@ -86,6 +86,8 @@ syntax shown on purpose, marks its fence `` ```ruby ignore ``.
   investigations
 - [Compile time](compile-time.md): where a compile's work goes, and what
   a standard library checked once would save
+- [A checked standard library](std-snapshot.md): the design for checking
+  the library when the compiler is built, and the steps there
 - [Compression](compression.md): what checksums, DEFLATE and PNG found,
   and the compiler bugs their natural spelling exposes
 - [Faun and AI](ai-future.md)
