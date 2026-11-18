@@ -588,6 +588,69 @@ fn comparison_and_explicit_low_word_conversion() {
     }
 }
 
+/// A comparison written in place asks two immediates the question itself
+/// and anything else the helper's order, and answers alike either way:
+/// immediates beside each other, an immediate beside an object, two
+/// objects, with the immediate case written and with it left to the call.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a generated check beside its pairs of each kind"
+)]
+fn a_comparison_written_in_place_answers_as_the_order_does() {
+    for bits in [16, 32, 64] {
+        for inline_small in [true, false] {
+            let conf = Config {
+                inline_small,
+                ..config(bits)
+            };
+            let (mut p, lib, _) = program(conf, Needs::from([Helper::Compare, Helper::FromWord]));
+            let observer = observer(&mut p);
+            let check = p.declare("check", &[WORD, WORD], &[WORD]);
+            p.define(check, |b, args| {
+                let a = b.call_one(lib.require(Helper::FromWord), &[args[0]]);
+                let c = b.call_one(lib.require(Helper::FromWord), &[args[1]]);
+                for relation in [Relation::Equal, Relation::Less] {
+                    let answer = lib.compare(b, relation, a, c);
+                    // Observed as the immediate holding it.
+                    let answer = Library::small_word(b, answer);
+                    b.call(observer, &[answer]);
+                }
+                lib.release_value(b, a);
+                lib.release_value(b, c);
+                let zero = b.constant(WORD, 0);
+                b.ret(&[zero]);
+            });
+            let half = natural::half(bits);
+            let most = u64::MAX >> (64 - bits);
+            let pairs = [
+                (0, 0),
+                (1, 0),
+                (0, 7),
+                (5, 5),
+                (half - 1, half - 1),
+                (half - 1, half),
+                (half, half - 1),
+                (half + 3, half + 3),
+                (half + 3, half + 4),
+                (most, half),
+                (most, most),
+            ];
+            for (a, c) in pairs {
+                let (evaluation, seen) =
+                    run(&p, check, &[BigUint::from(a), BigUint::from(c)], bits);
+                assert!(evaluation.returned().is_some(), "{bits} {a} {c}");
+                assert_eq!(
+                    seen,
+                    [BigUint::from(a == c), BigUint::from(a < c)],
+                    "{bits} {inline_small} {a} {c}"
+                );
+                free_heap(&evaluation.globals, usize::from(bits / 8));
+            }
+        }
+    }
+}
+
 #[test]
 #[expect(
     clippy::too_many_lines,
