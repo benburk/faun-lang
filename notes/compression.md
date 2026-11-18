@@ -215,6 +215,22 @@ reaches into, which C pays too, but most of the 5× to zlib at level 9 is
 this. It is code generation's to fix, and the search is a good workload
 for it: one function, no allocation, every value a word.
 
+Measured again on 4 MB of the benchmark's text, level 9 ran 29.8 billion
+instructions and runs 28.2 billion, 1.10 s and 1.07 s, since a small
+natural constant is no longer tested at every use and the chain count's
+`chain == 0` is one comparison
+([x86 code generation](x86-codegen-performance.md)). Most of what the
+annotation showed is still there. The materialized comparisons are a
+condition joined by `|` or `&` written into a join as nought or one and
+tested there; threading the edges that carry a number straight to the
+side the test takes, with the inlining below, brings level 9 to 24.6
+billion and 0.94 s, but the ratchet's suite has few such conditions and
+scores it neutral, so it waits on the branch `ratchet/codegen-threading`. The spills come with the calls on the
+chain count's cold path, `chain` being a `Nat`: every value is stored where
+the loop starts and read back before it goes round. The constants are
+pushes and pops because a move is two bytes longer, which the suite's
+sizes did not pay for.
+
 ### A mask after a mixture binds before it
 
 The hash of three bytes was first written `a.shift_left(10) ^
@@ -416,6 +432,16 @@ not always inline into a large loop. `perf annotate` of `codes` also
 shows its live values stored to the stack and read back, a comparison
 made into a byte by `sete` and `movzbl` before it is tested, and small
 constants loaded by `push` and `pop`, as the deflate search's does.
+
+The definitions are left as calls because `codes` has spent its inlining
+allowance, 4,096 copied entries, before it reaches them. Copying any
+definition that costs 24 entries or less wherever it is called, whatever
+the caller has spent, takes `U64.add`, `U64.cmp` and `Order.gt` into
+`codes` and 10% off inflate's instructions, and with the threading above,
+16 MB of raw DEFLATE inflates in 96 ms rather than 121, 2.66 billion
+instructions rather than 3.03. The suite's programs never run
+out of allowance, so the ratchet scores it neutral, and it is not in the
+trunk.
 
 ### An arm leaves with `return`, not `then return`
 
