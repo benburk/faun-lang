@@ -54,27 +54,20 @@ deflate(input, Level(level)) -> (
   # as it takes to tell its positions apart, from 8 to 15, and a window as
   # long as the input where that is shorter.
   bits = hash_bits(n, 8)
-  context = {input, n: U64.of_nat(n), search, shift: 32 - bits}
-  head = List.repeat(U32.of_nat(0), 2.pow(bits))
-  prev = List.repeat(U32.of_nat(0), n.min(32768))
-  zero = U64.of_nat(0)
-  written = if search.greedy then greedy(context, zero, head, prev, [], zero, empty_writer)
-    else lazy(context, zero, head, prev, zero, zero, False, [], zero, empty_writer)
+  context = {input, n, search, shift: 32 - bits}
+  head = List.repeat(0, 2.pow(bits))
+  prev = List.repeat(0, n.min(32768))
+  written = if search.greedy then greedy(context, 0, head, prev, [], 0, empty_writer)
+    else lazy(context, 0, head, prev, 0, 0, False, [], 0, empty_writer)
   aligned(written).out
 )
-
-# A position in the input, or a length or distance measured in it. Each is
-# a word rather than a natural: the search is most of compression's time,
-# and a word the compiler knows is a word is several times faster than a
-# natural it must check for growing past one.
-Pos = U64
 
 # How a level searches, zlib's table: a match this long is good enough to
 # search less behind, one this long is not put off, one this long ends the
 # search, and how many earlier positions a search tries. Levels 1 to 3 take
 # the first match they find, and put the positions inside a match no
 # longer than `lazy` in the chains.
-Search = {good: Pos, lazy: Pos, nice: Pos, chain: Nat, greedy: Bool}
+Search = {good: Nat, lazy: Nat, nice: Nat, chain: Nat, greedy: Bool}
 
 search_for : Nat -> Search
 search_for(level) -> (
@@ -89,12 +82,12 @@ search_for(level) -> (
     8 then (32, 128, 258, 1024)
     _ then (32, 258, 258, 4096)
   )
-  {good: U64.of_nat(good), lazy: U64.of_nat(lazy), nice: U64.of_nat(nice), chain, greedy: level <= 3}
+  {good, lazy, nice, chain, greedy: level <= 3}
 )
 
 # What a stream is compressed with, unchanged throughout it: `shift` is
 # how far a hash's product moves down to leave its bits.
-Context = {input: List(U8), n: Pos, search: Search, shift: Nat}
+Context = {input: List(U8), n: Nat, search: Search, shift: Nat}
 
 hash_bits : (Nat, Nat) -> Nat
 hash_bits(n, bits) if bits < 15 & 2.pow(bits) < n -> hash_bits(n, bits + 1)
@@ -104,12 +97,12 @@ hash_bits(_, bits) -> bits
 block_symbols : Nat
 block_symbols = 16383
 
-byte_at : (List(U8), Pos) -> U8
-byte_at(input, at) -> input.get(at.to_nat()).ok_or(0)
+byte_at : (List(U8), Nat) -> U8
+byte_at(input, at) -> input.get(at).ok_or(0)
 
 # The hash of the three bytes at `at`: their word times a constant, the
 # top bits of the product, which every byte reaches, however few are kept.
-hash : (List(U8), Pos, Nat) -> Nat
+hash : (List(U8), Nat, Nat) -> Nat
 hash(input, at, shift) -> (
   word = U32.of_le_bytes(byte_at(input, at), byte_at(input, at + 1), byte_at(input, at + 2), 0)
   (word * 0x9e3779b1).shift_right(shift).to_nat()
@@ -117,16 +110,16 @@ hash(input, at, shift) -> (
 
 # `at` put at the head of its hash's chain, and the chain's head before it,
 # plus one, or nought where it had none.
-insert : (Context, List(U32), List(U32), Pos) -> (List(U32), List(U32), Pos)
+insert : (Context, List(Nat), List(Nat), Nat) -> (List(Nat), List(Nat), Nat)
 insert(context, head, prev, at) -> (
   key = hash(context.input, at, context.shift)
   old = head.get(key).ok_or(0)
-  (head.put(key, at.to_u32() + 1), prev.put((at & 32767).to_nat(), old), U64.of_u32(old))
+  (head.put(key, at + 1), prev.put(at % 32768, old), old)
 )
 
 # Every position from `at` below `end` put in the chains, where three bytes
 # start there.
-insert_until : (Context, List(U32), List(U32), Pos, Pos) -> (List(U32), List(U32))
+insert_until : (Context, List(Nat), List(Nat), Nat, Nat) -> (List(Nat), List(Nat))
 insert_until(context, head, prev, at, end) if at < end & at + 2 < context.n -> (
   (head2, prev2, _) = insert(context, head, prev, at)
   insert_until(context, head2, prev2, at + 1, end)
@@ -136,7 +129,7 @@ insert_until(_, head, prev, _, _) -> (head, prev)
 # The longest match for `at` along its chain from `candidate`, longer than
 # `best`, as its length and distance; a distance of nought where there is
 # none.
-longest : (List(U8), List(U32), Pos, Pos, Nat, Pos, Pos, Pos, Pos) -> (Pos, Pos)
+longest : (List(U8), List(Nat), Nat, Nat, Nat, Nat, Nat, Nat, Nat) -> (Nat, Nat)
 longest(input, prev, at, candidate, chain, best, distance, nice, most) -> (
   if candidate == 0 | chain == 0 return (best, distance)
   from = candidate - 1
@@ -148,19 +141,19 @@ longest(input, prev, at, candidate, chain, best, distance, nice, most) -> (
     else matching(input, from, at, 0, most)
   (best2, distance2) = if length > best then (length, at - from) else (best, distance)
   if best2 >= nice return (best2, distance2)
-  longest(input, prev, at, U64.of_u32(prev.get((from & 32767).to_nat()).ok_or(0)), chain - 1, best2, distance2, nice, most)
+  longest(input, prev, at, prev.get(from % 32768).ok_or(0), chain - 1, best2, distance2, nice, most)
 )
 
 # How many bytes from `a` and from `b` on agree, `count` known to and no
 # more than `most`.
-matching : (List(U8), Pos, Pos, Pos, Pos) -> Pos
+matching : (List(U8), Nat, Nat, Nat, Nat) -> Nat
 matching(input, a, b, count, most) if count < most & byte_at(input, a + count) == byte_at(input, b + count) ->
   matching(input, a, b, count + 1, most)
 matching(_, _, _, count, _) -> count
 
 # A match found, with a match of three bytes far back left out, as zlib
 # leaves it: its distance costs more than its three literals.
-found : (Context, List(U32), Pos, Pos, Nat, Pos) -> (Pos, Pos)
+found : (Context, List(Nat), Nat, Nat, Nat, Nat) -> (Nat, Nat)
 found(context, prev, at, candidate, chain, best) -> (
   most = (context.n - at).min(258)
   if candidate == 0 | most < 3 return (0, 0)
@@ -172,19 +165,19 @@ found(context, prev, at, candidate, chain, best) -> (
 # times 65536 plus its distance.
 Symbol = U32
 
-literal : (List(U8), Pos) -> Symbol
+literal : (List(U8), Nat) -> Symbol
 literal(input, at) -> U32.of_u8(byte_at(input, at))
 
-match_of : (Pos, Pos) -> Symbol
-match_of(length, distance) -> (length.shift_left(16) | distance).to_u32()
+match_of : (Nat, Nat) -> Symbol
+match_of(length, distance) -> U32.of_nat(length * 65536 + distance)
 
 # Levels 1 to 3: each match taken as found.
-greedy : (Context, Pos, List(U32), List(U32), List(Symbol), Pos, Writer) -> Writer
+greedy : (Context, Nat, List(Nat), List(Nat), List(Symbol), Nat, Writer) -> Writer
 greedy(context, at, head, prev, symbols, start, written) -> (
   n = context.n
-  if at >= n return block(context, written, symbols, start.to_nat(), n.to_nat(), True)
+  if at >= n return block(context, written, symbols, start, n, True)
   if symbols.len() >= block_symbols return
-    greedy(context, at, head, prev, [], at, block(context, written, symbols, start.to_nat(), at.to_nat(), False))
+    greedy(context, at, head, prev, [], at, block(context, written, symbols, start, at, False))
   input = context.input
   (head2, prev2, candidate) = if at + 2 < n then insert(context, head, prev, at) else (head, prev, 0)
   (length, distance) = found(context, prev2, at, candidate, context.search.chain, 2)
@@ -197,17 +190,17 @@ greedy(context, at, head, prev, symbols, start, written) -> (
 # Levels 4 to 9: the match at `at - 1`, `pending` long, is taken only where
 # the one at `at` is no longer; `waiting` says the byte at `at - 1` is not
 # yet in a symbol.
-lazy : (Context, Pos, List(U32), List(U32), Pos, Pos, Bool, List(Symbol), Pos, Writer) -> Writer
+lazy : (Context, Nat, List(Nat), List(Nat), Nat, Nat, Bool, List(Symbol), Nat, Writer) -> Writer
 lazy(context, at, head, prev, pending, pending_distance, waiting, symbols, start, written) -> (
   n = context.n
   input = context.input
   if at >= n return (
     last = if waiting then symbols.append(literal(input, at - 1)) else symbols
-    block(context, written, last, start.to_nat(), n.to_nat(), True)
+    block(context, written, last, start, n, True)
   )
   if symbols.len() >= block_symbols return (
     end = if waiting then at - 1 else at
-    lazy(context, at, head, prev, pending, pending_distance, waiting, [], end, block(context, written, symbols, start.to_nat(), end.to_nat(), False))
+    lazy(context, at, head, prev, pending, pending_distance, waiting, [], end, block(context, written, symbols, start, end, False))
   )
   search = context.search
   (head2, prev2, candidate) = if at + 2 < n then insert(context, head, prev, at) else (head, prev, 0)
