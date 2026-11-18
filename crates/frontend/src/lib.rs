@@ -28,6 +28,13 @@
 //! 6. Pattern compilation turns clauses into decisions and bindings into
 //!    ordered unpacks, which Barb emission reads.
 //!
+//! Stages 1 to 3 run twice: on the standard package alone, which never
+//! imports the host and so is the same for every program and target, and
+//! then on the host and the entry's package, against what the first left
+//! and numbering on from it (`library`). From specialization on, the stages
+//! see one program. A package within the standard package is the library
+//! itself, and is taken through them once.
+//!
 //! [`compile_barb_to_image`] hands Barb to `faun_core` for the machine tier
 //! and to the target for its image.
 
@@ -38,7 +45,8 @@ use faun_core::targets::{Favour, SymbolTable, Target};
 
 use context::Context;
 use host::Main;
-use modules::LoadedProgram;
+use library::{Earlier, Library};
+use modules::{LoadedProgram, Loader};
 use packages::Packages;
 
 pub mod ast;
@@ -60,6 +68,7 @@ mod grammar;
 pub mod hir;
 pub mod host;
 pub mod lex;
+mod library;
 mod linearity;
 mod lines;
 pub mod literal;
@@ -123,13 +132,13 @@ pub fn check_package_using(
     target: &dyn Target,
     packages: &Packages,
 ) -> Result<Package, Diagnostic> {
-    let loaded = load(source, target, packages)?;
+    let (loaded, mut earlier) = load_after_library(source, target, packages)?;
     let main = Main::find_in(&loaded)?;
     let facts = test_uses::Facts::of(&loaded);
-    let (program, cx) = resolve(loaded)?;
+    let (program, cx) = resolve_after(loaded, &mut earlier)?;
     test_uses::check(&program, &cx, &facts)?;
     let program = host::sign_main(program, &cx, main.as_ref());
-    lower(program, cx, main.as_ref(), target)
+    lower(program, cx, earlier, main.as_ref(), target)
 }
 
 /// Check the Faun application at `source` against `target`'s host and lower
@@ -275,15 +284,15 @@ pub fn lower_tests_to_barb_using(
     packages: &Packages,
     reporting: Reporting,
 ) -> Result<Tests, Diagnostic> {
-    let mut loaded = load(source, target, packages)?;
+    let (mut loaded, mut earlier) = load_after_library(source, target, packages)?;
     let application = Main::find_in(&loaded)?;
     let main = expectations::main(&mut loaded);
     let facts = test_uses::Facts::of(&loaded);
-    let (program, mut cx) = resolve(loaded)?;
+    let (program, mut cx) = resolve_after(loaded, &mut earlier)?;
     test_uses::check(&program, &cx, &facts)?;
     let program = host::sign_main(program, &cx, application.as_ref());
     let (program, expectations) = expectations::enter(program, &mut cx, &main, reporting);
-    let Package::Application(barb) = lower(program, cx, Some(&main), target)? else {
+    let Package::Application(barb) = lower(program, cx, earlier, Some(&main), target)? else {
         unreachable!("the expectations' runner is an application")
     };
     Ok(Tests {
@@ -300,6 +309,24 @@ fn load(
     packages: &Packages,
 ) -> Result<LoadedProgram, Diagnostic> {
     modules::load_program_using(source, standard_path(), &host_path(target)?, packages)
+}
+
+/// The standard package checked alone, then `target`'s host and the package
+/// at `source` loaded after it: the whole program, and what checking the
+/// library left for the rest to be checked against. A package within the
+/// standard package is the library itself, loaded with the host, to be
+/// checked in one step.
+fn load_after_library(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+) -> Result<(LoadedProgram, Earlier), Diagnostic> {
+    let host = host_path(target)?;
+    let loader = Loader::standard(standard_path())?;
+    if loader.holds(source) {
+        return Ok((loader.rest(source, &host, packages)?, Earlier::default()));
+    }
+    Library::check(loader)?.rest(source, &host, packages)
 }
 
 /// The modules of the package at `source`, its root first, each with its
@@ -341,21 +368,54 @@ pub fn package_modules(
 /// Reports a standard package or host missing what literals and the entry
 /// are made of, and a name nothing declares or two declarations share.
 pub fn resolve(loaded: LoadedProgram) -> Result<(hir::Program, Context), Diagnostic> {
-    let prelude = blessed::PreludeIds::find_in(&loaded)?;
+    resolve_after(loaded, &mut Earlier::default())
+}
+
+/// [`resolve()`] the modules of `loaded` after those `earlier` holds, which
+/// are already checked: the HIR of the rest alone, and the context of the
+/// whole, numbering on from what `earlier` numbered.
+fn resolve_after(
+    mut loaded: LoadedProgram,
+    earlier: &mut Earlier,
+) -> Result<(hir::Program, Context), Diagnostic> {
+    let prelude = match earlier.prelude.take() {
+        Some(prelude) => prelude,
+        None => blessed::PreludeIds::find_in(&loaded)?,
+    };
     let host = host::HostIds::find_in(&loaded)?;
-    let (program, mut cx) = resolve::resolve_names(loaded, prelude, host)?;
-    let program = builders::desugar(program, &mut cx);
+    let mut sites = std::mem::take(&mut earlier.sites);
+    let modules = earlier.resolution.resolve(
+        (&loaded.modules, earlier.modules),
+        loaded.prelude,
+        &loaded.sources,
+        (&mut loaded.symbols, &mut sites),
+    )?;
+    earlier.modules = loaded.modules.len();
+    let mut cx = Context {
+        sources: loaded.sources,
+        symbols: loaded.symbols,
+        sites,
+        module_sources: loaded.modules.iter().map(|module| module.source).collect(),
+        package: loaded.package,
+        host_module: Some(loaded.host),
+        prelude,
+        host: Some(host),
+    };
+    let program = builders::desugar(hir::Program { modules }, &mut cx, &mut earlier.pairings);
     Ok((program, cx))
 }
 
-/// Check `program` and lower it to Barb, entering by `main`.
+/// Check `program`, after what `earlier` holds, and lower the whole to
+/// Barb, entering by `main`.
 fn lower(
     program: hir::Program,
     mut cx: Context,
+    mut earlier: Earlier,
     main: Option<&Main>,
     target: &dyn Target,
 ) -> Result<Package, Diagnostic> {
-    let typed = checked(program, &mut cx)?;
+    checked_after(program, &mut cx, &mut earlier)?;
+    let typed = earlier.typed;
     if let Some(main) = main {
         host::check_application_abi(&typed, &cx, main)?;
     }
@@ -379,11 +439,32 @@ fn lower(
 /// # Errors
 /// Reports what checking refuses, and clauses that leave a case unmatched.
 pub fn checked(program: hir::Program, cx: &mut Context) -> Result<typed::Program, Diagnostic> {
+    let mut earlier = Earlier::default();
+    checked_after(program, cx, &mut earlier)?;
+    Ok(earlier.typed)
+}
+
+/// [`checked()`] `program`, the modules after those `earlier` holds, which
+/// it may use: its definitions are added to `earlier`'s typed program, and
+/// what checking them leaves to its environment.
+///
+/// # Errors
+/// As [`checked()`].
+fn checked_after(
+    program: hir::Program,
+    cx: &mut Context,
+    earlier: &mut Earlier,
+) -> Result<(), Diagnostic> {
     let program = declarations::normalize(program);
     let program = derive::requested(program, cx)?;
-    let typed = check::type_check(program, cx)?;
-    exhaustive::check(&typed, cx)?;
-    Ok(typed)
+    let typed =
+        check::type_check_after(program, cx, &mut earlier.environment, &earlier.typed.data)?;
+    let whole = &mut earlier.typed;
+    let from = whole.functions.len();
+    whole.functions.extend(typed.functions);
+    whole.data.extend(typed.data);
+    whole.members.extend(typed.members);
+    exhaustive::check(whole, from, cx)
 }
 
 /// Compile the Faun application at `source` to `target`'s image.

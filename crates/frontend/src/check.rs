@@ -166,7 +166,59 @@ pub fn type_check(
     program: n::Program,
     cx: &mut Context,
 ) -> Result<crate::typed::Program, Diagnostic> {
-    let facts = infer(&program, cx).map_err(|refusal| cx.told(refusal))?;
+    type_check_after(
+        program,
+        cx,
+        &mut Environment::default(),
+        &HashMap::default(),
+    )
+}
+
+/// What checking leaves for the definitions checked after it, which may
+/// use what it checked: each definition's scheme, its bounds and the names
+/// its signature gives its variables, each constructor's and field's
+/// scheme, and the methods each spelling names. Inference's variables are
+/// numbered on from those its schemes hold.
+#[derive(Default)]
+pub(crate) struct Environment {
+    infer: Infer,
+    values: HashMap<Symbol, Scheme>,
+    open: HashSet<Symbol>,
+    constructors: HashMap<Symbol, Scheme>,
+    methods: HashMap<Symbol, Vec<MethodImpl>>,
+    fields: HashMap<Symbol, Vec<FieldImpl>>,
+    bounds: HashMap<Symbol, Vec<Bound>>,
+    variable_names: HashMap<Symbol, HashMap<Symbol, u32>>,
+    partial: HashMap<Symbol, h::SignatureDecl>,
+    defined: HashMap<Symbol, (ModuleId, super::ast::Span)>,
+}
+
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Environment")
+            .field("values", &self.values.len())
+            .field("constructors", &self.constructors.len())
+            .field("methods", &self.methods.len())
+            .field("fields", &self.fields.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`type_check`] `program` after the definitions `environment` holds were
+/// checked, which it may use, extending `environment` with its own; the
+/// types they declare are `earlier`.
+///
+/// # Errors
+///
+/// As [`type_check`].
+pub(crate) fn type_check_after(
+    program: n::Program,
+    cx: &mut Context,
+    environment: &mut Environment,
+    earlier: &HashMap<Symbol, n::Data>,
+) -> Result<crate::typed::Program, Diagnostic> {
+    let facts = infer(&program, cx, environment, earlier).map_err(|refusal| cx.told(refusal))?;
     Ok(elaborate::finish(
         program,
         facts,
@@ -177,12 +229,26 @@ pub fn type_check(
 
 /// What inference finds of `program`, once its declarations and effects are
 /// known to stand.
-fn infer(program: &n::Program, cx: &Context) -> Result<Facts, Refusal> {
+fn infer(
+    program: &n::Program,
+    cx: &Context,
+    environment: &mut Environment,
+    earlier: &HashMap<Symbol, n::Data>,
+) -> Result<Facts, Refusal> {
     declared::check(program, cx.host_module, &cx.symbols)?;
     effects::check(program, &cx.symbols)?;
-    Checker::new(program, &cx.symbols, &cx.prelude, &cx.sites)?
+    let mut checker = Checker::new(
+        std::mem::take(environment),
+        (program, earlier),
+        &cx.symbols,
+        &cx.prelude,
+        &cx.sites,
+    )?;
+    let facts = checker
         .check(program)
-        .map_err(|refused| precedence::hinted(refused, program, cx))
+        .map_err(|refused| precedence::hinted(refused, program, cx))?;
+    *environment = checker.into_environment();
+    Ok(facts)
 }
 
 /// A method a type's block defines without a signature.
@@ -472,6 +538,8 @@ struct Checker<'a> {
     fields: HashMap<Symbol, Vec<FieldImpl>>,
     /// Each declared type, by its name.
     data: &'a HashMap<Symbol, n::Data>,
+    /// Each type declared by the definitions checked before.
+    earlier: &'a HashMap<Symbol, n::Data>,
     visible_methods: &'a HashMap<ModuleId, HashSet<Symbol>>,
     /// Which calls show a failed expectation's side.
     sites: &'a h::Sites,
@@ -526,7 +594,7 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
-    fn check(mut self, program: &n::Program) -> Result<Facts, Refusal> {
+    fn check(&mut self, program: &n::Program) -> Result<Facts, Refusal> {
         let definitions: HashMap<_, _> = program
             .functions
             .iter()
@@ -728,10 +796,13 @@ impl Checker<'_> {
                 self.current_names.clear();
             }
         }
-        self.checked.values = self
-            .values
+        self.checked.values = program
+            .functions
             .iter()
-            .map(|(&name, scheme)| (name, self.public_scheme(name, scheme)))
+            .filter_map(|function| {
+                let scheme = self.values.get(&function.name)?;
+                Some((function.name, self.public_scheme(function.name, scheme)))
+            })
             .collect();
         self.checked.expressions = self
             .expression_types
@@ -782,7 +853,7 @@ impl Checker<'_> {
                     .map(|method| ((method.owner, *spelling), method.name))
             })
             .collect();
-        Ok(self.checked)
+        Ok(std::mem::take(&mut self.checked))
     }
 
     fn public_bound(&self, bound: &Bound) -> InferredBound {

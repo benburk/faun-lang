@@ -27,15 +27,25 @@ pub struct Context {
     /// only what reaches into it.
     pub package: Vec<ModuleId>,
     /// The module mounted at `std.host`, the one place a definition may be
-    /// left for the target to answer.
-    pub host_module: ModuleId,
+    /// left for the target to answer: none while the standard package is
+    /// checked alone.
+    pub host_module: Option<ModuleId>,
     /// The standard identities literals and patterns are made of.
     pub prelude: PreludeIds,
-    /// The host's `Host` and `exit!`.
-    pub host: HostIds,
+    /// The host's `Host` and `exit!`, once it is loaded.
+    pub host: Option<HostIds>,
 }
 
 impl Context {
+    /// The host's `Host` and `exit!`.
+    ///
+    /// # Panics
+    /// While the standard package is checked alone, before any host.
+    #[must_use]
+    pub const fn host(&self) -> &HostIds {
+        self.host.as_ref().expect("the host is loaded")
+    }
+
     /// A diagnostic at `span` in `module`.
     ///
     /// # Panics

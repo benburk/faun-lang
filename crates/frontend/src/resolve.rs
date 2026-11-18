@@ -14,7 +14,7 @@ use super::hir as h;
 use super::host::HostIds;
 use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
-use super::{Symbol, Symbols};
+use super::{Sources, Symbol, Symbols};
 
 /// Resolve every loaded module without mutating or concatenating its surface AST.
 ///
@@ -32,69 +32,120 @@ pub fn resolve_names(
     prelude_ids: PreludeIds,
     host_ids: HostIds,
 ) -> Result<(h::Program, Context), Diagnostic> {
-    let prelude = loaded.module(loaded.prelude).public.clone();
-    let mut modules = Vec::with_capacity(loaded.modules.len());
     let mut sites = h::Sites::default();
-    let mut aliases = HashMap::default();
-    let mut constraint_aliases = HashMap::default();
-    let mut scopes = Vec::with_capacity(loaded.modules.len());
-    for module in &loaded.modules {
-        let mut scope = prelude.clone();
-        scope.merge(&module.scope).map_err(|clash| {
-            let name = loaded.symbols.text(clash.name);
-            Diagnostic::new(format!("module scope binds {} `{name}` twice", clash.kind))
-        })?;
-        scopes.push(scope);
-    }
-    let values = values(&loaded, &scopes);
-    for (module, scope) in loaded.modules.iter().zip(&scopes) {
-        let source = loaded
-            .sources
-            .get(module.source)
-            .expect("loaded module has source")
-            .text();
-        let resolved = resolve_module(
-            module,
-            source,
-            (scope, &values),
-            (&mut loaded.symbols, &mut sites),
-            (&mut aliases, &mut constraint_aliases),
-        );
-        modules.push(resolved.map_err(|error| told(&loaded, error))?);
-    }
-    expand_aliases(
-        &mut modules,
-        (&aliases, &constraint_aliases),
-        &mut loaded.symbols,
-    )
-    .map_err(|error| told(&loaded, error))?;
+    let modules = Resolution::default().resolve(
+        (&loaded.modules, 0),
+        loaded.prelude,
+        &loaded.sources,
+        (&mut loaded.symbols, &mut sites),
+    )?;
     let context = Context {
         sources: loaded.sources,
         symbols: loaded.symbols,
         sites,
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         package: loaded.package,
-        host_module: loaded.host,
+        host_module: Some(loaded.host),
         prelude: prelude_ids,
-        host: host_ids,
+        host: Some(host_ids),
     };
     Ok((h::Program { modules }, context))
+}
+
+/// What resolving some modules leaves for resolving the modules loaded
+/// after them: which globals are values, and every alias, as written and
+/// as expanded.
+#[derive(Debug, Default)]
+pub(crate) struct Resolution {
+    values: Values,
+    aliases: Aliases,
+    constraint_aliases: ConstraintAliases,
+    expanded: Aliases,
+}
+
+impl Resolution {
+    /// Resolve the modules of `modules` from `from` on, which may name
+    /// what those before them declare, and extend what resolution holds
+    /// with what they declare.
+    ///
+    /// # Errors
+    ///
+    /// As [`resolve_names`].
+    ///
+    /// # Panics
+    ///
+    /// As [`resolve_names`].
+    pub(crate) fn resolve(
+        &mut self,
+        (modules, from): (&[LoadedModule], usize),
+        prelude: ModuleId,
+        sources: &Sources,
+        (symbols, sites): (&mut Symbols, &mut h::Sites),
+    ) -> Result<Vec<h::Module>, Diagnostic> {
+        let told = |refusal: Refusal| {
+            refusal.told(|module| {
+                sources
+                    .get(modules[module.index()].source)
+                    .expect("loaded module has source")
+            })
+        };
+        let prelude = modules[prelude.index()].public.clone();
+        let part = &modules[from..];
+        let mut resolved = Vec::with_capacity(part.len());
+        let mut aliases = HashMap::default();
+        let mut constraint_aliases = HashMap::default();
+        let mut scopes = Vec::with_capacity(part.len());
+        for module in part {
+            let mut scope = prelude.clone();
+            scope.merge(&module.scope).map_err(|clash| {
+                let name = symbols.text(clash.name);
+                Diagnostic::new(format!("module scope binds {} `{name}` twice", clash.kind))
+            })?;
+            scopes.push(scope);
+        }
+        values(part, &scopes, sources, symbols, &mut self.values);
+        for (module, scope) in part.iter().zip(&scopes) {
+            let source = sources
+                .get(module.source)
+                .expect("loaded module has source")
+                .text();
+            let module = resolve_module(
+                module,
+                source,
+                (scope, &self.values),
+                (symbols, sites),
+                (&mut aliases, &mut constraint_aliases),
+            );
+            resolved.push(module.map_err(told)?);
+        }
+        let new_aliases: Vec<Symbol> = aliases.keys().copied().collect();
+        let new_constraints: Vec<Symbol> = constraint_aliases.keys().copied().collect();
+        self.aliases.extend(aliases);
+        self.constraint_aliases.extend(constraint_aliases);
+        self.expand_aliases(&mut resolved, (&new_aliases, &new_constraints), symbols)
+            .map_err(told)?;
+        Ok(resolved)
+    }
 }
 
 /// The definitions written `name = value`, which take no parameters: a
 /// use of one is its value, and calling it is refused.
 type Values = HashSet<Symbol>;
 
-/// Every value the program defines, top-level or a type's.
-fn values(loaded: &LoadedProgram, scopes: &[Interface]) -> Values {
-    let mut values = Values::default();
-    for (module, scope) in loaded.modules.iter().zip(scopes) {
-        let source = loaded
-            .sources
+/// Add every value `modules` define, top-level or a type's, to `values`.
+fn values(
+    modules: &[LoadedModule],
+    scopes: &[Interface],
+    sources: &Sources,
+    symbols: &Symbols,
+    values: &mut Values,
+) {
+    for (module, scope) in modules.iter().zip(scopes) {
+        let source = sources
             .get(module.source)
             .expect("loaded module has source")
             .text();
-        let spelled = |name: s::Name| loaded.symbols.find(name.text(source));
+        let spelled = |name: s::Name| symbols.find(name.text(source));
         for item in &module.syntax.items {
             match item {
                 s::Item::Clause(clause) if clause.patterns.is_empty() => {
@@ -120,21 +171,11 @@ fn values(loaded: &LoadedProgram, scopes: &[Interface]) -> Values {
             }
         }
     }
-    values
-}
-
-/// A refusal as a diagnostic, at its places in `loaded`'s sources.
-fn told(loaded: &LoadedProgram, refusal: Refusal) -> Diagnostic {
-    refusal.told(|module| {
-        loaded
-            .sources
-            .get(loaded.module(module).source)
-            .expect("loaded module has source")
-    })
 }
 
 /// An alias, `Name = type` or `Name(a) = type`: its parameters, and the
 /// type it names, resolved in the module that wrote it.
+#[derive(Debug)]
 struct Alias {
     parameters: Vec<Symbol>,
     ty: h::Type,
@@ -146,6 +187,7 @@ type Aliases = HashMap<Symbol, Alias>;
 
 /// A constraint alias, `Name(a) = where ...`: its parameters, and what it
 /// requires of them, applications of other aliases included.
+#[derive(Debug)]
 struct ConstraintAlias {
     parameters: Vec<Symbol>,
     constraints: Vec<h::Constraint>,
@@ -404,92 +446,105 @@ fn substituted(ty: &h::Type, replacements: &HashMap<Symbol, h::Type>) -> h::Type
     }
 }
 
-/// Replace every alias in the program's written types by what it names.
-/// An alias is transparent: `Point = {x: Nat, y: Nat}` is the record type,
-/// so a bare record already has it, and nothing downstream sees the alias.
-fn expand_aliases(
-    modules: &mut [h::Module],
-    (aliases, constraint_aliases): (&Aliases, &ConstraintAliases),
-    symbols: &mut Symbols,
-) -> Result<(), Refusal> {
-    // Every constraint alias is expanded once over its own parameters, so
-    // one applying itself, or applied wrongly, is refused where it is
-    // declared whether or not anything applies it.
-    // In the order written, so that of several refused, the first is told.
-    let mut written: Vec<_> = constraint_aliases.iter().collect();
-    written.sort_by_key(|(_, alias)| (alias.module, alias.span));
-    for (&name, alias) in written {
-        let applied = h::Constraint::Alias {
-            name,
-            arguments: alias
+impl Resolution {
+    /// Replace every alias in `modules`' written types by what it names,
+    /// once each of `fresh`, the aliases and constraint aliases they
+    /// declare, is expanded and known to stand. An alias is transparent:
+    /// `Point = {x: Nat, y: Nat}` is the record type, so a bare record
+    /// already has it, and nothing downstream sees the alias.
+    fn expand_aliases(
+        &mut self,
+        modules: &mut [h::Module],
+        (fresh, fresh_constraints): (&[Symbol], &[Symbol]),
+        symbols: &mut Symbols,
+    ) -> Result<(), Refusal> {
+        let (aliases, constraint_aliases) = (&self.aliases, &self.constraint_aliases);
+        // Every constraint alias is expanded once over its own parameters, so
+        // one applying itself, or applied wrongly, is refused where it is
+        // declared whether or not anything applies it.
+        // In the order written, so that of several refused, the first is told.
+        let mut written: Vec<_> = fresh_constraints
+            .iter()
+            .map(|name| (name, &constraint_aliases[name]))
+            .collect();
+        written.sort_by_key(|(_, alias)| (alias.module, alias.span));
+        for (&name, alias) in written {
+            let applied = h::Constraint::Alias {
+                name,
+                arguments: alias
+                    .parameters
+                    .iter()
+                    .map(|&parameter| h::Type::Variable(parameter))
+                    .collect(),
+            };
+            expand_constraints(&[applied], constraint_aliases, symbols)
+                .map_err(|message| error(alias.module, alias.span, message))?;
+        }
+        // Each alias is expanded over its own parameters, so one naming
+        // itself is refused where it is declared.
+        let mut written: Vec<_> = fresh.iter().map(|name| (name, &aliases[name])).collect();
+        written.sort_by_key(|(_, alias)| (alias.module, alias.span));
+        for (&name, alias) in written {
+            let own = alias
                 .parameters
                 .iter()
                 .map(|&parameter| h::Type::Variable(parameter))
-                .collect(),
-        };
-        expand_constraints(&[applied], constraint_aliases, symbols)
+                .collect();
+            let ty = expand(
+                &h::Type::Named(name, own),
+                aliases,
+                symbols,
+                &mut Vec::new(),
+            )
             .map_err(|message| error(alias.module, alias.span, message))?;
-    }
-    // Each alias is expanded over its own parameters, so one naming
-    // itself is refused where it is declared.
-    let mut expanded = Aliases::default();
-    let mut written: Vec<_> = aliases.iter().collect();
-    written.sort_by_key(|(_, alias)| (alias.module, alias.span));
-    for (&name, alias) in written {
-        let own = alias
-            .parameters
-            .iter()
-            .map(|&parameter| h::Type::Variable(parameter))
-            .collect();
-        let ty = expand(
-            &h::Type::Named(name, own),
-            aliases,
-            symbols,
-            &mut Vec::new(),
-        )
-        .map_err(|message| error(alias.module, alias.span, message))?;
-        expanded.insert(
-            name,
-            Alias {
-                parameters: alias.parameters.clone(),
-                ty,
-                module: alias.module,
-                span: alias.span,
-            },
-        );
-    }
-    for module in modules {
-        let id = module.source;
-        for item in &mut module.items {
-            match item {
-                h::Item::Data(data) => {
-                    let span = data.span;
-                    let fields = data
-                        .constructors
-                        .iter_mut()
-                        .flat_map(|constructor| &mut constructor.fields)
-                        .chain(data.wrapper.iter_mut().map(|wrapper| &mut wrapper.field));
-                    for field in fields {
-                        *field = expand(field, &expanded, symbols, &mut Vec::new())
-                            .and_then(|field| Ok(typed(field, constraint_aliases, symbols)?))
-                            .map_err(|message| error(id, span, message))?;
-                    }
-                    for method in &mut data.methods {
-                        if let h::MethodItem::Signature(signature) = method {
-                            expand_signature(signature, (&expanded, constraint_aliases), symbols)
+            self.expanded.insert(
+                name,
+                Alias {
+                    parameters: alias.parameters.clone(),
+                    ty,
+                    module: alias.module,
+                    span: alias.span,
+                },
+            );
+        }
+        let (expanded, constraint_aliases) = (&self.expanded, &self.constraint_aliases);
+        for module in modules {
+            let id = module.source;
+            for item in &mut module.items {
+                match item {
+                    h::Item::Data(data) => {
+                        let span = data.span;
+                        let fields = data
+                            .constructors
+                            .iter_mut()
+                            .flat_map(|constructor| &mut constructor.fields)
+                            .chain(data.wrapper.iter_mut().map(|wrapper| &mut wrapper.field));
+                        for field in fields {
+                            *field = expand(field, expanded, symbols, &mut Vec::new())
+                                .and_then(|field| Ok(typed(field, constraint_aliases, symbols)?))
+                                .map_err(|message| error(id, span, message))?;
+                        }
+                        for method in &mut data.methods {
+                            if let h::MethodItem::Signature(signature) = method {
+                                expand_signature(
+                                    signature,
+                                    (expanded, constraint_aliases),
+                                    symbols,
+                                )
                                 .map_err(|message| error(id, signature.span, message))?;
+                            }
                         }
                     }
+                    h::Item::Signature(signature) => {
+                        expand_signature(signature, (expanded, constraint_aliases), symbols)
+                            .map_err(|message| error(id, signature.span, message))?;
+                    }
+                    h::Item::Clause(_) => {}
                 }
-                h::Item::Signature(signature) => {
-                    expand_signature(signature, (&expanded, constraint_aliases), symbols)
-                        .map_err(|message| error(id, signature.span, message))?;
-                }
-                h::Item::Clause(_) => {}
             }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 fn expand_signature(

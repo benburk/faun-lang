@@ -1204,7 +1204,7 @@ impl Checker<'_> {
         let Ty::Named(owner, _) = receiver else {
             return None;
         };
-        let data = self.data.get(owner)?;
+        let data = self.data.get(owner).or_else(|| self.earlier.get(owner))?;
         let name = self.symbols.spelling(*owner);
         let variables: Vec<_> = data
             .parameters

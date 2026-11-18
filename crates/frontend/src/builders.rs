@@ -18,9 +18,14 @@ use crate::context::Context;
 use crate::hir as h;
 
 /// `program` with every record builder rewritten, its signatures' aliases
-/// already expanded.
-pub(crate) fn desugar(mut program: h::Program, cx: &mut Context) -> h::Program {
-    let pairings = pairings(&program.modules);
+/// already expanded: `pairings` are the functions asking for them that the
+/// modules before it declare, to which it adds its own.
+pub(crate) fn desugar(
+    mut program: h::Program,
+    cx: &mut Context,
+    pairings: &mut HashSet<Symbol>,
+) -> h::Program {
+    pairings.extend(self::pairings(&program.modules));
     if pairings.is_empty() {
         return program;
     }
@@ -28,11 +33,11 @@ pub(crate) fn desugar(mut program: h::Program, cx: &mut Context) -> h::Program {
     for module in &mut program.modules {
         for item in &mut module.items {
             match item {
-                h::Item::Clause(clause) => clause_builders(clause, &pairings, sites),
+                h::Item::Clause(clause) => clause_builders(clause, pairings, sites),
                 h::Item::Data(data) => {
                     for method in &mut data.methods {
                         if let h::MethodItem::Clause(clause) = method {
-                            clause_builders(clause, &pairings, sites);
+                            clause_builders(clause, pairings, sites);
                         }
                     }
                 }

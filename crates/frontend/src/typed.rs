@@ -13,7 +13,7 @@ use crate::check::{InferredBound, InferredScheme, InferredType};
 use crate::hir::{self as h, LocalId, SiteId};
 use crate::{ModuleId, Symbol};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub data: HashMap<Symbol, crate::declarations::Data>,

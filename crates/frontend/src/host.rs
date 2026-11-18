@@ -105,7 +105,7 @@ pub(crate) fn sign_main(mut program: h::Program, cx: &Context, main: Option<&Mai
         .iter_mut()
         .find(|module| module.source == main.module);
     if let (false, Some(span), Some(spelling), Some(module)) = (signed, written, spelling, module) {
-        let signature = cx.host.entry_signature(span, main.symbol, spelling);
+        let signature = cx.host().entry_signature(span, main.symbol, spelling);
         module.items.push(signature);
     }
     program
@@ -122,7 +122,7 @@ pub(crate) fn check_application_abi(
     cx: &Context,
     main: &Main,
 ) -> Result<(), Diagnostic> {
-    let host = &cx.host;
+    let host = cx.host();
     let functions = &program.functions;
     let span = functions
         .iter()
