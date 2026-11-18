@@ -228,7 +228,8 @@ impl Octagon {
     }
 
     /// Say that a variable lies within `bounds`, without closing.
-    pub(super) fn bound(&mut self, variable: usize, bounds: Bounds) {
+    #[cfg(test)]
+    fn bound(&mut self, variable: usize, bounds: Bounds) {
         self.assume(Constraint::least(variable, Bound::from(bounds.low)));
         if let Some(high) = bounds.high {
             self.assume(Constraint::most(variable, Bound::from(high)));
@@ -277,7 +278,6 @@ impl Octagon {
                 }
             }
         }
-        self.zone();
     }
 
     /// Say that `fresh`, a variable just introduced with bounds of its own
@@ -345,7 +345,6 @@ impl Octagon {
                 }
             }
         }
-        self.zone();
         // Its own bounds, as introduced, where tighter than `from` moved
         // says: they bound `from`, and through it the rest.
         self.add(Constraint {
@@ -423,20 +422,36 @@ impl Octagon {
         self.tighten()
     }
 
-    /// Forget every constraint on a sum or a difference of negations, where
-    /// only differences are kept: a zone, for measuring what sums earn.
-    fn zone(&mut self) {
-        if super::packs::Relations::chosen() != super::packs::Relations::Zones {
-            return;
+    /// Say a variable of a closed matrix lies within `bounds`, closing again
+    /// once for both its ends: the two constraints go through the same two
+    /// nodes. Answers whether any value still meets every constraint.
+    pub(super) fn narrow(&mut self, variable: usize, bounds: Bounds) -> bool {
+        let (up, down) = (node(variable, false), node(variable, true));
+        let least = -2 * Bound::from(bounds.low);
+        let most = bounds.high.map_or(INFINITE, |high| 2 * Bound::from(high));
+        if least >= self.get(down, up) && most >= self.get(up, down) {
+            return !self.is_empty();
+        }
+        self.assume(Constraint::least(variable, Bound::from(bounds.low)));
+        if let Some(high) = bounds.high {
+            self.assume(Constraint::most(variable, Bound::from(high)));
         }
         let side = self.side;
-        for from in 0..side {
-            for to in 0..side {
-                if from / 2 != to / 2 && from % 2 != to % 2 {
-                    self.put(from, to, INFINITE);
+        for via in [up, down] {
+            for from in 0..side {
+                let first = self.get(from, via);
+                if first >= INFINITE {
+                    continue;
+                }
+                for to in 0..side {
+                    let through = plus(first, self.get(via, to));
+                    if through < self.get(from, to) {
+                        self.put(from, to, through);
+                    }
                 }
             }
         }
+        self.tighten()
     }
 
     /// The integer half of closing, after shortest paths: each variable's
@@ -476,7 +491,6 @@ impl Octagon {
         for at in 0..side {
             self.put(at, at, 0);
         }
-        self.zone();
         true
     }
 
@@ -505,6 +519,193 @@ impl Octagon {
             }
         }
     }
+}
+
+/// What range analysis needs of a relational domain: constraints between
+/// two values, or of one, said, closed, joined and read. The solver is
+/// written over this, so the domain is a choice made where it is called.
+pub(super) trait Domain: Clone + std::fmt::Debug + PartialEq {
+    /// Whether it relates anything at all; where not, the solver keeps
+    /// intervals alone and never builds one.
+    const RELATES: bool = true;
+    /// Nothing known of `variables` values.
+    fn top(variables: usize) -> Self;
+    fn variables(&self) -> usize;
+    /// The most `from - to` can be, nodes as [`node`] names them.
+    fn get(&self, from: usize, to: usize) -> Bound;
+    /// What a value can be by its own bounds.
+    fn bounds(&self, variable: usize) -> Bounds;
+    fn forget(&mut self, variable: usize);
+    fn introduce(&mut self, variable: usize, bounds: Bounds);
+    fn assign(
+        &mut self,
+        fresh: usize,
+        from: usize,
+        least: Option<Bound>,
+        most: Option<Bound>,
+    ) -> bool;
+    fn add(&mut self, constraint: Constraint) -> bool;
+    /// Say a value lies within `bounds`, and close.
+    fn narrow(&mut self, variable: usize, bounds: Bounds) -> bool {
+        self.add(Constraint::least(variable, Bound::from(bounds.low)))
+            && bounds
+                .high
+                .is_none_or(|high| self.add(Constraint::most(variable, Bound::from(high))))
+    }
+    fn assume(&mut self, constraint: Constraint);
+    fn close(&mut self) -> bool;
+    fn join(&mut self, other: &Self);
+}
+
+impl Domain for Octagon {
+    fn top(variables: usize) -> Self {
+        Self::top(variables)
+    }
+    fn variables(&self) -> usize {
+        Self::variables(self)
+    }
+    fn get(&self, from: usize, to: usize) -> Bound {
+        Self::get(self, from, to)
+    }
+    fn bounds(&self, variable: usize) -> Bounds {
+        Self::bounds(self, variable)
+    }
+    fn forget(&mut self, variable: usize) {
+        Self::forget(self, variable);
+    }
+    fn introduce(&mut self, variable: usize, bounds: Bounds) {
+        Self::introduce(self, variable, bounds);
+    }
+    fn assign(
+        &mut self,
+        fresh: usize,
+        from: usize,
+        least: Option<Bound>,
+        most: Option<Bound>,
+    ) -> bool {
+        Self::assign(self, fresh, from, least, most)
+    }
+    fn add(&mut self, constraint: Constraint) -> bool {
+        Self::add(self, constraint)
+    }
+    fn narrow(&mut self, variable: usize, bounds: Bounds) -> bool {
+        Self::narrow(self, variable, bounds)
+    }
+    fn assume(&mut self, constraint: Constraint) {
+        Self::assume(self, constraint);
+    }
+    fn close(&mut self) -> bool {
+        Self::close(self)
+    }
+    fn join(&mut self, other: &Self) {
+        Self::join(self, other);
+    }
+}
+
+/// Differences `x - y <= c` alone: an octagon whose sums are forgotten
+/// after every step, for measuring what sums earn.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Zone(Octagon);
+
+impl Zone {
+    /// Forget every constraint on a sum or a difference of negations.
+    fn differences(&mut self) {
+        let side = 2 * self.0.variables();
+        for from in 0..side {
+            for to in 0..side {
+                if from / 2 != to / 2 && from % 2 != to % 2 {
+                    self.0.put(from, to, INFINITE);
+                }
+            }
+        }
+    }
+}
+
+impl Domain for Zone {
+    fn top(variables: usize) -> Self {
+        Self(Octagon::top(variables))
+    }
+    fn variables(&self) -> usize {
+        self.0.variables()
+    }
+    fn get(&self, from: usize, to: usize) -> Bound {
+        self.0.get(from, to)
+    }
+    fn bounds(&self, variable: usize) -> Bounds {
+        self.0.bounds(variable)
+    }
+    fn forget(&mut self, variable: usize) {
+        self.0.forget(variable);
+    }
+    fn introduce(&mut self, variable: usize, bounds: Bounds) {
+        self.0.introduce(variable, bounds);
+        self.differences();
+    }
+    fn assign(
+        &mut self,
+        fresh: usize,
+        from: usize,
+        least: Option<Bound>,
+        most: Option<Bound>,
+    ) -> bool {
+        let holds = self.0.assign(fresh, from, least, most);
+        self.differences();
+        holds
+    }
+    fn add(&mut self, constraint: Constraint) -> bool {
+        let holds = self.0.add(constraint);
+        self.differences();
+        holds
+    }
+    fn narrow(&mut self, variable: usize, bounds: Bounds) -> bool {
+        let holds = self.0.narrow(variable, bounds);
+        self.differences();
+        holds
+    }
+    fn assume(&mut self, constraint: Constraint) {
+        self.0.assume(constraint);
+    }
+    fn close(&mut self) -> bool {
+        let holds = self.0.close();
+        self.differences();
+        holds
+    }
+    fn join(&mut self, other: &Self) {
+        self.0.join(&other.0);
+    }
+}
+
+/// No relations: intervals alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Intervals;
+
+impl Domain for Intervals {
+    const RELATES: bool = false;
+    fn top(_: usize) -> Self {
+        Self
+    }
+    fn variables(&self) -> usize {
+        0
+    }
+    fn get(&self, _: usize, _: usize) -> Bound {
+        INFINITE
+    }
+    fn bounds(&self, _: usize) -> Bounds {
+        Bounds::ANY
+    }
+    fn forget(&mut self, _: usize) {}
+    fn introduce(&mut self, _: usize, _: Bounds) {}
+    fn assign(&mut self, _: usize, _: usize, _: Option<Bound>, _: Option<Bound>) -> bool {
+        true
+    }
+    fn add(&mut self, _: Constraint) -> bool {
+        true
+    }
+    fn assume(&mut self, _: Constraint) {}
+    fn close(&mut self) -> bool {
+        true
+    }
+    fn join(&mut self, _: &Self) {}
 }
 
 #[cfg(test)]
@@ -878,6 +1079,42 @@ mod tests {
             assert_eq!(octagon.assign(2, 0, Some(least), Some(most)), feasible);
             if feasible {
                 assert_eq!(octagon, added, "{constraints:?} {own:?} {least} {most}");
+            }
+        }
+    }
+
+    /// Narrowing a variable to bounds closes as adding each end does.
+    #[test]
+    fn narrowing_closes_as_adding_both_ends_does() {
+        let mut random = Lcg(23);
+        for _ in 0..300 {
+            let constraints = random_constraints(&mut random, 3, 4);
+            let mut octagon = Octagon::top(3);
+            for variable in 0..3 {
+                octagon.bound(
+                    variable,
+                    Bounds {
+                        low: 0,
+                        high: Some(9),
+                    },
+                );
+            }
+            for &constraint in &constraints {
+                octagon.assume(constraint);
+            }
+            if !octagon.close() {
+                continue;
+            }
+            let bounds = Bounds {
+                low: random.next(5),
+                high: Some(3 + random.next(7)),
+            };
+            let mut added = octagon.clone();
+            let feasible = added.add(Constraint::least(1, Bound::from(bounds.low)))
+                && added.add(Constraint::most(1, Bound::from(bounds.high.unwrap())));
+            assert_eq!(octagon.narrow(1, bounds), feasible);
+            if feasible {
+                assert_eq!(octagon, added, "{constraints:?} {bounds:?}");
             }
         }
     }
