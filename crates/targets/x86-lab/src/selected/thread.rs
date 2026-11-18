@@ -19,7 +19,7 @@
 //! so an edge is never moved merely to land somewhere else. A block no edge
 //! reaches any more is dropped afterwards, with its instructions.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::{BlockDraft, Immediate, Inst, Opcode, Selector, Terminator, VReg, append};
 use faun_core::index::{Pool, Range};
@@ -206,7 +206,7 @@ impl Selector<'_> {
                 break;
             }
             let block = &self.blocks[at];
-            let mut held: HashMap<VReg, Option<Carried>> = HashMap::new();
+            let mut held: HashMap<VReg, Option<Carried>> = HashMap::default();
             for (&param, &value) in block.params.iter().zip(&carried) {
                 held.insert(param, Some(value));
             }

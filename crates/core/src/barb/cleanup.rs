@@ -20,7 +20,7 @@
 //! Declarations and constants stay in place; expression IDs and ranges change.
 
 use super::terms::TermArena;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range, SequenceOperation};
 
@@ -29,12 +29,12 @@ pub(super) fn cleanup(program: &mut Program) {
     let mut inert = Inert {
         pure: super::calls::pure(program, &recognised),
         sequences: recognised.sequences.clone(),
-        known: HashMap::new(),
+        known: HashMap::default(),
     };
     let mut rewrite = Rewrite {
         source: program,
         terms: TermArena::default(),
-        copied: HashMap::new(),
+        copied: HashMap::default(),
     };
     let mut bodies = vec![];
     // Every definition is a root, not just the entry or its reachable callees.

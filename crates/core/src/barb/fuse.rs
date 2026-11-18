@@ -24,7 +24,7 @@
 //! work, and skips what the producer would have made past where the
 //! consumer stops, which only work nothing can observe may have done to it.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::copy::{self, Scope};
 use super::facts::Recognised;
@@ -37,10 +37,10 @@ pub(crate) fn fuse(program: &mut Program) {
     let mut fusion = Fusion {
         pure: super::calls::pure(program, &recognised),
         recognised,
-        producers: HashMap::new(),
-        consumers: HashMap::new(),
-        fused: HashMap::new(),
-        prepends: HashMap::new(),
+        producers: HashMap::default(),
+        consumers: HashMap::default(),
+        fused: HashMap::default(),
+        prepends: HashMap::default(),
         program,
     };
     let mut bodies = Vec::new();
@@ -715,7 +715,7 @@ impl Fusion<'_> {
         base: usize,
     ) -> Atom {
         let bindings = self.program.bindings(body.bindings).to_vec();
-        let mut deferred: HashMap<usize, Deferred> = HashMap::new();
+        let mut deferred: HashMap<usize, Deferred> = HashMap::default();
         let count = bindings.len();
         for (at, &binding) in bindings
             .iter()

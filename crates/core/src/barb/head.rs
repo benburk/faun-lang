@@ -47,8 +47,8 @@
 //!
 //! [`Program::pure`]: super::calls::pure
 
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 
 use super::copy::{self, Scope};
 use super::facts::Recognised;
@@ -80,7 +80,7 @@ pub(crate) fn heads(program: &mut Program) {
         sites: &found.sites,
         feeding: &found.feeding,
         copies: &copies,
-        fed: RefCell::new(HashMap::new()),
+        fed: RefCell::new(HashMap::default()),
     };
     let mut bodies: Vec<_> = wanted
         .iter()
@@ -159,10 +159,10 @@ fn found(program: &Program, recognised: &Recognised, pure: &[bool]) -> Found {
         program,
         recognised,
         pure,
-        producers: HashMap::new(),
-        walkers: HashMap::new(),
-        sites: HashMap::new(),
-        feeding: HashSet::new(),
+        producers: HashMap::default(),
+        walkers: HashMap::default(),
+        sites: HashMap::default(),
+        feeding: HashSet::default(),
     };
     for at in 0..program.functions().len() {
         let id = FnId::at(at);
@@ -558,7 +558,7 @@ fn folded(program: &Program, recognised: &Recognised, walk: FnId, list: usize) -
         arity,
     };
     let fields = program.fields(step.ctor).len();
-    fold.folds(step.body, arity + fields, acc, &mut HashMap::new())
+    fold.folds(step.body, arity + fields, acc, &mut HashMap::default())
         .then_some(acc)
 }
 
@@ -582,7 +582,7 @@ fn searched_nothing(program: &Program, walk: FnId, list: usize) -> Option<CtorId
     let fields = program.fields(step.ctor).len();
     let level = search.arity + fields;
     search
-        .searches(step.body, level, nothing, &mut HashMap::new())
+        .searches(step.body, level, nothing, &mut HashMap::default())
         .then_some(nothing)
 }
 
@@ -1074,7 +1074,7 @@ fn joins(recognised: &Recognised, id: FnId) -> bool {
 /// first of `bindings` takes `base`; a binding reads only those before it,
 /// so a level its arms bind for themselves is never one of them.
 fn needs(program: &Program, bindings: &[ExprId], base: usize, level: usize) -> HashSet<usize> {
-    let mut needed = HashSet::new();
+    let mut needed = HashSet::default();
     let mut waiting = vec![level];
     while let Some(level) = waiting.pop() {
         let Some(&binding) = level.checked_sub(base).and_then(|at| bindings.get(at)) else {

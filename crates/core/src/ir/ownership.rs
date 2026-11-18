@@ -13,7 +13,7 @@
 //! one costs its caller nothing. Owning is decided to a fixed point, since
 //! passing a parameter on to an owned one consumes it.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::{Class, FunctionId, Op, Program, RegionId, ValueId};
 
@@ -57,7 +57,7 @@ pub(super) struct Liveness {
 
 impl Liveness {
     pub(super) fn of(source: &Program, region: RegionId) -> Self {
-        let mut last = HashMap::new();
+        let mut last = HashMap::default();
         let mut uses = Vec::new();
         for (at, (op, _)) in source.walk(region).enumerate() {
             let mut read = Vec::new();

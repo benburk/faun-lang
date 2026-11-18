@@ -1,7 +1,7 @@
 //! The constant module owns storage and every insertion path. Only Program
 //! pairs these operations with its declaration metadata; the pool is not public.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use num_bigint::BigUint;
 

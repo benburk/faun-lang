@@ -47,7 +47,7 @@
 //! it hands. Constants are compared by identity, so two interned apart
 //! count as two.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use super::copy::{self, Scope};
 use super::{Atom, Body, ConstId, Expr, ExprId, FnId, Local, Program};
@@ -77,7 +77,7 @@ fn copy_for_values(program: &mut Program) {
         let passed = &sites.passed[at];
         // Each distinct key, in the order its first call hands it.
         let mut keys: Vec<Key> = Vec::new();
-        let mut seen: HashSet<Key> = HashSet::new();
+        let mut seen: HashSet<Key> = HashSet::default();
         for call in calls {
             let key = call.key(passed);
             if seen.insert(key.clone()) {

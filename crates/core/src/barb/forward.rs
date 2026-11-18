@@ -29,7 +29,7 @@
 //! the definitions putting one element or one list after another are
 //! written here, as recognized sequence operations, where none is found.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::copy::{self, Scope};
 use super::facts::Recognised;
@@ -43,7 +43,7 @@ pub(crate) fn forward(program: &mut Program) {
     let count = program.functions().len();
     let mut writer = Writer {
         recognised,
-        helpers: HashMap::new(),
+        helpers: HashMap::default(),
         program,
     };
     let mut bodies = Vec::new();

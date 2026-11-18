@@ -1,7 +1,7 @@
 //! Program storage, queries, and construction entry points.
 
+use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::collections::HashMap;
 
 use super::budget::Budget;
 use super::builder::Builder;

@@ -44,7 +44,7 @@
 //! buffer nothing else's to write. Fusion comes first, since a list fusion
 //! never builds is better than one written in place.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::copy::{self, Scope};
 use super::facts::Recognised;
@@ -58,9 +58,9 @@ use super::{
 pub(crate) fn in_place(program: &mut Program) {
     let recognised = program.recognised().clone();
     let walks = found(program, &recognised);
-    let mut operations = HashMap::new();
-    let mut placings = HashMap::new();
-    let mut entries = HashMap::new();
+    let mut operations = HashMap::default();
+    let mut placings = HashMap::default();
+    let mut entries = HashMap::default();
     // A walk going on with what another made of its rest was found after
     // it, so the other is written first.
     for (id, walk) in &walks {
@@ -92,11 +92,11 @@ pub(crate) fn in_place(program: &mut Program) {
 /// made of its rest.
 fn found(program: &Program, recognised: &Recognised) -> Vec<(FnId, Walk)> {
     let mut walks: Vec<(FnId, Walk)> = Vec::new();
-    let mut known: HashMap<FnId, Known> = HashMap::new();
+    let mut known: HashMap<FnId, Known> = HashMap::default();
     // Each round takes only walks no round took, so it goes round at most
     // once for each definition: a walk whose base case does not answer
     // what it built is found once, and never becomes known.
-    let mut taken: HashSet<FnId> = HashSet::new();
+    let mut taken: HashSet<FnId> = HashSet::default();
     loop {
         let more: Vec<_> = (0..program.functions().len())
             .map(FnId::at)
@@ -281,7 +281,7 @@ impl<'r> Steps<'r> {
             known,
             appends: Vec::new(),
             inners: Vec::new(),
-            reads: HashMap::new(),
+            reads: HashMap::default(),
             rounds: Vec::new(),
             refused: false,
         }
