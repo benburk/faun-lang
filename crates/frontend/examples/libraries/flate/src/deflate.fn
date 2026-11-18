@@ -216,26 +216,23 @@ lazy(context, at, head, prev, pending, pending_distance, waiting, symbols, start
 )
 
 # Bits written least significant first: whole bytes in `out`, and the
-# `count` bits after them in `bits`, fewer than 32.
-Writer = {out: List(U8), bits: U64, count: Nat}
+# `count` bits after them in `bits`, fewer than 8.
+Writer = {out: List(U8), bits: Nat, count: Nat}
 
 empty_writer : Writer
-empty_writer = {out: [], bits: U64.of_nat(0), count: 0}
+empty_writer = {out: [], bits: 0, count: 0}
 
-# `value`'s low `width` bits written after the rest, `width` at most 16.
-put : (Writer, U64, Nat) -> Writer
-put({out, bits, count}, value, width) -> (
-  joined = bits | value.shift_left(count)
-  total = count + width
-  if total < 32 return {out, bits: joined, count: total}
-  (a, b, c, d, _, _, _, _) = joined.le_bytes()
-  {out: out.append(a).append(b).append(c).append(d), bits: joined.shift_right(32), count: total - 32}
-)
+# `value`'s low `width` bits written after the rest.
+put : (Writer, Nat, Nat) -> Writer
+put({out, bits, count}, value, width) -> whole_bytes(out, bits + value.shift_left(count), count + width)
+
+whole_bytes : (List(U8), Nat, Nat) -> Writer
+whole_bytes(out, bits, count) if count >= 8 -> whole_bytes(out.append(U8.of_nat(bits)), bits / 256, count - 8)
+whole_bytes(out, bits, count) -> {out, bits, count}
 
 # The bits written out, the last byte filled with noughts.
 aligned : Writer -> Writer
-aligned({out, bits, count}) if count > 0 ->
-  aligned({out: out.append(bits.to_u8()), bits: bits.shift_right(8), count: count - count.min(8)})
+aligned({out, bits, count}) if count > 0 -> {out: out.append(U8.of_nat(bits)), bits: 0, count: 0}
 aligned(written) -> written
 
 # A code to write with: for each symbol, its length times 65536 plus its
@@ -258,8 +255,8 @@ code_of(lengths) -> (
 
 put_symbol : (Writer, Code, Nat) -> Writer
 put_symbol(written, code, symbol) -> (
-  entry = U64.of_u32(code.get(symbol).ok_or(0))
-  put(written, entry & 0xffff, entry.shift_right(16).to_nat())
+  entry = code.get(symbol).ok_or(0).to_nat()
+  put(written, entry % 65536, entry / 65536)
 )
 
 # For each length less 3, its symbol less 257.
@@ -336,16 +333,16 @@ block(context, written, symbols, start, end, last) -> (
   final = if last then 1 else 0
   if stored_bits < fixed_bits.min(dynamic_bits) return stored(written, context.input, start, end, last)
   if fixed_bits <= dynamic_bits return
-    symbols_put(put(written, U64.of_nat(final + 2), 3), symbols, fixed_literals, fixed_distances)
-  header = put(put(put(put(written, U64.of_nat(final + 4), 3), U64.of_nat(literal_count - 257), 5), U64.of_nat(distance_count - 1), 5), U64.of_nat(order_count - 4), 4)
-  with_lengths = ordered.take(order_count).fold(header, |w, length| put(w, U64.of_nat(length), 3))
+    symbols_put(put(written, final + 2, 3), symbols, fixed_literals, fixed_distances)
+  header = put(put(put(put(written, final + 4, 3), literal_count - 257, 5), distance_count - 1, 5), order_count - 4, 4)
+  with_lengths = ordered.take(order_count).fold(header, |w, length| put(w, length, 3))
   run_code = code_of(run_lengths_lengths)
   with_runs = runs.fold(with_lengths, |w, (symbol, value)| (
     w2 = put_symbol(w, run_code, symbol)
     symbol is (
-      16 then put(w2, U64.of_nat(value), 2)
-      17 then put(w2, U64.of_nat(value), 3)
-      18 then put(w2, U64.of_nat(value), 7)
+      16 then put(w2, value, 2)
+      17 then put(w2, value, 3)
+      18 then put(w2, value, 7)
       _ then w2
     )
   ))
@@ -384,7 +381,7 @@ symbols_put(written, symbols, literals, distances) -> (
 # What `value` is past its symbol's base, in the symbol's extra bits.
 put_with_extra : (Writer, (Nat, Nat), Nat) -> Writer
 put_with_extra(written, (base, count), value) ->
-  if count == 0 then written else put(written, U64.of_nat(value - base), count)
+  if count == 0 then written else put(written, value - base, count)
 
 # The input from `start` below `end` as stored blocks of at most 65535
 # bytes, the last final where `last` says.
@@ -392,10 +389,10 @@ stored : (Writer, List(U8), Nat, Nat, Bool) -> Writer
 stored(written, input, start, end, last) -> (
   size = (end - start).min(65535)
   final = last & start + size >= end
-  {out, *} = aligned(put(written, U64.of_nat(if final then 1 else 0), 3))
+  {out, *} = aligned(put(written, if final then 1 else 0, 3))
   (a, b) = U16.of_nat(size).le_bytes()
   (c, d) = (!U16.of_nat(size)).le_bytes()
-  block_written = {out: out.concat([a, b, c, d]).concat(input.drop(start).take(size)), bits: U64.of_nat(0), count: 0}
+  block_written = {out: out.concat([a, b, c, d]).concat(input.drop(start).take(size)), bits: 0, count: 0}
   if start + size >= end then block_written else stored(block_written, input, start + size, end, last)
 )
 
