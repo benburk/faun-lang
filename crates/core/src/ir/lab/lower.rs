@@ -111,13 +111,7 @@ fn lower_with(
     barb::validate(program)?;
     let assumed = assumed(program, routines);
     let facts = &program.assuming(&assumed);
-    lowered(program, routines, facts, wanted).map_err(|error| match facts.unsettled() {
-        Some(id) => format!(
-            "{error}\nnote: working out how large each number can be did not settle (`{}` was still changing), so every number was taken to be of any size",
-            program.name(program.function(id).name)
-        ),
-        None => error,
-    })
+    lowered(program, routines, facts, wanted)
 }
 
 /// [`lower_with`], given the program's facts.
