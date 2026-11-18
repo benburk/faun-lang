@@ -9,18 +9,26 @@
 //! An inert binding is worked out only on the paths that read it: one read
 //! only inside one arm of a later match moves to the top of that arm, and
 //! what it reads may follow it there. Each run moves work one match down.
+//! A pure binding reading a sequence that an earlier binding writes, by
+//! replacing an element, adding one or joining another, is worked out
+//! before the write where everything it reads is known there, so the write
+//! is the sequence's last use and can be made in place: in
+//! `{head: head.put(key, at), prev: prev.put(at, head.get(key))}` the read of
+//! `head` goes before its `put`.
+//!
 //! Rebuild into fresh term pools, then replace the old pools in one commit.
 //! Declarations and constants stay in place; expression IDs and ranges change.
 
 use super::terms::TermArena;
 use std::collections::HashMap;
 
-use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
+use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range, SequenceOperation};
 
 pub(super) fn cleanup(program: &mut Program) {
     let recognised = program.recognised().clone();
     let mut inert = Inert {
         pure: super::calls::pure(program, &recognised),
+        sequences: recognised.sequences.clone(),
         known: HashMap::new(),
     };
     let mut rewrite = Rewrite {
@@ -56,6 +64,8 @@ struct PlannedBody {
     /// with the local it bound there, last first.
     sunk: Vec<(usize, PlannedExpr)>,
     bindings: Vec<Option<PlannedExpr>>,
+    /// The order the kept bindings are worked out in, by index.
+    order: Vec<usize>,
     tail: PlannedExpr,
 }
 
@@ -93,10 +103,35 @@ impl Read {
 struct Inert {
     /// Indexed by definition: see [`super::calls::pure`].
     pure: Vec<bool>,
+    /// Indexed by definition: the sequence operation it is recognized as.
+    sequences: Vec<Option<SequenceOperation>>,
     known: HashMap<ExprId, bool>,
 }
 
 impl Inert {
+    /// Whether `called` writes a sequence it is handed, which lowering does
+    /// in place where nothing else holds it.
+    fn writes(&self, called: FnId) -> bool {
+        matches!(
+            self.sequences[called.index()],
+            Some(
+                SequenceOperation::Replace
+                    | SequenceOperation::Append
+                    | SequenceOperation::Prepend
+                    | SequenceOperation::ReverseOnto
+            )
+        )
+    }
+
+    /// Whether `called` answers a run of the sequence it is handed, which
+    /// lowering holds in the same buffer.
+    fn views(&self, called: FnId) -> bool {
+        matches!(
+            self.sequences[called.index()],
+            Some(SequenceOperation::Drop | SequenceOperation::Take)
+        )
+    }
+
     fn is(&mut self, program: &Program, id: ExprId) -> bool {
         if let Some(&known) = self.known.get(&id) {
             return known;
@@ -129,11 +164,15 @@ fn plan_body(
     let mut reads = vec![Read::Unread; base + bindings.len()];
     let mut tail = plan_expr(program, inert, body.tail, &mut reads, bindings.len(), None);
     let mut kept: Vec<Option<PlannedExpr>> = (0..bindings.len()).map(|_| None).collect();
+    // Where each binding is worked out: its own index, the site it is
+    // moved into, or nowhere.
+    let mut sites = vec![None; bindings.len()];
     for (index, &id) in bindings.iter().enumerate().rev() {
         let read = reads.pop().expect("one local per binding");
         match (read, inert.is(program, id)) {
             (Read::Unread, true) => {}
             (Read::InArm { site, arm }, true) => {
+                sites[index] = Some(site);
                 let planned = plan_expr(program, inert, id, &mut reads, index, Some((site, arm)));
                 let target = if site == bindings.len() {
                     &mut tail
@@ -144,14 +183,19 @@ fn plan_body(
                 };
                 target.arms[arm].sunk.push((base + index, planned));
             }
-            _ => kept[index] = Some(plan_expr(program, inert, id, &mut reads, index, None)),
+            _ => {
+                sites[index] = Some(index);
+                kept[index] = Some(plan_expr(program, inert, id, &mut reads, index, None));
+            }
         }
     }
     let captures = reads.iter().map(|&read| read != Read::Unread).collect();
+    let order = Order::new(program, body, base, sites).reads_first(program, inert);
     (
         PlannedBody {
             sunk: vec![],
             bindings: kept,
+            order,
             tail,
         },
         captures,
@@ -202,6 +246,206 @@ fn plan_expr(
     PlannedExpr { id, arms: children }
 }
 
+/// Where a body's bindings are worked out and what each reads, for moving
+/// reads of a sequence before a write of it.
+struct Order {
+    bindings: Vec<ExprId>,
+    base: usize,
+    /// Where each binding is worked out: see [`plan_body`].
+    sites: Vec<Option<usize>>,
+    /// The locals each kept binding reads, with those of what is moved into
+    /// it, by index.
+    reads: Vec<Vec<usize>>,
+    /// The locals the body's answer reads, with those of what is moved into
+    /// it.
+    answer: Vec<usize>,
+}
+
+impl Order {
+    fn new(program: &Program, body: Body, base: usize, sites: Vec<Option<usize>>) -> Self {
+        let bindings = program.bindings(body.bindings).to_vec();
+        let mut reads = vec![vec![]; bindings.len()];
+        let mut answer = vec![];
+        free_reads(program, body.tail, base + bindings.len(), &mut answer);
+        for (index, &id) in bindings.iter().enumerate() {
+            match sites[index] {
+                Some(site) if site < bindings.len() => {
+                    free_reads(program, id, base + index, &mut reads[site]);
+                }
+                Some(_) => free_reads(program, id, base + index, &mut answer),
+                None => {}
+            }
+        }
+        Self {
+            bindings,
+            base,
+            sites,
+            reads,
+            answer,
+        }
+    }
+
+    /// The kept bindings' order: as written, but where a binding writes a
+    /// sequence that only later pure bindings read again, and what they read
+    /// besides is known before the write, those bindings, and the ones they
+    /// read in between, are worked out just before it.
+    fn reads_first(&self, program: &Program, inert: &mut Inert) -> Vec<usize> {
+        let kept: Vec<usize> = (0..self.bindings.len())
+            .filter(|&index| self.sites[index] == Some(index))
+            .collect();
+        let mut order = kept.clone();
+        for &write in &kept {
+            let Expr::Call(called, args) = program.expr(self.bindings[write]) else {
+                continue;
+            };
+            if !inert.writes(called) {
+                continue;
+            }
+            for &Atom(written) in program.atoms(args) {
+                let written = written.index();
+                if self.answer.contains(&written) {
+                    continue;
+                }
+                if let Some(moved) = self.moved(program, inert, &order, (write, written)) {
+                    let at = order
+                        .iter()
+                        .position(|&index| index == write)
+                        .expect("kept");
+                    let rest = order[at..].iter().filter(|index| !moved.contains(index));
+                    let mut reordered = order[..at].to_vec();
+                    reordered.extend(order[at..].iter().filter(|index| moved.contains(index)));
+                    reordered.extend(rest);
+                    order = reordered;
+                }
+            }
+        }
+        order
+    }
+
+    /// The bindings after `write` in `order` that read the local `written`
+    /// or a run of it, with the ones after it they read, where every one is
+    /// pure, writes none of those, and none reads `write`'s answer.
+    fn moved(
+        &self,
+        program: &Program,
+        inert: &mut Inert,
+        order: &[usize],
+        (write, written): (usize, usize),
+    ) -> Option<Vec<usize>> {
+        let at = order.iter().position(|&index| index == write)?;
+        // The sequence, and the runs of it moved bindings answer, which
+        // hold its buffer too and so must end before the write as well.
+        let mut held = vec![written];
+        let mut moved: Vec<usize> = vec![];
+        let mut next = 0;
+        loop {
+            for &index in &order[at + 1..] {
+                if !moved.contains(&index) && self.reads[index].iter().any(|r| held.contains(r)) {
+                    moved.push(index);
+                }
+            }
+            let Some(&index) = moved.get(next) else {
+                break;
+            };
+            next += 1;
+            let id = self.bindings[index];
+            if !inert.is(program, id) || writes(program, inert, id, &held) {
+                return None;
+            }
+            if let Expr::Call(called, args) = program.expr(id)
+                && inert.views(called)
+                && program
+                    .atoms(args)
+                    .first()
+                    .is_some_and(|a| held.contains(&a.0.index()))
+            {
+                held.push(self.base + index);
+                if self.answer.contains(&(self.base + index)) {
+                    return None;
+                }
+            }
+            self.needed(order, (at, index), &mut moved)?;
+        }
+        (!moved.is_empty()).then_some(moved)
+    }
+
+    /// Add to `moved` the bindings after the write at `at` in `order` that
+    /// the binding `index` reads, or `None` where it reads the write's
+    /// answer.
+    fn needed(
+        &self,
+        order: &[usize],
+        (at, index): (usize, usize),
+        moved: &mut Vec<usize>,
+    ) -> Option<()> {
+        for &read in &self.reads[index] {
+            let Some(site) = read.checked_sub(self.base).and_then(|at| self.sites[at]) else {
+                continue;
+            };
+            if site == index || moved.contains(&site) {
+                continue;
+            }
+            let place = order.iter().position(|&other| other == site)?;
+            if place == at {
+                return None;
+            }
+            if place > at {
+                moved.push(site);
+            }
+        }
+        Some(())
+    }
+}
+
+/// Add to `out` each local below `limit` that `id` reads, inside the arms
+/// of a match too.
+fn free_reads(program: &Program, id: ExprId, limit: usize, out: &mut Vec<usize>) {
+    let mut read = |Atom(local): Atom| {
+        if local.index() < limit && !out.contains(&local.index()) {
+            out.push(local.index());
+        }
+    };
+    match program.expr(id) {
+        Expr::Atom(a) => read(a),
+        Expr::Static(..) => {}
+        Expr::Con(_, args) | Expr::Call(_, args) => {
+            program.atoms(args).iter().for_each(|&a| read(a));
+        }
+        Expr::Match(value, arms) => {
+            read(value);
+            for arm in program.arms(arms) {
+                let body = arm.body;
+                for &inner in program.bindings(body.bindings).iter().chain([&body.tail]) {
+                    free_reads(program, inner, limit, out);
+                }
+            }
+        }
+    }
+}
+
+/// Whether `id` writes one of the locals `written` as a sequence, inside the
+/// arms of a match too.
+fn writes(program: &Program, inert: &Inert, id: ExprId, written: &[usize]) -> bool {
+    match program.expr(id) {
+        Expr::Call(called, args) => {
+            inert.writes(called)
+                && program
+                    .atoms(args)
+                    .iter()
+                    .any(|a| written.contains(&a.0.index()))
+        }
+        Expr::Match(_, arms) => program.arms(arms).iter().any(|arm| {
+            let body = arm.body;
+            program
+                .bindings(body.bindings)
+                .iter()
+                .chain([&body.tail])
+                .any(|&inner| writes(program, inert, inner, written))
+        }),
+        Expr::Atom(..) | Expr::Static(..) | Expr::Con(..) => false,
+    }
+}
+
 struct Rewrite<'a> {
     source: &'a Program,
     terms: TermArena,
@@ -211,7 +455,12 @@ struct Rewrite<'a> {
 }
 
 impl Rewrite<'_> {
-    fn body(&mut self, plan: PlannedBody, mut locals: Vec<Option<Atom>>, mut level: usize) -> Body {
+    fn body(
+        &mut self,
+        mut plan: PlannedBody,
+        mut locals: Vec<Option<Atom>>,
+        mut level: usize,
+    ) -> Body {
         let mut bindings = vec![];
         // Moved here from an enclosing body, they come first, in the order
         // they were written, each read in the scope it was written in: the
@@ -227,18 +476,23 @@ impl Rewrite<'_> {
             };
             locals[local] = Some(value);
         }
-        for binding in plan.bindings {
-            let value = binding.map(|binding| {
-                if let Expr::Atom(a) = self.source.expr(binding.id) {
-                    return local(&locals, a);
-                }
-                let expr = self.expr(binding, &locals, level);
+        // Each binding reads the locals written before it, which the order
+        // has worked out first, and a match's fields are numbered after them.
+        let start = locals.len();
+        locals.resize(start + plan.bindings.len(), None);
+        for index in plan.order {
+            let binding = plan.bindings[index]
+                .take()
+                .expect("an ordered binding is kept");
+            let value = if let Expr::Atom(a) = self.source.expr(binding.id) {
+                local(&locals, a)
+            } else {
+                let expr = self.expr(binding, &locals[..start + index], level);
                 bindings.push(self.terms.push(expr));
-                let value = Atom(Local::at(level));
                 level += 1;
-                value
-            });
-            locals.push(value);
+                Atom(Local::at(level - 1))
+            };
+            locals[start + index] = Some(value);
         }
         let expr = self.expr(plan.tail, &locals, level);
         // A body answering its last binding is that binding's expression.
