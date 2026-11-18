@@ -14,7 +14,8 @@ The work goes in steps, each a pull request reviewed before the next:
 1. **This note**, and **the separation**: the frontend checks the standard
    package alone, then the host and the program against what that left,
    numbering on from it. Nothing is serialized, so every compile still runs
-   both steps, and every image and refusal is what it was.
+   both steps, and every image and refusal is what it was but where symbol
+   numbering shows, below.
 2. **The snapshot**: what the first step leaves, written when the compiler
    is built and read back in place of the first step.
 
@@ -45,6 +46,22 @@ against.
 
 Every stage after checking, from specialization to Barb, still sees one
 program and one `Context`.
+
+### As built
+
+[`library.rs`](../crates/frontend/src/library.rs) holds the two steps. The
+loader stops after the standard package and goes on from where it stopped;
+resolution, the record builders, grouping, deriving, the checker and the
+coverage check each take the modules after those already checked, with what
+checking those left: an `Earlier` holding the number of modules checked,
+the next site, the prelude's identities, resolution's values and aliases,
+the builders' pairings, the checker's `Environment` and the typed program.
+Checking the whole program in one step is the same code with an empty
+`Earlier`, which is how an entry inside the standard package, and the
+frontend's own tests, are checked.
+
+Once the library is checked its modules' syntax is dropped, so nothing after
+can read it: a snapshot will not have it.
 
 ## What crosses it
 
@@ -81,6 +98,14 @@ Everything step two reads of step one, which is what a snapshot holds:
 - **The library's typed program**: every definition as typed HIR, its
   scheme, its declared types, and the members each type has by spelling.
   This is the largest part.
+
+What step one leaves today, for the built-in library: 22 modules from 162
+KB of text, 1,428 symbols, 745 typed definitions holding 9,096 expressions,
+21 declared types and 449 members by spelling, 745 schemes with 177 method
+spellings and 36 constructors in the checker's environment, and two
+functions asking for record builders. Printed with `Debug`, the typed program
+is 2.3 MB and the modules' interfaces 78 KB; a binary encoding would be a
+tenth of that or less.
 
 ### How specialization reads library bodies
 
@@ -156,12 +181,53 @@ the host and without the release profile's optimization; checking the
 library unoptimized takes perhaps a second. Cargo's `build-override` can
 raise the build script's optimization if that shows.
 
+## What the separation changed
+
+The empty program compiles in 171 million instructions where it took 174,
+and the others in about 1% to 2% fewer; of the 171, step one is 155 million,
+which is what a snapshot would replace with reading it back:
+
+| Compile  | Before |  After | Step one | Its share |
+| -------- | -----: | -----: | -------: | --------: |
+| empty    |  174.1 |  171.1 |    154.8 |       90% |
+| checksum |  250.6 |  247.3 |    154.8 |       63% |
+| n-body   | 1169.2 | 1165.1 |    154.8 |       13% |
+| k-nuc.   | 1987.9 | 1983.5 |    154.8 |        8% |
+| adler    |  287.4 |  284.4 |    154.8 |       54% |
+| position |  312.7 |  307.7 |    154.8 |       50% |
+
+Millions of user-space instructions, the median of five x86-64 builds
+favouring speed, pinned to one CPU, with the process's start, 1.3 million,
+taken from step one. The rest of the empty program's compile is the host's
+loading and checking, specialization, the tiers below, and dropping it all.
+
+Every image is byte for byte what it was, on every target with both
+backends, built favouring speed and size, but seven programs': n-body of the
+suite, its untyped twin among the examples, two Advent of Code solutions,
+the rock-paper-scissors arena and the JSON and LRU libraries' examples. In
+each, a record's fields are laid out in another order, and so are the
+values built and read with it, and nothing else differs. One refusal says
+`{y: Nat, x: Nat}` where it said `{x: Nat, y: Nat}`.
+
+The cause is that a record's fields, and a tag row's tags, are kept in the
+order of their names' symbols, which is the order the names were first
+interned. Before, the program's declarations were loaded before the
+library's bodies were resolved, so a field name the program declared came
+before a name only the library's bodies use; now the library is resolved
+and checked first, so its names come first. `Vec3 : {x: F64, y: F64, z: F64}`
+in n-body is laid out `y, x, z`, since a library body binds a `y` and none
+binds an `x`. No numbering that checks the library first can keep the old
+order, since it put names the program declares between the library's. A
+snapshot has the same order as this separation, so the images it makes will
+be these.
+
 ## Equivalence
 
-The separation is tested by the evaluator and the test suite: every image
-of the suite, the probes and their twins, and the examples, on every target
-with both backends, built favouring speed and size, byte for byte the same
-as before, and every refused program's message the same.
+The separation is tested by the evaluator and the test suite, comparing
+every image of the suite, the probes and their twins, and the examples, on
+every target with both backends, built favouring speed and size, with the
+trunk's, and every refused program's message; and by a test that checking a
+program after the library leaves the library's typed program as it was.
 
 The snapshot will be tested by:
 
@@ -173,6 +239,12 @@ The snapshot will be tested by:
 - the evaluator, as for any change: every image the same.
 
 ## Open questions
+
+- Whether a record's fields and a row's tags should be ordered by their
+  spelling rather than by when their names were interned. A layout would
+  then not move when the library's bodies start or stop using a name, and a
+  refusal would show `{x: Nat, y: Nat}` however the names were met. It
+  would move many images once, and is a change of its own.
 
 - Whether specialization should decode the library's definitions as it
   reaches them, or the whole typed program once.
