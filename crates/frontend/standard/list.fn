@@ -225,7 +225,7 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # `count` copies of `value`, written `List.repeat(value, count)`.
   repeat : (a, Nat) -> List(a)
-  repeat(value, count) -> repeat_ahead(value, count)
+  repeat(value, count) -> repeat_onto(value, count, [])
 
   # The first `count` elements and the rest.
   split_at : (List(a), Nat) -> (List(a), List(a))
@@ -424,9 +424,9 @@ merge_into([x, *left], right is [y, *_], key, built) if key(x) <= key(y) ->
   merge_into(left, right, key, [x, *built])
 merge_into(left, [y, *right], key, built) -> merge_into(left, right, key, [y, *built])
 
-repeat_ahead : (a, Nat) -> List(a)
-repeat_ahead(_, 0) -> []
-repeat_ahead(value, Succ(count)) -> [value, *repeat_ahead(value, count)]
+repeat_onto : (a, Nat, List(a)) -> List(a)
+repeat_onto(_, 0, built) -> built
+repeat_onto(value, Succ(count), built) -> repeat_onto(value, count, [value, *built])
 
 expect [3, 1, 2].sort() == [1, 2, 3] & [0].drop(1).sort().is_empty()
 expect [5, 3, 9, 1, 5, 6, 2, 8, 7, 4, 0].sort() == [0, 1, 2, 3, 4, 5, 5, 6, 7, 8, 9]

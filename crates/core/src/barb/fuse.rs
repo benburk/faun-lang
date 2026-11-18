@@ -2,7 +2,11 @@
 //!
 //! A producer walks a list and pushes one element onto an accumulator for
 //! each it passes, then answers the accumulator reversed: the elements in
-//! the order it made them. `map` and `trail` are written this way. A
+//! the order it made them. `map` and `trail` are written this way, and so
+//! is `range`, whose walk is down a number rather than a list: a number is
+//! a list of nothing but its length. One pushing the same value every
+//! round, as `repeat` does, may answer the accumulator as it stands, since
+//! from either end it built the same list. A
 //! consumer walks a list from the front, reading each element once and
 //! going on with nothing but the rest, in tail position: `fold`, `trail`,
 //! `find_index`. Where a producer's answer is read once, by a consumer, the
@@ -46,18 +50,27 @@ pub(crate) fn fuse(program: &mut Program) {
         if fusion.recognised.answered(id) {
             continue;
         }
-        let Some(body) = fusion.program.function(id).body() else {
-            continue;
-        };
-        if !fusion.calls_a_producer(body) {
-            continue;
+        if let Some(rewritten) = fusion.rewrite_function(id) {
+            bodies.push((id, rewritten));
         }
-        let params = fusion.program.params(id).len();
-        let locals = (0..params).map(|at| Atom(Local::at(at))).collect();
-        let rewritten = fusion.rewrite_body(body, locals, params);
-        bodies.push((id, rewritten));
     }
     fusion.program.replace_bodies(bodies);
+    // A fused walk is copied from its two, and what they called is what it
+    // calls: a chain written inside a step, as a walk recursing through a
+    // `map` writes it, is fused there too, each made walk read in turn.
+    let mut read = count;
+    while read < fusion.program.functions().len() {
+        let id = FnId::at(read);
+        read += 1;
+        if fusion.pure.get(id.index()) != Some(&true) {
+            continue;
+        }
+        if let Some(rewritten) = fusion.rewrite_function(id) {
+            fusion.program.replace_bodies(vec![(id, rewritten)]);
+            fusion.producers.remove(&id);
+            fusion.consumers.remove(&id);
+        }
+    }
 }
 
 /// A walk building a list, as [`Fusion::producer`] reads it.
@@ -123,6 +136,18 @@ const UNREAD: Atom = Atom(Local(u32::MAX));
 const REST: Atom = Atom(Local(u32::MAX - 1));
 
 impl Fusion<'_> {
+    /// The body of `id` with each producer it calls read once by a
+    /// consumer fused, where it calls one.
+    fn rewrite_function(&mut self, id: FnId) -> Option<Body> {
+        let body = self.program.function(id).body()?;
+        if !self.calls_a_producer(body) {
+            return None;
+        }
+        let params = self.program.params(id).len();
+        let locals = (0..params).map(|at| Atom(Local::at(at))).collect();
+        Some(self.rewrite_body(body, locals, params))
+    }
+
     /// Whether anything in a body calls a producer, which is all that makes
     /// rewriting it worth a copy.
     fn calls_a_producer(&mut self, body: Body) -> bool {
@@ -154,7 +179,10 @@ impl Fusion<'_> {
     /// `append(acc, e)` for the push and `prepend(acc, <empty>)`, or `acc`
     /// itself, at the end. What it goes on walking is its own: the rest, or
     /// whatever its step worked out. Its call may stand inside matches of
-    /// one arm ending the step.
+    /// one arm ending the step. What it walks may be a number, `zero` and
+    /// `succ(rest)` for `empty` and `push(x, rest)`; and where it pushes a
+    /// parameter it hands itself as it came, it may answer `acc` itself
+    /// having pushed in front.
     fn producer(&mut self, id: FnId) -> Option<Producer> {
         if let Some(&known) = self.producers.get(&id) {
             return known;
@@ -224,9 +252,12 @@ impl Fusion<'_> {
             return None;
         }
         let pushed = walk::bound(self.program, inner, base, args[acc].0.index())?;
-        self.pushed_element(pushed, acc, (built_push, built_recursive))?;
-        // Answered as it stands, it must have been built in order.
-        if ended.is_none() && !self.appends(pushed) {
+        // Answered as it stands, it must have been built in order -- or
+        // pushed the one value every time, handed on as it came, so that
+        // whichever end it was built from is the same list: a repeat.
+        let element = self.pushed_element(pushed, acc, (built_push, built_recursive))?;
+        let same = element.0.index() < arity && args[element.0.index()] == element;
+        if ended.is_none() && !self.appends(pushed) && !same {
             return None;
         }
         // Nothing else reads the accumulator, or the list it pushed onto.
