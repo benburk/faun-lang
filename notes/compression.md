@@ -602,6 +602,15 @@ wherever what the read needs is known there
 in place. A probe of 10000 such inserts into 1024 heads took 1.43 billion
 instructions, and takes 6 million.
 
+The workload was written around both copies, binding the old head before
+the insert and copying every match a byte at a time, so the suite could not
+see either fix. It is now written as one would teach it: the insert is the
+record update above, and a match that ends before what it writes is
+`out.concat(out.drop(from).take(length))`, only an overlapping one repeated
+a byte at a time, as `flate.fn` copies. What it prints is unchanged, and
+it runs 1.2% fewer instructions on x86-64 and 1.1% less fuel on wasm32.
+Slow natural code is a compiler bug to fix, not a spelling to work around.
+
 ## Related
 
 - [Collections](values/collections.md): `List` and its lookups

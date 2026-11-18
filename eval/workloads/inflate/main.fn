@@ -105,8 +105,7 @@ Chains = {head: List(Nat), prev: List(Nat)}
 insert : (List(U8), Chains, Nat) -> Chains
 insert(input, {head, prev}, at) if at + 3 <= input.len() -> (
   key = hash(input, at)
-  latest = head.get(key).ok_or(0)
-  {head: head.put(key, at + 1), prev: prev.put(at, latest)}
+  {head: head.put(key, at + 1), prev: prev.put(at, head.get(key).ok_or(0))}
 )
 insert(_, chains, _) -> chains
 
@@ -204,11 +203,17 @@ symbols(input, at, out) -> (
   symbols(input, after + extra + 5 + d_extra, copy(out, out.len() - distance, length))
 )
 
-# `length` bytes from `from` on appended one at a time, so a match may
-# overlap what it writes.
+# `length` bytes from `from` on appended. A match that ends before what it
+# writes is a run of `out` joined to it; one that overlaps what it writes
+# repeats it, a byte at a time.
 copy : (List(U8), Nat, Nat) -> List(U8)
-copy(out, _, 0) -> out
-copy(out, from, Succ(left)) -> copy(out.append(out.get(from).ok_or(0)), from + 1, left)
+copy(out, from, length) if from + length <= out.len() -> out.concat(out.drop(from).take(length))
+copy(out, from, length) -> repeat(out, from, length)
+
+# `left` bytes from `from` on appended, one at a time.
+repeat : (List(U8), Nat, Nat) -> List(U8)
+repeat(out, _, 0) -> out
+repeat(out, from, Succ(left)) -> repeat(out.append(out.get(from).ok_or(0)), from + 1, left)
 
 # The bytes of a stream of fixed blocks.
 inflate : List(U8) -> Result(List(U8), InflateError)
