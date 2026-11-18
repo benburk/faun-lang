@@ -117,6 +117,11 @@ struct Fusion<'a> {
 /// than reading something else.
 const UNREAD: Atom = Atom(Local(u32::MAX));
 
+/// What the consumer's step reads as the rest of its list, which it reads
+/// only to go round on, and going round is the fused walk's call instead:
+/// no fused body keeps it.
+const REST: Atom = Atom(Local(u32::MAX - 1));
+
 impl Fusion<'_> {
     /// Whether anything in a body calls a producer, which is all that makes
     /// rewriting it worth a copy.
@@ -170,7 +175,7 @@ impl Fusion<'_> {
         let body = self.program.function(id).body()?;
         let (list, arms) = walk::top_match(self.program, body)?;
         let params = self.program.params(id);
-        let (empty, push, _) = super::sequence::sequence(self.program, params[list])?;
+        let (empty, push, _) = walked(self.program, params[list])?;
         let arity = params.len();
         let [nil_arm, push_arm] = walk::split_arms(self.program, arms, empty, push)?;
         // The empty arm answers the accumulator reversed or prepended onto
@@ -206,7 +211,8 @@ impl Fusion<'_> {
         // it goes on walking is its own affair: the consumer is handed
         // what it pushed, wherever that came from.
         let push_body = push_arm.body;
-        let (inner, base) = innermost(self.program, push_body, arity + 2);
+        let fields = self.program.fields(push).len();
+        let (inner, base) = innermost(self.program, push_body, arity + fields);
         let Expr::Call(again, args) = self.program.expr(inner.tail) else {
             return None;
         };
@@ -381,9 +387,8 @@ impl Fusion<'_> {
         let list = pair.list;
         let (_, p_arms) = walk::top_match(self.program, p_body).expect("a producer's match");
         let (_, c_arms) = walk::top_match(self.program, c_body).expect("a consumer's match");
-        let walked = self.program.params(producer)[list];
-        let (empty, push, recursive) =
-            super::sequence::sequence(self.program, walked).expect("a list");
+        let walks = self.program.params(producer)[list];
+        let (empty, push, _) = walked(self.program, walks).expect("a list or a number");
         let taken = self.program.params(consumer)[pair.taken];
         let (c_empty, c_push, _) = super::sequence::sequence(self.program, taken).expect("a list");
         let [_, p_step] = walk::split_arms(self.program, p_arms, empty, push).expect("two arms");
@@ -396,7 +401,7 @@ impl Fusion<'_> {
                 let locals = pair.c_locals.clone();
                 copy::body(self.program, c_nil.body, locals, pair.arity, None)
             } else {
-                self.step(&pair, (p_step, recursive), c_step)
+                self.step(&pair, p_step, c_step)
             };
             arms.push(Arm {
                 ctor: arm.ctor,
@@ -463,13 +468,12 @@ impl Fusion<'_> {
     /// call, then the consumer's step on the element it would have pushed,
     /// going on with the fused walk wherever the consumer went on with
     /// itself.
-    fn step(&mut self, pair: &Pair, (p_step, walked): (Arm, usize), c_step: Arm) -> Body {
+    fn step(&mut self, pair: &Pair, p_step: Arm, c_step: Arm) -> Body {
         let arity = pair.arity;
+        let fields = self.program.fields(p_step.ctor).len();
         let mut locals = pair.p_locals.clone();
-        locals.extend([Atom(Local::at(arity)), Atom(Local::at(arity + 1))]);
-        // The rest of what the producer walks, which is the fused walk's.
-        let rest = Atom(Local::at(arity + walked));
-        self.step_body(pair, p_step.body, locals, arity + 2, (rest, c_step))
+        locals.extend((0..fields).map(|at| Atom(Local::at(arity + at))));
+        self.step_body(pair, p_step.body, locals, arity + fields, (REST, c_step))
     }
 
     /// The producer's step `body`, whose locals so far `locals` maps, its
@@ -803,6 +807,26 @@ impl Fusion<'_> {
             self.consumer(callee)
                 .is_some_and(|Consumer { list }| args[list].0.index() == level)
         })
+    }
+}
+
+/// The constructors of what a producer may walk, its end and its step: a
+/// list, or a number counted down to nought, which is a list of nothing
+/// but its length.
+fn walked(program: &Program, ty: TypeId) -> Option<(super::CtorId, super::CtorId, usize)> {
+    match super::type_shape(program, ty) {
+        super::TypeShape::Natural {
+            empty,
+            push,
+            recursive,
+        }
+        | super::TypeShape::Sequence {
+            empty,
+            push,
+            recursive,
+            ..
+        } => Some((empty, push, recursive)),
+        _ => None,
     }
 }
 
