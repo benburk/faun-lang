@@ -685,6 +685,15 @@ instructions 19% slower for where it fell in the image; `writer`'s bits
 are an accumulator no guard bounds, so they stay a tagged natural, a word
 with an overflow test.
 
+On the octagons branch (2026-11-18), range analysis relates the values a
+loop compares and steps ([ranges](machine/ranges.md)), and a length is
+bounded by the memory a target addresses: `position` runs 19.5 million
+instructions at the ratchet's size on x86-64 where it ran 57.7, against
+29.1 for its workaround, and `match` 23.1 against 23.0. `writer` is
+unchanged, its bits bounded by no relation between two values; `power`
+runs 52 million where it ran 79, still four times its workaround, `2.pow(k)`
+worked out every step.
+
 ### A list of tags is a cell a tag
 
 A block's symbols as tags, `[Literal(U8), Match(Nat, Nat)]`, and a code
