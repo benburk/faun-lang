@@ -175,6 +175,7 @@ impl Octagon {
     }
 
     /// How many variables it relates.
+    #[cfg(test)]
     pub(super) const fn variables(&self) -> usize {
         self.side / 2
     }
@@ -390,22 +391,38 @@ impl Octagon {
     /// shortens goes through its ends, so only they need be gone through.
     /// Answers whether any value still meets every constraint.
     pub(super) fn add(&mut self, constraint: Constraint) -> bool {
-        if constraint.bound >= self.get(constraint.from, constraint.to) {
+        self.add_all(&[constraint])
+    }
+
+    /// Say every one of `constraints` of a closed matrix and close it again,
+    /// going through only the nodes they name: a path any of them shortens
+    /// goes through their ends. Each variable's own bounds that moved
+    /// tighten the entries of its rows and columns, and no other. Answers
+    /// whether any value still meets every constraint.
+    pub(super) fn add_all(&mut self, constraints: &[Constraint]) -> bool {
+        let mut through: Vec<usize> = Vec::with_capacity(4 * constraints.len());
+        let own: Vec<Bound> = (0..self.side).map(|at| self.get(at, bar(at))).collect();
+        for &constraint in constraints {
+            if constraint.bound < self.get(constraint.from, constraint.to) {
+                self.assume(constraint);
+                through.extend([
+                    constraint.from,
+                    constraint.to,
+                    bar(constraint.from),
+                    bar(constraint.to),
+                ]);
+            }
+        }
+        if through.is_empty() {
             return !self.is_empty();
         }
-        self.assume(constraint);
-        let mut through = [
-            constraint.from,
-            constraint.to,
-            bar(constraint.from),
-            bar(constraint.to),
-        ];
         through.sort_unstable();
+        through.dedup();
+        if through.len() >= self.side {
+            return self.close();
+        }
         let side = self.side;
-        for (at, &via) in through.iter().enumerate() {
-            if at > 0 && through[at - 1] == via {
-                continue;
-            }
+        for &via in &through {
             for from in 0..side {
                 let first = self.get(from, via);
                 if first >= INFINITE {
@@ -419,45 +436,37 @@ impl Octagon {
                 }
             }
         }
-        self.tighten()
+        self.tighten_since(Some(&own))
     }
 
     /// Say a variable of a closed matrix lies within `bounds`, closing again
     /// once for both its ends: the two constraints go through the same two
     /// nodes. Answers whether any value still meets every constraint.
     pub(super) fn narrow(&mut self, variable: usize, bounds: Bounds) -> bool {
-        let (up, down) = (node(variable, false), node(variable, true));
-        let least = -2 * Bound::from(bounds.low);
-        let most = bounds.high.map_or(INFINITE, |high| 2 * Bound::from(high));
-        if least >= self.get(down, up) && most >= self.get(up, down) {
-            return !self.is_empty();
-        }
-        self.assume(Constraint::least(variable, Bound::from(bounds.low)));
+        let mut said = vec![Constraint::least(variable, Bound::from(bounds.low))];
         if let Some(high) = bounds.high {
-            self.assume(Constraint::most(variable, Bound::from(high)));
+            said.push(Constraint::most(variable, Bound::from(high)));
         }
-        let side = self.side;
-        for via in [up, down] {
-            for from in 0..side {
-                let first = self.get(from, via);
-                if first >= INFINITE {
-                    continue;
-                }
-                for to in 0..side {
-                    let through = plus(first, self.get(via, to));
-                    if through < self.get(from, to) {
-                        self.put(from, to, through);
-                    }
-                }
-            }
-        }
-        self.tighten()
+        self.add_all(&said)
     }
 
     /// The integer half of closing, after shortest paths: each variable's
     /// own bound made even, then every entry tightened by its two
     /// variables' own bounds.
     fn tighten(&mut self) -> bool {
+        self.tighten_since(None)
+    }
+
+    /// [`Self::tighten`], where `own` is each node's own bound before a
+    /// matrix strongly closed then had constraints added and paths
+    /// shortened: an entry can be tightened by its two variables' own
+    /// bounds only where one of them moved, so only those rows and columns
+    /// are read.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the integer steps of closing, then strengthening what moved"
+    )]
+    fn tighten_since(&mut self, own: Option<&[Bound]>) -> bool {
         let side = self.side;
         if self.is_empty() {
             return false;
@@ -472,19 +481,31 @@ impl Octagon {
                 return false;
             }
         }
-        for from in 0..side {
-            let own = self.get(from, bar(from));
-            if own >= INFINITE {
-                continue;
-            }
-            for to in 0..side {
-                let other = self.get(bar(to), to);
-                if other >= INFINITE {
-                    continue;
+        let moved: Vec<usize> = (0..side)
+            .filter(|&at| own.is_none_or(|own| own[at] != self.get(at, bar(at))))
+            .collect();
+        let strengthen = |matrix: &mut Self, from: usize, to: usize| {
+            let (mine, theirs) = (matrix.get(from, bar(from)), matrix.get(bar(to), to));
+            if mine < INFINITE && theirs < INFINITE {
+                let halves = mine.midpoint(theirs);
+                if halves < matrix.get(from, to) {
+                    matrix.put(from, to, halves);
                 }
-                let halves = own.midpoint(other);
-                if halves < self.get(from, to) {
-                    self.put(from, to, halves);
+            }
+        };
+        if own.is_none() || moved.len() * 2 >= side {
+            for from in 0..side {
+                for to in 0..side {
+                    strengthen(self, from, to);
+                }
+            }
+        } else {
+            for &at in &moved {
+                for other in 0..side {
+                    // Its row, by its own bound, and the column whose
+                    // other end's own bound it is.
+                    strengthen(self, at, other);
+                    strengthen(self, other, bar(at));
                 }
             }
         }
@@ -530,7 +551,6 @@ pub(super) trait Domain: Clone + std::fmt::Debug + PartialEq {
     const RELATES: bool = true;
     /// Nothing known of `variables` values.
     fn top(variables: usize) -> Self;
-    fn variables(&self) -> usize;
     /// The most `from - to` can be, nodes as [`node`] names them.
     fn get(&self, from: usize, to: usize) -> Bound;
     /// What a value can be by its own bounds.
@@ -545,6 +565,10 @@ pub(super) trait Domain: Clone + std::fmt::Debug + PartialEq {
         most: Option<Bound>,
     ) -> bool;
     fn add(&mut self, constraint: Constraint) -> bool;
+    /// Say every one of `constraints`, and close once.
+    fn add_all(&mut self, constraints: &[Constraint]) -> bool {
+        constraints.iter().all(|&constraint| self.add(constraint))
+    }
     /// Say a value lies within `bounds`, and close.
     fn narrow(&mut self, variable: usize, bounds: Bounds) -> bool {
         self.add(Constraint::least(variable, Bound::from(bounds.low)))
@@ -560,9 +584,6 @@ pub(super) trait Domain: Clone + std::fmt::Debug + PartialEq {
 impl Domain for Octagon {
     fn top(variables: usize) -> Self {
         Self::top(variables)
-    }
-    fn variables(&self) -> usize {
-        Self::variables(self)
     }
     fn get(&self, from: usize, to: usize) -> Bound {
         Self::get(self, from, to)
@@ -590,6 +611,9 @@ impl Domain for Octagon {
     }
     fn narrow(&mut self, variable: usize, bounds: Bounds) -> bool {
         Self::narrow(self, variable, bounds)
+    }
+    fn add_all(&mut self, constraints: &[Constraint]) -> bool {
+        Self::add_all(self, constraints)
     }
     fn assume(&mut self, constraint: Constraint) {
         Self::assume(self, constraint);
@@ -627,9 +651,6 @@ impl Zone {
 impl Domain for Zone {
     fn top(variables: usize) -> Self {
         Self(Octagon::top(variables))
-    }
-    fn variables(&self) -> usize {
-        self.0.variables()
     }
     fn get(&self, from: usize, to: usize) -> Bound {
         self.0.get(from, to)
@@ -688,9 +709,6 @@ impl Domain for Intervals {
     const RELATES: bool = false;
     fn top(_: usize) -> Self {
         Self
-    }
-    fn variables(&self) -> usize {
-        0
     }
     fn get(&self, _: usize, _: usize) -> Bound {
         INFINITE
