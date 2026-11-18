@@ -14,10 +14,13 @@
 //!
 //! Definitions are walked from a worklist in sweeps over the call graph's
 //! rounds, callees first, and again when what they are handed, what they
-//! call answers or a slot they read grows. A value that grows in more than
-//! [`WIDEN`] sweeps is widened to a threshold; every value has finitely
-//! many to pass, so the walk settles with no round limit. Narrowing then
-//! walks every definition again without widening.
+//! call answers or a slot they read grows. A round that goes round, a
+//! recursion, is gone round until it settles before the sweep goes on, so
+//! what calls it reads where it settled rather than each step of its
+//! climb. A value that grows in [`WIDEN`] sweeps, or as many times round
+//! the round going round, is widened to a threshold; every value has
+//! finitely many to pass, so the walk settles with no round limit.
+//! Narrowing then walks every definition again without widening.
 //!
 //! [`Intervals`]: super::octagon::Intervals
 
@@ -59,6 +62,9 @@ pub(super) struct Solution {
     pub takes: Vec<Option<Vec<Bounds>>>,
     pub answers: Vec<Option<Bounds>>,
     pub slots: Vec<Option<Bounds>>,
+    /// How many times each definition was walked while the walk climbed.
+    #[cfg(test)]
+    pub walks: Vec<usize>,
 }
 
 /// Solve `numeric` over the relational domain `D`, relating values in every
@@ -74,7 +80,10 @@ pub(super) fn solve<D: Domain>(numeric: &Numeric) -> Solution {
     let count = numeric.functions.len();
 
     // A sweep walks what is waiting in order, going on past each to the
-    // next waiting after it, and the next sweep starts from the first.
+    // next waiting after it, and the next sweep starts from the first. A
+    // round that goes round is gone round until none of it waits before
+    // the sweep goes on, so what reads it reads what it settled at rather
+    // than each step of its climb.
     let mut waiting: BTreeSet<(usize, usize)> = (0..count).map(|at| (plan.rank[at], at)).collect();
     let mut after = (0, 0);
     loop {
@@ -86,9 +95,31 @@ pub(super) fn solve<D: Domain>(numeric: &Numeric) -> Solution {
             break;
         };
         waiting.remove(&next);
-        after = (next.0, next.1 + 1);
-        let grown = once(numeric, &plan, &mut held, next.1);
-        waiting.extend(grown.into_iter().map(|at| (plan.rank[at], at)));
+        let round = next.0;
+        if !plan.goes_round[round] {
+            after = (round, next.1 + 1);
+            let grown = once(numeric, &plan, &mut held, next.1);
+            waiting.extend(grown.into_iter().map(|at| (plan.rank[at], at)));
+            continue;
+        }
+        held.grown.enter(round);
+        let mut at = next.1;
+        loop {
+            let grown = once(numeric, &plan, &mut held, at);
+            waiting.extend(grown.into_iter().map(|at| (plan.rank[at], at)));
+            let mut next = waiting.range((round, at + 1)..(round + 1, 0)).next();
+            if next.is_none() {
+                held.grown.again();
+                next = waiting.range((round, 0)..(round + 1, 0)).next();
+            }
+            let Some(&next) = next else {
+                break;
+            };
+            waiting.remove(&next);
+            at = next.1;
+        }
+        held.grown.round = None;
+        after = (round + 1, 0);
     }
 
     // Widening gives up more than recursion needs it to: a remainder of a
@@ -136,6 +167,8 @@ pub(super) fn solve<D: Domain>(numeric: &Numeric) -> Solution {
         takes,
         answers: held.results,
         slots: held.fields,
+        #[cfg(test)]
+        walks: plan.walks.into_inner(),
     }
 }
 
@@ -148,7 +181,10 @@ struct Plan<D> {
     layouts: Vec<Layout>,
     /// Where each definition comes in the order walked.
     rank: Vec<usize>,
-    /// Who calls each definition.
+    /// Whether each round goes round: a definition calling itself, or
+    /// several calling each other.
+    goes_round: Vec<bool>,
+    /// Who reads what each definition answers.
     callers: Vec<Vec<usize>>,
     /// Who reads each slot.
     readers: Vec<Vec<usize>>,
@@ -158,6 +194,8 @@ struct Plan<D> {
     /// calls answers, handed the same, starts the same, and closing what
     /// it is handed again would cost a cube of its packs each time.
     started: RefCell<Vec<Option<Start<D>>>>,
+    #[cfg(test)]
+    walks: RefCell<Vec<usize>>,
 }
 
 impl<D: Domain> Plan<D> {
@@ -168,11 +206,25 @@ impl<D: Domain> Plan<D> {
     fn new(numeric: &Numeric, relates: bool) -> Self {
         let count = numeric.functions.len();
         let mut calls = vec![Vec::new(); count];
+        let mut callers = vec![Vec::new(); count];
         let mut readers = vec![Vec::new(); numeric.slots];
         for (at, function) in numeric.functions.iter().enumerate() {
             if let Answer::Body(body) = &function.answer {
                 visit(body, &mut |term| match &term.kind {
-                    Kind::Call { callee, .. } => calls[at].push(super::FnId::at(*callee)),
+                    Kind::Call {
+                        callee,
+                        operation,
+                        sequence,
+                        ..
+                    } => {
+                        calls[at].push(super::FnId::at(*callee));
+                        // A call of an operation works out its answer from
+                        // its operands where it is made, and reads nothing
+                        // its callee answers.
+                        if operation.is_none() && sequence.is_none() {
+                            callers[*callee].push(at);
+                        }
+                    }
                     Kind::Match { arms, .. } => {
                         for arm in arms {
                             for &(_, field) in &arm.fields {
@@ -209,19 +261,23 @@ impl<D: Domain> Plan<D> {
                 _ => Layout::default(),
             })
             .collect();
-        let mut callers = vec![Vec::new(); count];
-        for (at, callees) in calls.iter().enumerate() {
-            for callee in callees {
-                callers[callee.index()].push(at);
-            }
+        for each in &mut callers {
+            each.dedup();
         }
+        let goes_round = rounds
+            .iter()
+            .map(|members| members.iter().any(|id| recursive[id.index()]))
+            .collect();
         Self {
             layouts,
             rank,
+            goes_round,
             callers,
             readers,
             thresholds: Thresholds::new(numeric),
             started: RefCell::new(vec![None; count]),
+            #[cfg(test)]
+            walks: RefCell::new(vec![0; count]),
         }
     }
 }
@@ -378,20 +434,154 @@ struct Propagation<D> {
     marker: std::marker::PhantomData<D>,
 }
 
-/// How many sweeps each entry, result and field has grown in, and the last
-/// it grew in.
+/// How each entry, answer and field has grown so far, and where the walk
+/// is: which sweep, and which round it is going round, if any.
 #[derive(Clone, PartialEq, Eq)]
 struct Growth {
-    entries: Vec<(usize, usize)>,
-    results: Vec<(usize, usize)>,
-    fields: Vec<(usize, usize)>,
+    entries: Vec<Grown>,
+    results: Vec<Grown>,
+    fields: Vec<Grown>,
     sweep: usize,
+    /// The round being gone round, if one is.
+    round: Option<Round>,
+    /// How many times a round has been gone round, all told.
+    rounds: usize,
 }
 
-const fn grew((count, last): &mut (usize, usize), sweep: usize) {
-    if *last != sweep {
-        *last = sweep;
-        *count += 1;
+/// What can grow, and be widened.
+#[derive(Clone, Copy)]
+enum Held {
+    Entry(usize),
+    Answer(usize),
+    Field(usize),
+}
+
+/// A round being gone round: its rank, which time a round was gone round
+/// this is, how many times round it has gone, and whether what its
+/// definitions are handed grew the time before or this time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Round {
+    rank: usize,
+    at: usize,
+    times: usize,
+    handed: (bool, bool),
+}
+
+/// How one value has grown: in how many sweeps and the last, and, within
+/// the round last gone round where it grew within one, how many times
+/// round and the last.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Grown {
+    sweeps: usize,
+    sweep: usize,
+    round: usize,
+    times: usize,
+    time: usize,
+}
+
+impl Grown {
+    const NEVER: Self = Self {
+        sweeps: 0,
+        sweep: usize::MAX,
+        round: usize::MAX,
+        times: 0,
+        time: usize::MAX,
+    };
+}
+
+impl Growth {
+    /// Start going round the round at `rank`.
+    const fn enter(&mut self, rank: usize) {
+        self.round = Some(Round {
+            rank,
+            at: self.rounds,
+            times: 0,
+            // It is gone round because something it reads grew.
+            handed: (true, false),
+        });
+        self.rounds += 1;
+    }
+
+    /// Go round the round once more.
+    const fn again(&mut self) {
+        if let Some(round) = &mut self.round {
+            round.times += 1;
+            round.handed = (round.handed.1, false);
+        }
+    }
+
+    fn grown(&mut self, held: Held) -> &mut Grown {
+        match held {
+            Held::Entry(at) => &mut self.entries[at],
+            Held::Answer(at) => &mut self.results[at],
+            Held::Field(slot) => &mut self.fields[slot],
+        }
+    }
+
+    /// Whether `held` is something the round going round reads.
+    fn within<D>(&self, plan: &Plan<D>, held: Held) -> bool {
+        let Some(round) = self.round else {
+            return false;
+        };
+        match held {
+            Held::Entry(at) | Held::Answer(at) => plan.rank[at] == round.rank,
+            Held::Field(slot) => plan.readers[slot]
+                .iter()
+                .any(|&reader| plan.rank[reader] == round.rank),
+        }
+    }
+
+    /// Whether `held` has grown often enough to be widened: in [`WIDEN`]
+    /// sweeps, or as many times round the round going round.
+    fn wide(&self, held: Held) -> bool {
+        let grown = match held {
+            Held::Entry(at) => self.entries[at],
+            Held::Answer(at) => self.results[at],
+            Held::Field(slot) => self.fields[slot],
+        };
+        grown.sweeps >= WIDEN
+            || self
+                .round
+                .is_some_and(|round| round.at == grown.round && grown.times >= WIDEN)
+    }
+
+    /// Count that `held` grew: once a sweep, and, where the round going
+    /// round reads it, once each time round. What a round answers or
+    /// builds grows as what it is handed does, and is counted only once
+    /// that has stopped growing, since widening what it is handed bounds
+    /// it.
+    fn grew<D>(&mut self, plan: &Plan<D>, held: Held) {
+        let within = self.within(plan, held);
+        let mut counted = self.round.filter(|_| within);
+        if within && let Some(round) = &mut self.round {
+            if matches!(held, Held::Entry(_)) {
+                round.handed.1 = true;
+            } else if round.handed.0 || round.handed.1 {
+                counted = None;
+            }
+        }
+        let sweep = self.sweep;
+        count(self.grown(held), sweep, counted);
+    }
+}
+
+/// Count a growth of `grown` in `sweep`, and in `round` where given.
+const fn count(grown: &mut Grown, sweep: usize, round: Option<Round>) {
+    if grown.sweep != sweep {
+        grown.sweep = sweep;
+        grown.sweeps += 1;
+    }
+    let Some(round) = round else {
+        return;
+    };
+    if grown.round != round.at {
+        grown.round = round.at;
+        grown.times = 0;
+        grown.time = usize::MAX;
+    }
+    if grown.time != round.times {
+        grown.time = round.times;
+        grown.times += 1;
     }
 }
 
@@ -422,10 +612,12 @@ impl<D: Domain> Propagation<D> {
             matched: vec![Bounds::NOTHING; numeric.terms],
             fields,
             grown: Growth {
-                entries: vec![(0, usize::MAX); count],
-                results: vec![(0, usize::MAX); count],
-                fields: vec![(0, usize::MAX); numeric.slots],
+                entries: vec![Grown::NEVER; count],
+                results: vec![Grown::NEVER; count],
+                fields: vec![Grown::NEVER; numeric.slots],
                 sweep: 0,
+                round: None,
+                rounds: 0,
             },
             settled: false,
             marker: std::marker::PhantomData,
@@ -438,9 +630,9 @@ impl<D: Domain> Propagation<D> {
     fn learn(&mut self, plan: &Plan<D>, found: Found<D>, widen: bool) -> Vec<usize> {
         let mut again = Vec::new();
         for (slot, bounds) in found.built {
-            let wide = (widen && self.grown.fields[slot].0 >= WIDEN).then_some(&plan.thresholds);
+            let wide = (widen && self.grown.wide(Held::Field(slot))).then_some(&plan.thresholds);
             if settle(&mut self.fields[slot], bounds, wide) {
-                grew(&mut self.grown.fields[slot], self.grown.sweep);
+                self.grown.grew(plan, Held::Field(slot));
                 again.extend_from_slice(&plan.readers[slot]);
             }
         }
@@ -451,9 +643,9 @@ impl<D: Domain> Propagation<D> {
             }
         }
         for (called, handed) in found.calls {
-            let wide = (widen && self.grown.entries[called].0 >= WIDEN).then_some(&plan.thresholds);
+            let wide = (widen && self.grown.wide(Held::Entry(called))).then_some(&plan.thresholds);
             if self.entries[called].hand(&handed, wide) {
-                grew(&mut self.grown.entries[called], self.grown.sweep);
+                self.grown.grew(plan, Held::Entry(called));
                 again.push(called);
             }
         }
@@ -472,6 +664,10 @@ fn once<D: Domain>(
         std::mem::take(&mut held.terms),
         std::mem::take(&mut held.matched),
     );
+    #[cfg(test)]
+    {
+        plan.walks.borrow_mut()[at] += 1;
+    }
     let walked = walk(numeric, plan, held, at, (&mut terms, &mut matched), None);
     held.terms = terms;
     held.matched = matched;
@@ -479,9 +675,12 @@ fn once<D: Domain>(
         return Vec::new();
     };
     let mut again = held.learn(plan, found, true);
-    let wide = (held.grown.results[at].0 >= WIDEN).then_some(&plan.thresholds);
+    let wide = held
+        .grown
+        .wide(Held::Answer(at))
+        .then_some(&plan.thresholds);
     if settle(&mut held.results[at], answer, wide) {
-        grew(&mut held.grown.results[at], held.grown.sweep);
+        held.grown.grew(plan, Held::Answer(at));
         again.extend_from_slice(&plan.callers[at]);
     }
     again
@@ -1946,6 +2145,235 @@ pub(super) mod tests {
                 .high
                 .is_some_and(|high| high < 4096)
         );
+    }
+
+    /// A count beside a walk handed a list of at most ten, whose empty end
+    /// is reached from the first time round: what it answers grows with
+    /// the count it is handed, and the count is widened first, bounded by
+    /// the list through their sum, so the answer is never widened past it.
+    #[test]
+    fn an_answer_growing_with_what_is_handed_waits_for_it_to_be_widened() {
+        let solution = solve::<Octagon>(&counting(10));
+        assert_eq!(solution.answers[0].and_then(|answer| answer.high), Some(10));
+    }
+
+    /// `main(n)`: `other(5)` and `count(n, 0)`, handed `n` of at most a
+    /// thousand; `count(n, i)`: while `i < n`, `count(n, i + 1)`, and else
+    /// `i`; `other(x)`: `x + 1`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a numeric program written out by hand"
+    )]
+    fn climbing() -> Numeric {
+        const COUNT: usize = 1;
+        const ADD: usize = 2;
+        const LESS: usize = 3;
+        const OTHER: usize = 4;
+        let mut terms = Terms(0);
+        // main: 0 n, 1 nought, 2 five, 3 other(five).
+        let main = {
+            let zero = terms.constant(0);
+            let five = terms.constant(5);
+            let other = terms.call(OTHER, vec![2], None);
+            Block {
+                statements: statements(vec![zero, five, other], 1),
+                tail: terms.call(COUNT, vec![0, 1], None),
+            }
+        };
+        // count: 0 n, 1 i, 2 i < n; going on, 3 one, 4 i + 1.
+        let count = {
+            let below = terms.call(LESS, vec![1, 0], Some(less()));
+            let stop = terms.term(Kind::Copy(1));
+            let one = terms.constant(1);
+            let next = terms.call(ADD, vec![1, 3], Some(Operation::Add));
+            let again = terms.call(COUNT, vec![0, 4], None);
+            Block {
+                statements: statements(vec![below], 2),
+                tail: terms.term(Kind::Match {
+                    on: 2,
+                    arms: vec![
+                        Arm {
+                            test: Test::Tag(0),
+                            fields: Vec::new(),
+                            body: Block {
+                                statements: Vec::new(),
+                                tail: stop,
+                            },
+                        },
+                        Arm {
+                            test: Test::Tag(1),
+                            fields: Vec::new(),
+                            body: Block {
+                                statements: statements(vec![one, next], 3),
+                                tail: again,
+                            },
+                        },
+                    ],
+                    told: false,
+                }),
+            }
+        };
+        // other: 0 x, 1 one, 2 x + 1.
+        let other = {
+            let one = terms.constant(1);
+            let sum = terms.call(ADD, vec![0, 1], Some(Operation::Add));
+            Block {
+                statements: statements(vec![one, sum], 1),
+                tail: terms.term(Kind::Copy(2)),
+            }
+        };
+        let body = |counts: usize, handed, block| Function {
+            counts: vec![true; counts],
+            handed,
+            answer: Answer::Body(block),
+        };
+        let operation = |operation| Function {
+            counts: vec![true, true],
+            handed: None,
+            answer: Answer::Operation(operation, (1, 0)),
+        };
+        let functions = vec![
+            body(
+                1,
+                Some(vec![Bounds {
+                    low: 0,
+                    high: Some(1000),
+                }]),
+                main,
+            ),
+            body(2, None, count),
+            operation(Operation::Add),
+            operation(less()),
+            body(1, None, other),
+        ];
+        assert_eq!(functions.len(), OTHER + 1);
+        Numeric {
+            functions,
+            terms: terms.0,
+            ..Numeric::default()
+        }
+    }
+
+    /// A recursion climbing a thousand settles, widened and all, before
+    /// what calls it is walked again, so its caller is walked a few times
+    /// rather than once for each step of the climb; and a definition that
+    /// only adds, as the climb does, is not walked again each time the sums
+    /// the climb works out grow, since nothing reads what an operation's
+    /// definition answers.
+    #[test]
+    fn a_recursion_settles_before_what_reads_it_is_walked_again() {
+        for solution in [
+            solve::<Octagon>(&climbing()),
+            solve::<Intervals>(&climbing()),
+        ] {
+            assert!(solution.walks[0] <= 3, "{:?}", solution.walks);
+            assert!(solution.walks[4] <= 2, "{:?}", solution.walks);
+            assert!(solution.walks[1] >= WIDEN, "{:?}", solution.walks);
+            let i = solution.takes[1].clone().expect("handed")[1];
+            assert_eq!((i.low, i.high), (0, Some(1000)));
+            assert_eq!(solution.answers[4], Some(Bounds::at(6)));
+        }
+    }
+
+    /// `main()`: `walk_k(0)` for each `k` from one to `loops`; `walk_k(i)`:
+    /// while `i < 3`, `walk_k(i + 1)`, and else `last(k)`; `last(x)`: `x`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a numeric program written out by hand"
+    )]
+    fn many_walks(loops: u64) -> Numeric {
+        let first = 4;
+        let mut terms = Terms(0);
+        let mut main = Vec::new();
+        main.push(terms.constant(0));
+        let walks: Vec<Block> = (1..=loops)
+            .map(|k| {
+                let at = first + usize::try_from(k).expect("small") - 1;
+                main.push(terms.call(at, vec![0], None));
+                // walk_k: 0 i, 1 three, 2 one, 3 i + 1, 4 i < 3, 5 k.
+                let three = terms.constant(3);
+                let one = terms.constant(1);
+                let next = terms.call(1, vec![0, 2], Some(Operation::Add));
+                let below = terms.call(2, vec![0, 1], Some(less()));
+                let mine = terms.constant(k);
+                let last = terms.call(3, vec![5], None);
+                let again = terms.call(at, vec![3], None);
+                Block {
+                    statements: statements(vec![three, one, next, below, mine], 1),
+                    tail: terms.term(Kind::Match {
+                        on: 4,
+                        arms: vec![
+                            Arm {
+                                test: Test::Tag(0),
+                                fields: Vec::new(),
+                                body: Block {
+                                    statements: Vec::new(),
+                                    tail: last,
+                                },
+                            },
+                            Arm {
+                                test: Test::Tag(1),
+                                fields: Vec::new(),
+                                body: Block {
+                                    statements: Vec::new(),
+                                    tail: again,
+                                },
+                            },
+                        ],
+                        told: false,
+                    }),
+                }
+            })
+            .collect();
+        let tail = terms.term(Kind::Copy(0));
+        let operation = |operation| Function {
+            counts: vec![true, true],
+            handed: None,
+            answer: Answer::Operation(operation, (1, 0)),
+        };
+        let mut functions = vec![
+            Function {
+                counts: Vec::new(),
+                handed: Some(Vec::new()),
+                answer: Answer::Body(Block {
+                    statements: statements(main, 0),
+                    tail,
+                }),
+            },
+            operation(Operation::Add),
+            operation(less()),
+            Function {
+                counts: vec![true],
+                handed: None,
+                answer: Answer::Body(Block {
+                    statements: Vec::new(),
+                    tail: terms.term(Kind::Copy(0)),
+                }),
+            },
+        ];
+        functions.extend(walks.into_iter().map(|walk| Function {
+            counts: vec![true],
+            handed: None,
+            answer: Answer::Body(walk),
+        }));
+        Numeric {
+            functions,
+            terms: terms.0,
+            ..Numeric::default()
+        }
+    }
+
+    /// Each of a dozen recursions hands one definition a number of its
+    /// own once it has gone round: what that definition is handed grows a
+    /// dozen times, but in one sweep, and each recursion going round hands
+    /// it its number from outside, so it is not taken for a climb and
+    /// widened.
+    #[test]
+    fn many_recursions_handing_one_definition_more_are_no_climb() {
+        let solution = solve::<Octagon>(&many_walks(12));
+        let handed = solution.takes[3].clone().expect("handed")[0];
+        assert_eq!((handed.low, handed.high), (1, Some(12)));
+        assert_eq!(solution.answers[3].and_then(|answer| answer.high), Some(12));
     }
 
     /// The term the self-call of the guarded walk was recorded against.
