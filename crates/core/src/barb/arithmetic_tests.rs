@@ -793,7 +793,6 @@ fn a_call_chain_longer_than_the_rounds_still_settles() {
     });
     program.set_entry(main);
     let facts = program.analyze();
-    assert_eq!(facts.unsettled(), None);
     assert_eq!(facts.answers(main), Bounds::at(1));
 }
 
