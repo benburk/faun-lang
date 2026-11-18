@@ -365,11 +365,10 @@ codes(input, total, literals, distances, bit, out) -> (
 
 # A base read from its table's entry, plus its extra bits, and the bit
 # after them.
-extra : (List(U8), Nat, U32, Nat) -> Result((Nat, Nat), InflateError)
-extra(input, total, entry, bit) -> (
-  count = entry.to_nat() % 16
+extra : (List(U8), Nat, (Nat, Nat), Nat) -> Result((Nat, Nat), InflateError)
+extra(input, total, (base, count), bit) -> (
   if bit + count > total return Err(Truncated)
-  Ok((entry.to_nat() / 16 + bits(input, bit, count), bit + count))
+  Ok((base + bits(input, bit, count), bit + count))
 )
 
 # `length` bytes from `from` on appended. A match that ends before what it
