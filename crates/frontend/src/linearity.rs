@@ -36,8 +36,8 @@
 //! become the definition it was handed to and every type is known, so a
 //! resource is never hidden behind a type variable or a callback.
 
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 
 use faun_core::platform::Routines;
 
@@ -204,7 +204,7 @@ impl<'a> Facts<'a> {
                 routine.consumes.then_some(0)
             })
             .collect();
-        let mut constructors = HashMap::new();
+        let mut constructors = HashMap::default();
         for (owner, data) in &program.data {
             for constructor in &data.constructors {
                 constructors.insert(constructor.name, (*owner, constructor.fields.clone()));
@@ -372,7 +372,7 @@ impl<'a> Facts<'a> {
             return known;
         }
         let mut waiting = vec![ty.clone()];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut found = false;
         while let Some(next) = waiting.pop() {
             if let Some(&known) = self.carries.borrow().get(&next) {
@@ -549,7 +549,7 @@ impl<'a> Facts<'a> {
     /// The first resource type a value of `ty` holds.
     fn resource_in(&self, ty: &Type) -> Option<Symbol> {
         let mut waiting = vec![ty.clone()];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = waiting.pop() {
             if !self.carries(&ty) || !seen.insert(ty.clone()) {
                 continue;
@@ -768,14 +768,14 @@ impl<'f, 'a> Walk<'f, 'a> {
             known,
             function,
             held: Vec::new(),
-            locals: HashMap::new(),
+            locals: HashMap::default(),
             paths: Vec::new(),
             refused: Vec::new(),
             guarded: false,
             answering: Some(answering),
             left: false,
-            taken_apart: HashSet::new(),
-            fields: HashMap::new(),
+            taken_apart: HashSet::default(),
+            fields: HashMap::default(),
         }
     }
 

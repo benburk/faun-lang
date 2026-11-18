@@ -4,7 +4,7 @@
 //! spelling once and stores this four-byte identity instead of allocating it
 //! again at every occurrence.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// An interned spelling owned by one [`Symbols`] collection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

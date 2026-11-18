@@ -5,7 +5,7 @@
 //! need to be consulted after this boundary. [`SiteId`] identifies written and
 //! generated occurrences independently of their diagnostic spans.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::convert::Infallible;
 
 use num_bigint::BigUint;

@@ -7,7 +7,7 @@
 //! each rule, so the file and the parser cannot drift apart unnoticed.
 
 use super::lex::{self, Kind, Token};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::path::Path;
 
 const GRAMMAR: &str = include_str!("grammar.ebnf");

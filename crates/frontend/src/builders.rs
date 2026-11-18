@@ -11,7 +11,7 @@
 //! such a pairing has builders and nothing is registered. The fields are
 //! evaluated in the order written, each once.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use crate::Symbol;
 use crate::context::Context;

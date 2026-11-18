@@ -16,7 +16,8 @@
 //! directory a bundle is unpacked in, and the loader reads a URL dependency
 //! from there.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -307,8 +308,8 @@ pub fn resolve(entry: &Path, fetch: &mut dyn Fetch) -> Result<Packages, Diagnost
             fetch: &mut *fetch,
             chosen: &chosen,
             mentions: BTreeMap::new(),
-            urls: HashMap::new(),
-            visited: HashSet::new(),
+            urls: HashMap::default(),
+            visited: HashSet::default(),
             tree: Vec::new(),
         };
         walk.package(entry, &mut vec![root_name(entry)], 0, true)?;
@@ -584,7 +585,7 @@ mod tests {
             std::fs::create_dir_all(&directory).unwrap();
             Self {
                 directory,
-                bundles: HashMap::new(),
+                bundles: HashMap::default(),
                 fetched: Vec::new(),
             }
         }

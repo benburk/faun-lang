@@ -7,7 +7,7 @@
 //! function. Function signatures and the distinction between external providers
 //! and defined bodies survive callback lowering.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use num_bigint::BigUint;
 

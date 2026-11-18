@@ -7,8 +7,8 @@
 //! Rémy's: shared entries unify, and an open side's tail takes what only
 //! the other holds.
 
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::{InferredType, TypeVariable};

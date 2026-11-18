@@ -4,7 +4,7 @@
 //! specialization. No source syntax or site-indexed inference tables are needed
 //! to interpret an expression. Patterns cannot contain an ambiguous constructor.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::convert::Infallible;
 
 use crate::ast::Span;

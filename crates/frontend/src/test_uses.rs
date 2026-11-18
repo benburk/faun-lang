@@ -13,8 +13,9 @@
 //! spelled as a member it asks for. Over-approximating them only widens
 //! both test and real code; a name is refused only where it is written.
 
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::Span;
 use crate::context::Context;
@@ -35,13 +36,13 @@ pub(crate) struct Facts {
 
 impl Facts {
     pub(crate) fn of(loaded: &LoadedProgram) -> Self {
-        let mut test = HashSet::new();
-        let mut real = HashSet::new();
+        let mut test = HashSet::default();
+        let mut real = HashSet::default();
         for &(module, is_test) in &loaded.dependencies {
             let names = if is_test { &mut test } else { &mut real };
             names.extend(interface_names(&loaded.module(module).public));
         }
-        let mut methods: HashMap<Symbol, Vec<Symbol>> = HashMap::new();
+        let mut methods: HashMap<Symbol, Vec<Symbol>> = HashMap::default();
         for &id in &loaded.package {
             for binding in loaded.module(id).scope.types.values() {
                 for (&spelling, &canonical) in &binding.methods {
@@ -149,9 +150,9 @@ struct Package {
 impl Package {
     fn of(program: &h::Program, cx: &Context) -> Self {
         let mut package = Self {
-            definitions: HashMap::new(),
+            definitions: HashMap::default(),
             order: Vec::new(),
-            owners: HashMap::new(),
+            owners: HashMap::default(),
             expectations: Vec::new(),
         };
         for module in &program.modules {
@@ -195,7 +196,7 @@ impl Package {
     /// What `roots` reach, each with the definition it was first reached
     /// from, none for a root.
     fn reach(&self, roots: &[Symbol], facts: &Facts) -> HashMap<Symbol, Option<Symbol>> {
-        let mut parents = HashMap::new();
+        let mut parents = HashMap::default();
         let mut queue = VecDeque::new();
         for &root in roots {
             if self.definitions.contains_key(&root)

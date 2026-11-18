@@ -4,7 +4,7 @@
 //! is. Each is settled once unification has said what it can, at the end
 //! of a binding, a clause, or a group of definitions inferred together.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::rc::Rc;
 
 use super::unify::{Scheme, Ty, free_variables, replaced, show, ty_embeds};
@@ -298,8 +298,8 @@ impl Checker<'_> {
         // so `'a'.is_digit()` reads its numeral as a `U8`; a generic one
         // stays open, and is a bound. A binding leaves it to its definition.
         let (pass, open) = match finish {
-            Finish::Binding => (Pass::Waiting, HashSet::new()),
-            Finish::Signed => (Pass::Choosing, HashSet::new()),
+            Finish::Binding => (Pass::Waiting, HashSet::default()),
+            Finish::Signed => (Pass::Choosing, HashSet::default()),
             Finish::Unsigned(types, names) => {
                 (Pass::Choosing, self.generic_variables(types, names))
             }
@@ -342,7 +342,7 @@ impl Checker<'_> {
                 self.settle_by(marks, pass, &generic)?;
                 generic
             }
-            _ => HashSet::new(),
+            _ => HashSet::default(),
         };
         let is_generic = |checker: &Self, generic: &HashSet<u32>, ty: &Ty| matches!(checker.infer.resolve(ty), Ty::Var(variable) if generic.contains(&variable));
         // Spread once, before the first default: nothing to spread from
@@ -765,7 +765,7 @@ impl Checker<'_> {
     /// until none moves: a method's answer can decide a word's position or
     /// a way's type, and a word's reading a method's receiver.
     pub(super) fn settle(&mut self, marks: Marks) -> Result<(), Refusal> {
-        self.settle_by(marks, Pass::Waiting, &HashSet::new())
+        self.settle_by(marks, Pass::Waiting, &HashSet::default())
     }
 
     /// The same, as far as `pass` goes with a receiver not yet known, the

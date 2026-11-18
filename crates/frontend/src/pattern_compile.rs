@@ -6,8 +6,9 @@
 
 #![allow(clippy::too_many_lines)]
 
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use num_traits::ToPrimitive;
@@ -128,7 +129,7 @@ fn compiled(
                                 patterns: clause.patterns,
                                 guard: clause.guard.map(asked).unwrap_or_default(),
                                 body: compiler.tail_body(clause.body, &function.key)?,
-                                locals: HashMap::new(),
+                                locals: HashMap::default(),
                             })
                         })
                         .collect::<Result<Vec<_>, Refusal>>()?;
@@ -311,7 +312,7 @@ impl Clauses {
     fn of(function: &FunctionKey) -> Self {
         Self {
             function: function.clone(),
-            types: RefCell::new(HashMap::new()),
+            types: RefCell::new(HashMap::default()),
         }
     }
 }
@@ -568,14 +569,14 @@ impl Compiler<'_> {
                 patterns: vec![pattern],
                 guard: guard.into_iter().collect(),
                 body: yes.clone(),
-                locals: HashMap::new(),
+                locals: HashMap::default(),
             })
             .collect();
         rows.push(Row {
             patterns: vec![Pattern::Wild],
             guard: Vec::new(),
             body: self.compiled(no)?,
-            locals: HashMap::new(),
+            locals: HashMap::default(),
         });
         let decision = self.plan(&rows, &subjects, &mut 1)?;
         Ok(Bound::Match {
@@ -603,7 +604,7 @@ impl Compiler<'_> {
                     patterns: vec![pattern],
                     guard: guard.map(asked).unwrap_or_default(),
                     body: body.clone(),
-                    locals: HashMap::new(),
+                    locals: HashMap::default(),
                 });
             }
         }
@@ -1084,7 +1085,7 @@ impl Compiler<'_> {
             definition: Definition::Body(Box::new(decision)),
         });
         let (module, span) = (rest[0].body.result.module, rest[0].body.result.span);
-        let mut locals = HashMap::new();
+        let mut locals = HashMap::default();
         let arguments = handed
             .iter()
             .map(|(value, ty)| {
@@ -1378,7 +1379,7 @@ fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
 /// end of each branch. Its branches answer a tuple, which its binding takes
 /// apart. Inner ones are made first.
 fn exported(mut body: d::Body) -> d::Body {
-    let mut read = HashSet::new();
+    let mut read = HashSet::default();
     let reads = |expression: &Expr, read: &mut HashSet<LocalId>| {
         expression.for_each_within(&mut |inner| {
             if let ExprKind::Local(local) = inner.kind {
@@ -1387,7 +1388,7 @@ fn exported(mut body: d::Body) -> d::Body {
         });
     };
     reads(&body.result, &mut read);
-    let mut after = vec![HashSet::new(); body.bindings.len()];
+    let mut after = vec![HashSet::default(); body.bindings.len()];
     for (at, binding) in body.bindings.iter().enumerate().rev() {
         after[at].clone_from(&read);
         reads(&binding.value, &mut read);
@@ -1550,7 +1551,7 @@ fn leaves(expression: &Expr) -> bool {
 /// What `rest` reads that it does not bind, but `answered`, each at its
 /// type, in order: a join point's parameters after the branch's value.
 fn live_in(rest: &d::Body, answered: LocalId) -> Vec<(LocalId, Type)> {
-    free_in(rest, &HashSet::from([answered]))
+    free_in(rest, &std::iter::once(answered).collect())
 }
 
 /// What `body` reads that neither it binds nor `own` holds, each at its
@@ -1819,7 +1820,7 @@ fn bound_by(condition: &Expr) -> HashSet<LocalId> {
     match &condition.kind {
         ExprKind::Is(_, alternatives) => {
             let each = alternatives.iter().map(|(pattern, guard)| {
-                let mut bound = HashSet::new();
+                let mut bound = HashSet::default();
                 pattern.for_each_bound(&mut |local| {
                     bound.insert(local);
                 });
@@ -1838,7 +1839,7 @@ fn bound_by(condition: &Expr) -> HashSet<LocalId> {
         ExprKind::Connective(Connective::Or, left, right) => {
             intersection([bound_by(left), bound_by(right)].into_iter())
         }
-        _ => HashSet::new(),
+        _ => HashSet::default(),
     }
 }
 
@@ -2144,7 +2145,7 @@ mod tests {
         Row {
             patterns: vec![pattern],
             guard: Vec::new(),
-            locals: HashMap::new(),
+            locals: HashMap::default(),
             body: Body {
                 bindings: Vec::new(),
                 result: Expr {

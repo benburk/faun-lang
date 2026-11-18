@@ -15,7 +15,8 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{HashMap, VecDeque};
+use rustc_hash::FxHashMap as HashMap;
+use std::collections::VecDeque;
 
 use num_bigint::BigUint;
 
@@ -611,12 +612,12 @@ impl<'a> Specializer<'a> {
                 .collect(),
             data: program.data.clone(),
             constructors,
-            requested: HashMap::new(),
-            structural: HashMap::new(),
+            requested: HashMap::default(),
+            structural: HashMap::default(),
             queue: VecDeque::new(),
             functions: Vec::new(),
             origins: Vec::new(),
-            made_at: HashMap::new(),
+            made_at: HashMap::default(),
             current: None,
             test_locals: 1 << 30,
         }
@@ -796,7 +797,7 @@ impl<'a> Specializer<'a> {
         let module = function.module;
         let mut specialized = Vec::with_capacity(clauses.len());
         for clause in clauses {
-            let mut substitution = HashMap::new();
+            let mut substitution = HashMap::default();
             match_parameters(
                 &clause.signature.parameters,
                 &clause.signature.result,
@@ -1492,7 +1493,7 @@ impl<'a> Specializer<'a> {
                 };
                 // The implementation at this owner: fixed by its receiver,
                 // or for a member of the type, by what it answers.
-                let mut fixed = HashMap::new();
+                let mut fixed = HashMap::default();
                 let pinned = if bound.associated {
                     match_type(result, &owner, &mut fixed)
                 } else {
@@ -1656,7 +1657,7 @@ impl<'a> Specializer<'a> {
             .get(&name)
             .map(|function| &function.scheme)
             .ok_or_else(|| error("method target has no inferred scheme"))?;
-        let mut substitution = HashMap::new();
+        let mut substitution = HashMap::default();
         match_signature(&scheme.ty, &signature, &mut substitution)?;
         Ok(FunctionKey {
             name,
@@ -1837,7 +1838,7 @@ fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, Refusal> {
     if !scheme.variables.is_empty() {
         return Err(error("entry has an ambiguous polymorphic type"));
     }
-    substitute_type(&scheme.ty, &HashMap::new())
+    substitute_type(&scheme.ty, &HashMap::default())
 }
 
 /// Meet a bound's shape with its implementation's signature, each side's
@@ -2097,7 +2098,7 @@ fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, Re
     let InferredType::Function(_, template_result) = &scheme.ty else {
         return Err(error("literal helper is not a function"));
     };
-    let mut substitution = HashMap::new();
+    let mut substitution = HashMap::default();
     match_type(template_result, result, &mut substitution)?;
     substitute_type(&scheme.ty, &substitution)?.into_signature()
 }
