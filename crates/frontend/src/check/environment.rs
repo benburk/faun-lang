@@ -2,7 +2,7 @@
 //! read: each declared type's constructors and fields, each signature as a
 //! scheme with its bounds, and each method written without one.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::rc::Rc;
 
 use super::unify::{Infer, Scheme, Tags, Ty, free_variables};
@@ -27,11 +27,11 @@ impl<'a> Checker<'a> {
             symbols,
             prelude,
             infer: Infer::default(),
-            values: HashMap::new(),
-            open: HashSet::new(),
-            constructors: HashMap::new(),
-            methods: HashMap::new(),
-            fields: HashMap::new(),
+            values: HashMap::default(),
+            open: HashSet::default(),
+            constructors: HashMap::default(),
+            methods: HashMap::default(),
+            fields: HashMap::default(),
             data: &program.data,
             visible_methods: &program.visible_methods,
             sites,
@@ -45,14 +45,14 @@ impl<'a> Checker<'a> {
             pending_ways: Vec::new(),
             answers: Vec::new(),
             written_result: None,
-            defined: HashMap::new(),
+            defined: HashMap::default(),
             clause_marks: None,
-            prefix_helps: HashMap::new(),
-            bounds: HashMap::new(),
-            variable_names: HashMap::new(),
-            partial: HashMap::new(),
+            prefix_helps: HashMap::default(),
+            bounds: HashMap::default(),
+            variable_names: HashMap::default(),
+            partial: HashMap::default(),
             current: Vec::new(),
-            current_names: HashMap::new(),
+            current_names: HashMap::default(),
             bound_sites: Vec::new(),
             expression_types: Vec::new(),
             handings: Vec::new(),
@@ -100,7 +100,7 @@ impl<'a> Checker<'a> {
                     .note("data may not store functions; a function is passed into a call"));
             }
         }
-        let mut variables = HashMap::new();
+        let mut variables = HashMap::default();
         for parameter in &data.parameters {
             let fresh = self.infer.fresh();
             variables.insert(*parameter, fresh);
@@ -195,7 +195,7 @@ impl<'a> Checker<'a> {
             self.partial.insert(signature.name, signature.clone());
             return Ok(());
         }
-        let mut variables = HashMap::new();
+        let mut variables = HashMap::default();
         let ty = self.signed_type(signature, &mut variables);
         let ty = self.open_result_rows(&ty, true);
         let bounds = self.written_bounds(module, signature, &mut variables)?;
@@ -259,7 +259,7 @@ impl<'a> Checker<'a> {
         program: &n::Program,
         unsigned: &HashSet<Symbol>,
     ) -> HashMap<Symbol, Vec<UnsignedMethod>> {
-        let mut methods: HashMap<Symbol, Vec<UnsignedMethod>> = HashMap::new();
+        let mut methods: HashMap<Symbol, Vec<UnsignedMethod>> = HashMap::default();
         for function in &program.functions {
             let Some(owner) = function.owner else {
                 continue;

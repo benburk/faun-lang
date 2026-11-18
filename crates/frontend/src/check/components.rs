@@ -1,7 +1,7 @@
 //! The order unsigned definitions are inferred in: the strongly connected
 //! components of what calls what, each after those it calls (Kosaraju's).
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::UnsignedMethod;
 use crate::declarations as n;
@@ -42,7 +42,7 @@ pub(super) fn components(
         .collect();
     let mut edges = vec![Vec::new(); names.len()];
     for (name, &from) in &index {
-        let mut dependencies = HashSet::new();
+        let mut dependencies = HashSet::default();
         for clause in &definitions[name].clauses {
             clause_globals(clause, symbols, &mut dependencies);
         }

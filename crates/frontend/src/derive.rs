@@ -14,7 +14,7 @@ use crate::context::Context;
 use crate::declarations as n;
 use crate::diagnostic::Diagnostic;
 use crate::hir as h;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::{Symbol, Symbols};
 
@@ -92,7 +92,7 @@ fn ordered(program: &mut n::Program, cx: &mut Context) -> Result<(), Diagnostic>
 
 /// Each method a type's block holds, by its owner and spelling.
 fn owned_members(program: &n::Program, symbols: &Symbols) -> HashMap<(Symbol, Symbol), usize> {
-    let mut members = HashMap::new();
+    let mut members = HashMap::default();
     for (index, function) in program.functions.iter().enumerate() {
         let Some(owner) = function.owner else {
             continue;

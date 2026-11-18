@@ -43,7 +43,7 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::rc::Rc;
 
 use super::blessed::{self, LiteralExpr, PreludeIds};
@@ -542,7 +542,7 @@ impl Checker<'_> {
 
         for component in components(&definitions, &unsigned, &methods, self.symbols) {
             let marks = self.marks();
-            let mut monotypes = HashMap::new();
+            let mut monotypes = HashMap::default();
             for name in &component {
                 let function = definitions[name];
                 let clauses = &function.clauses;
@@ -567,7 +567,7 @@ impl Checker<'_> {
                             ),
                         ));
                     }
-                    self.signed_type(&signature, &mut HashMap::new())
+                    self.signed_type(&signature, &mut HashMap::default())
                 } else {
                     let parameters = (0..arity).map(|_| self.infer.fresh()).collect();
                     Ty::Function(parameters, Rc::new(self.infer.fresh()))

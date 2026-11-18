@@ -23,7 +23,8 @@
 // so a new kind of expression shows where it is missed.
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::Symbol;
 use crate::context::Context;
@@ -130,7 +131,7 @@ impl Frame {
         }
         Self {
             owner,
-            functions: HashMap::new(),
+            functions: HashMap::default(),
             next: highest + 1,
         }
     }
@@ -139,7 +140,7 @@ impl Frame {
     fn again(&self) -> Self {
         Self {
             owner: self.owner.clone(),
-            functions: HashMap::new(),
+            functions: HashMap::default(),
             next: self.next,
         }
     }
@@ -200,7 +201,7 @@ struct Callbacks<'a> {
 
 impl<'a> Callbacks<'a> {
     fn new(program: &'a Program) -> Self {
-        let mut lambdas = HashMap::new();
+        let mut lambdas = HashMap::default();
         for function in &program.functions {
             let Definition::Body(clauses) = &function.definition else {
                 continue;
@@ -229,7 +230,7 @@ impl<'a> Callbacks<'a> {
                 .map(|function| (&function.key, function))
                 .collect(),
             lambdas,
-            made: HashMap::new(),
+            made: HashMap::default(),
             queue: VecDeque::new(),
             next: 0,
         }
@@ -350,7 +351,7 @@ impl<'a> Callbacks<'a> {
         }
         let mut frame = Frame {
             owner: owner.clone(),
-            functions: HashMap::new(),
+            functions: HashMap::default(),
             next: highest + 1,
         };
         let mut handed = callbacks.iter();
@@ -717,7 +718,7 @@ fn internal(what: &str) -> Refusal {
 /// type, in order. Locals are numbered apart across a clause, so one bound
 /// anywhere in the lambda is never the one of the same number outside.
 fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
-    let mut bound = HashSet::new();
+    let mut bound = HashSet::default();
     for pattern in patterns {
         pattern.for_each_bound(&mut |local| {
             bound.insert(local);
@@ -769,8 +770,8 @@ mod tests {
                     definition: Definition::Body(Vec::new()),
                 },
             ],
-            data: HashMap::new(),
-            written: HashMap::new(),
+            data: HashMap::default(),
+            written: HashMap::default(),
         })
         .unwrap();
         assert!(program.entry.is_none());

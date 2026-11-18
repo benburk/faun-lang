@@ -26,7 +26,7 @@
 // whole so that a new kind of pattern shows where it is missed.
 #![allow(clippy::too_many_lines)]
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use num_bigint::BigUint;
 
@@ -214,9 +214,9 @@ struct Coverage<'a> {
 
 impl<'a> Coverage<'a> {
     fn new(program: &'a t::Program, prelude: &'a PreludeIds) -> Self {
-        let mut owners = HashMap::new();
-        let mut constructors = HashMap::new();
-        let mut declared = HashMap::new();
+        let mut owners = HashMap::default();
+        let mut constructors = HashMap::default();
+        let mut declared = HashMap::default();
         let declarations = program.data.values();
         for data in declarations {
             let mut held: Vec<_> = data

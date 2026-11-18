@@ -8,7 +8,8 @@
 //! would be held. Where that is outside the package, in a definition it
 //! depends on, the package's call that handed the function on is blamed.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::VecDeque;
 
 use crate::ModuleId;
 use crate::context::Context;
@@ -53,7 +54,7 @@ fn blamed(
         return error;
     }
     let callers = callers(program);
-    let mut seen = HashSet::from([refused]);
+    let mut seen: HashSet<_> = std::iter::once(refused).collect();
     let mut waiting = VecDeque::from([refused]);
     while let Some(callee) = waiting.pop_front() {
         for &(caller, call) in callers.get(callee).into_iter().flatten() {
@@ -75,7 +76,7 @@ fn blamed(
 /// Every call naming a definition, by the definition it names: the caller
 /// and the call.
 fn callers(program: &Program) -> HashMap<&FunctionKey, Vec<(&FunctionKey, &Expr)>> {
-    let mut callers: HashMap<_, Vec<_>> = HashMap::new();
+    let mut callers: HashMap<_, Vec<_>> = HashMap::default();
     for function in &program.functions {
         let Definition::Body(clauses) = &function.definition else {
             continue;

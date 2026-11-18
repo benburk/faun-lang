@@ -2,7 +2,7 @@
 //! without clauses outside the host, a type holding itself at a larger
 //! type, and a type no value can be built of.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::failure;
 use crate::declarations as n;
@@ -53,7 +53,7 @@ fn externals(program: &n::Program, host: ModuleId, symbols: &Symbols) -> Result<
 /// would be a type of its own, and a program holding one would ask for
 /// them without end.
 fn regular(data: &HashMap<Symbol, n::Data>, symbols: &Symbols) -> Result<(), Refusal> {
-    let mut handed = Handed::new();
+    let mut handed = Handed::default();
     for declared in data.values() {
         let fields = declared
             .constructors
@@ -95,7 +95,7 @@ fn regular(data: &HashMap<Symbol, n::Data>, symbols: &Symbols) -> Result<(), Ref
 /// of building needs nothing of that kind for. A declared type is taken to
 /// be buildable at any arguments where it is at its own.
 fn inhabited(data: &HashMap<Symbol, n::Data>, symbols: &Symbols) -> Result<(), Refusal> {
-    let mut built: HashSet<Symbol> = HashSet::new();
+    let mut built: HashSet<Symbol> = HashSet::default();
     loop {
         let before = built.len();
         for declared in data.values() {
@@ -231,7 +231,7 @@ fn mentions(ty: &h::Type, variable: Symbol) -> bool {
 /// Whether a parameter handed on from `from` arrives, by any number of
 /// steps, at `to`.
 fn reaches(handed: &Handed, from: (Symbol, usize), to: (Symbol, usize)) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut pending = vec![from];
     while let Some(at) = pending.pop() {
         if at == to {

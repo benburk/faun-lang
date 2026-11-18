@@ -4,7 +4,7 @@
 // makes omissions visible when surface syntax gains a variant.
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::ast as s;
 use super::blessed::PreludeIds;
@@ -35,8 +35,8 @@ pub fn resolve_names(
     let prelude = loaded.module(loaded.prelude).public.clone();
     let mut modules = Vec::with_capacity(loaded.modules.len());
     let mut sites = h::Sites::default();
-    let mut aliases = HashMap::new();
-    let mut constraint_aliases = HashMap::new();
+    let mut aliases = HashMap::default();
+    let mut constraint_aliases = HashMap::default();
     let mut scopes = Vec::with_capacity(loaded.modules.len());
     for module in &loaded.modules {
         let mut scope = prelude.clone();
@@ -87,7 +87,7 @@ type Values = HashSet<Symbol>;
 
 /// Every value the program defines, top-level or a type's.
 fn values(loaded: &LoadedProgram, scopes: &[Interface]) -> Values {
-    let mut values = Values::new();
+    let mut values = Values::default();
     for (module, scope) in loaded.modules.iter().zip(scopes) {
         let source = loaded
             .sources
@@ -432,7 +432,7 @@ fn expand_aliases(
     }
     // Each alias is expanded over its own parameters, so one naming
     // itself is refused where it is declared.
-    let mut expanded = Aliases::new();
+    let mut expanded = Aliases::default();
     let mut written: Vec<_> = aliases.iter().collect();
     written.sort_by_key(|(_, alias)| (alias.module, alias.span));
     for (&name, alias) in written {
@@ -574,7 +574,7 @@ fn expand_constraints(
     let mut expansion = Expansion {
         aliases,
         applications: Vec::new(),
-        applied: HashSet::new(),
+        applied: HashSet::default(),
         expanding: Vec::new(),
         through: None,
         members: Vec::new(),
@@ -1466,21 +1466,21 @@ fn resolve_clause(
         standing,
         symbols,
         sites,
-        locals: HashMap::new(),
+        locals: HashMap::default(),
         next_local: 0,
         alternative: None,
         shadowing: None,
         compared: Some(Vec::new()),
         choosing: false,
         matching: false,
-        hidden: HashSet::new(),
+        hidden: HashSet::default(),
         tested: Vec::new(),
         handed: Vec::new(),
         conditional: 0,
         binding: false,
         nested: 0,
         rebound: Vec::new(),
-        read: HashSet::new(),
+        read: HashSet::default(),
     };
     let patterns = clause
         .patterns
@@ -1637,7 +1637,7 @@ impl ClauseResolver<'_> {
                 let value = self.expr(tested)?;
                 let outer = std::mem::replace(&mut self.matching, true);
                 let comparing = self.compared.replace(Vec::new());
-                self.shadowing = Some(HashSet::new());
+                self.shadowing = Some(HashSet::default());
                 let pattern = self.pattern(pattern);
                 self.shadowing = None;
                 self.matching = outer;
@@ -1671,7 +1671,7 @@ impl ClauseResolver<'_> {
         let before = self.locals.clone();
         let outer = std::mem::replace(&mut self.matching, true);
         let comparing = self.compared.replace(Vec::new());
-        self.shadowing = Some(HashSet::new());
+        self.shadowing = Some(HashSet::default());
         let pattern = self.pattern(&arm.pattern);
         self.shadowing = None;
         self.matching = outer;
@@ -1856,7 +1856,7 @@ impl ClauseResolver<'_> {
         let mut bindings = Vec::with_capacity(body.bindings.len());
         for binding in &body.bindings {
             let value = self.expr(&binding.value)?;
-            self.shadowing = Some(HashSet::new());
+            self.shadowing = Some(HashSet::default());
             self.binding = true;
             let pattern = self.total_pattern(&binding.pattern);
             self.binding = false;
@@ -2682,7 +2682,7 @@ impl ClauseResolver<'_> {
         span: s::Span,
     ) -> Result<h::ExprKind, Refusal> {
         let mut heads: Vec<Symbol> = Vec::new();
-        let mut groups: HashMap<Symbol, Vec<(&[s::Name], &s::Expr)>> = HashMap::new();
+        let mut groups: HashMap<Symbol, Vec<(&[s::Name], &s::Expr)>> = HashMap::default();
         for &(path, value) in paths {
             let head = self.symbols.intern(path[0].text(self.source));
             if !groups.contains_key(&head) {
@@ -2731,7 +2731,7 @@ impl ClauseResolver<'_> {
         fields: &[(s::Name, s::Expr)],
         span: s::Span,
     ) -> Result<Vec<(Symbol, h::Expr)>, Refusal> {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut resolved = Vec::with_capacity(fields.len());
         for (name, value) in fields {
             let name = self.symbols.intern(name.text(self.source));

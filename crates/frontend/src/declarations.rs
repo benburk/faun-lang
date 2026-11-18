@@ -4,7 +4,7 @@
 //! compare every clause's arity. Data declarations contain only type templates;
 //! their methods are ordinary functions with an owner, not nested declarations.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::ast::Span;
 use crate::hir as h;
@@ -42,10 +42,10 @@ pub struct Data {
 pub fn normalize(program: h::Program) -> Program {
     let mut output = Program {
         functions: Vec::new(),
-        data: HashMap::new(),
-        visible_methods: HashMap::new(),
+        data: HashMap::default(),
+        visible_methods: HashMap::default(),
     };
-    let mut indices = HashMap::new();
+    let mut indices = HashMap::default();
     for module in program.modules {
         output
             .visible_methods

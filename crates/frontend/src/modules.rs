@@ -8,7 +8,7 @@
 // visible instead of scattering them among tiny mutation helpers.
 #![allow(clippy::too_many_lines, clippy::useless_let_if_seq)]
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -249,7 +249,7 @@ impl Loader {
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
                 .to_path_buf(),
-            dependencies: HashMap::new(),
+            dependencies: HashMap::default(),
             package: self.packages,
         }
     }
@@ -797,9 +797,9 @@ fn declarations(
                     local,
                     TypeBinding {
                         canonical,
-                        constructors: HashMap::new(),
+                        constructors: HashMap::default(),
                         variants: Vec::new(),
-                        methods: HashMap::new(),
+                        methods: HashMap::default(),
                         alias: true,
                     },
                 );
@@ -838,9 +838,9 @@ fn declare_data(
     let canonical = symbols.intern(&format!("{namespace}$${}", data.name.text(source)));
     let mut binding = TypeBinding {
         canonical,
-        constructors: HashMap::new(),
+        constructors: HashMap::default(),
         variants: Vec::new(),
-        methods: HashMap::new(),
+        methods: HashMap::default(),
         alias: false,
     };
     match &data.representation {

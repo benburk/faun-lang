@@ -5,7 +5,8 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{BTreeSet, HashMap};
+use rustc_hash::FxHashMap as HashMap;
+use std::collections::BTreeSet;
 
 use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 
@@ -101,15 +102,15 @@ impl<'a> Lowerer<'a> {
             program,
             types: BTreeSet::new(),
             unexpanded: Vec::new(),
-            type_ids: HashMap::new(),
-            constructor_ids: HashMap::new(),
-            record_constructor_ids: HashMap::new(),
-            record_wrappers: HashMap::new(),
-            function_ids: HashMap::new(),
+            type_ids: HashMap::default(),
+            constructor_ids: HashMap::default(),
+            record_constructor_ids: HashMap::default(),
+            record_wrappers: HashMap::default(),
+            function_ids: HashMap::default(),
             widenings: BTreeSet::new(),
-            widen_ids: HashMap::new(),
+            widen_ids: HashMap::default(),
             unreachables: BTreeSet::new(),
-            unreachable_ids: HashMap::new(),
+            unreachable_ids: HashMap::default(),
             numerals: None,
             output: barb::Program::default(),
         };
@@ -639,7 +640,7 @@ impl<'a> Lowerer<'a> {
                         (Value(u32::try_from(index).expect("a sane arity")), *atom)
                     })
                     .collect();
-                emit_decision(&context, builder, &decision, &values, &HashMap::new())
+                emit_decision(&context, builder, &decision, &values, &HashMap::default())
             });
         }
     }
@@ -1206,7 +1207,7 @@ fn emit_bound(
         // the body around it binds.
         p::Bound::Match { subject, decision } => {
             let tested = emit_expr(context, builder, subject, locals);
-            let values = HashMap::from([(Value(0), tested)]);
+            let values = std::iter::once((Value(0), tested)).collect();
             emit_decision(context, builder, decision, &values, locals)
         }
         p::Bound::If { condition, yes, no } => {
