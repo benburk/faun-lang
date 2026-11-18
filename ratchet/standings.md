@@ -1,6 +1,6 @@
 # Standings
 
-Faun at `7809e77` beside each program's C twin, from the report of
+Faun at `cbfce5d` beside each program's C twin, from the report of
 2026-11-18; `just standings` writes this file and
 [RATCHET.md](../RATCHET.md) says what is measured. Speed is counted in
 instructions on x86-64, fuel on wasm32 and cycles on the 6502; memory
@@ -15,7 +15,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | checksum       | 111M  | 1.05 | 9.75M  | 4.33 | 9,656   | 0.67 | 6,776  |
 | collatz        | 282M  | 31.7 | 377K   | 0.17 | 22,120  | 1.54 | 16,040 |
 | crc32          | 430K  | 1.24 | 45.1K  | 0.02 | 11,779  | 0.82 | 8,684  |
-| fannkuch-redux | 645M  | 55.1 | 123K   | 0.05 | 42,624  | 2.97 | 29,128 |
+| fannkuch-redux | 646M  | 55.2 | 123K   | 0.05 | 42,808  | 2.98 | 29,096 |
 | fasta          | 213M  | 1.76 | 98.3K  | 0.05 | 17,552  | 1.22 | 13,760 |
 | inflate        | 1.24G | 65.7 | 4.26M  | 1.46 | 103,104 | 7.14 | 64,640 |
 | k-nucleotide   | 665M  | 74.3 | 8.41M  | 3.34 | 103,024 | 5.58 | 70,960 |
@@ -24,10 +24,10 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | n-body         | 287M  | 2.11 | 49.2K  | 0.02 | 29,464  | 2.01 | 23,064 |
 | pidigits       | 272M  | 20.8 | 160K   | 0.06 | 78,392  | 5.46 | 43,200 |
 | queens         | 83.2M | 32   | 111K   | 0.05 | 30,304  | 1.64 | 20,216 |
-| sieve          | 348M  | 29.1 | 2.38M  | 0.72 | 20,392  | 1.42 | 14,440 |
+| sieve          | 350M  | 29.3 | 2.38M  | 0.72 | 20,376  | 1.42 | 14,416 |
 | sort           | 319M  | 5.98 | 1.98M  | 0.71 | 25,696  | 1.79 | 20,392 |
 | spectral-norm  | 159M  | 1.76 | 131K   | 0.06 | 50,480  | 3.52 | 32,888 |
-| geometric mean |       | 7.45 |        | 0.18 |         | 2.12 |        |
+| geometric mean |       | 7.46 |        | 0.18 |         | 2.12 |        |
 
 ## x86_64-linux, lab
 
@@ -37,7 +37,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | checksum       | 94.1M | 0.89 | 9.74M  | 4.32 | 6,829  | 0.48 | 5,506  |
 | collatz        | 282M  | 31.7 | 373K   | 0.16 | 18,635 | 1.30 | 14,323 |
 | crc32          | 426K  | 1.23 | 41K    | 0.02 | 8,064  | 0.56 | 6,748  |
-| fannkuch-redux | 643M  | 54.9 | 119K   | 0.05 | 37,267 | 2.60 | 26,611 |
+| fannkuch-redux | 644M  | 55   | 119K   | 0.05 | 37,459 | 2.61 | 26,579 |
 | fasta          | 210M  | 1.73 | 94.2K  | 0.04 | 15,731 | 1.10 | 12,507 |
 | inflate        | 1.24G | 65.9 | 4.24M  | 1.46 | 91,915 | 6.37 | 57,987 |
 | k-nucleotide   | 511M  | 57.2 | 8.46M  | 3.36 | 89,491 | 4.85 | 64,403 |
@@ -46,7 +46,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | n-body         | 287M  | 2.11 | 45.1K  | 0.02 | 24,947 | 1.70 | 20,747 |
 | pidigits       | 272M  | 20.7 | 176K   | 0.06 | 71,819 | 5.00 | 40,699 |
 | queens         | 82.9M | 31.9 | 106K   | 0.05 | 26,643 | 1.44 | 18,507 |
-| sieve          | 343M  | 28.7 | 2.12M  | 0.65 | 17,291 | 1.20 | 12,995 |
+| sieve          | 345M  | 28.9 | 2.12M  | 0.65 | 17,283 | 1.20 | 12,971 |
 | sort           | 293M  | 5.48 | 1.97M  | 0.71 | 19,667 | 1.37 | 16,715 |
 | spectral-norm  | 159M  | 1.76 | 127K   | 0.06 | 44,683 | 3.11 | 30,059 |
 | geometric mean |       | 6.63 |        | 0.16 |        | 1.77 |        |
@@ -59,7 +59,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | checksum       | 60.7M | 1.80 | 2.12M  | 173  | 7,554   | 0.43 | 5,658   |
 | collatz        | 464M  | 26.8 | 205K   | 12.5 | 16,505  | 0.64 | 11,692  |
 | crc32          | 268K  | 2.80 | 16.4K  | 1.33 | 9,186   | 0.52 | 7,172   |
-| fannkuch-redux | 789M  | 37.1 | 73.7K  | 3.60 | 30,192  | 1.14 | 19,569  |
+| fannkuch-redux | 788M  | 37.1 | 73.7K  | 3.60 | 30,134  | 1.14 | 19,564  |
 | fasta          | 289M  | 2.75 | 73.7K  | 6.00 | 13,308  | 1.02 | 10,530  |
 | inflate        | 571M  | 48.5 | 467K   | 2.19 | 76,984  | 2.36 | 42,714  |
 | k-nucleotide   | 774M  | 78.5 | 2.06M  | 10.9 | 326,744 | 9.17 | 152,718 |
@@ -68,10 +68,10 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | n-body         | 1.65G | 18k  | 73.7K  | 4.50 | 305,530 | 10.8 | 133,048 |
 | pidigits       | 281M  | -    | 73.7K  | -    | 55,175  | -    | 26,876  |
 | queens         | 17.5M | 12.6 | 73.7K  | 4.50 | 20,528  | 0.80 | 13,516  |
-| sieve          | 225M  | 13.3 | 1.19M  | 2.31 | 15,867  | 0.62 | 11,295  |
+| sieve          | 217M  | 12.8 | 1.19M  | 2.31 | 15,809  | 0.61 | 11,290  |
 | sort           | 128M  | 1.65 | 467K   | 3.35 | 18,005  | 0.63 | 14,956  |
 | spectral-norm  | 1.35G | 23k  | 73.7K  | 3.60 | 306,811 | 11.5 | 133,707 |
-| geometric mean |       | 34.2 |        | 4.83 |         | 1.76 |         |
+| geometric mean |       | 34.1 |        | 4.83 |         | 1.76 |         |
 
 ## wasm32-wasi, lab
 
@@ -81,7 +81,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | checksum       | 60.7M | 1.80 | 2.12M  | 173  | 5,940   | 0.34 | 4,959   |
 | collatz        | 464M  | 26.8 | 205K   | 12.5 | 15,246  | 0.59 | 11,044  |
 | crc32          | 267K  | 2.78 | 16.4K  | 1.33 | 7,172   | 0.40 | 6,143   |
-| fannkuch-redux | 785M  | 36.9 | 73.7K  | 3.60 | 28,405  | 1.07 | 18,589  |
+| fannkuch-redux | 784M  | 36.9 | 73.7K  | 3.60 | 28,347  | 1.07 | 18,584  |
 | fasta          | 289M  | 2.75 | 73.7K  | 6.00 | 12,687  | 0.97 | 10,076  |
 | inflate        | 564M  | 48   | 467K   | 2.19 | 74,625  | 2.29 | 41,365  |
 | k-nucleotide   | 699M  | 70.8 | 2.06M  | 10.9 | 333,763 | 9.37 | 153,944 |
@@ -90,10 +90,10 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | n-body         | 1.65G | 18k  | 73.7K  | 4.50 | 317,260 | 11.2 | 136,786 |
 | pidigits       | 281M  | -    | 73.7K  | -    | 53,616  | -    | 26,036  |
 | queens         | 17.4M | 12.5 | 73.7K  | 4.50 | 19,488  | 0.76 | 12,985  |
-| sieve          | 225M  | 13.3 | 1.19M  | 2.31 | 14,822  | 0.57 | 10,765  |
+| sieve          | 217M  | 12.8 | 1.19M  | 2.31 | 14,764  | 0.57 | 10,760  |
 | sort           | 125M  | 1.62 | 467K   | 3.35 | 15,112  | 0.53 | 12,974  |
 | spectral-norm  | 1.35G | 23k  | 73.7K  | 3.60 | 317,768 | 11.9 | 136,974 |
-| geometric mean |       | 33.6 |        | 4.83 |         | 1.63 |         |
+| geometric mean |       | 33.5 |        | 4.83 |         | 1.63 |         |
 
 ## mos6502-sim65, stock
 
@@ -104,7 +104,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | crc32          | 10.6M | 9.50 | 6.35K  | 5.47 | 29,647 | 9.90 | 29,647 |
 | fasta          | 64.5M | -    | 1.31K  | -    | 57,321 | -    | 57,321 |
 | queens         | 46.6M | 33   | 1.51K  | 5.89 | 60,606 | 20.3 | 60,606 |
-| sieve          | 22.9M | 42.2 | 3.32K  | 2.84 | 45,440 | 14.1 | 45,440 |
+| sieve          | 22.7M | 41.7 | 3.32K  | 2.84 | 45,426 | 14.1 | 45,426 |
 | geometric mean |       | 15.6 |        | 8.29 |        | 12.9 |        |
 
 Not running:
@@ -129,13 +129,13 @@ Not running:
 | crc32          | 10.6M | 9.51 | 6.33K  | 5.45 | 27,229 | 9.09 | 27,229 |
 | fasta          | 64.6M | -    | 1.3K   | -    | 55,744 | -    | 55,744 |
 | queens         | 46.6M | 32.9 | 1.51K  | 5.90 | 58,871 | 19.8 | 58,871 |
-| sieve          | 22.9M | 42.2 | 3.32K  | 2.84 | 43,756 | 13.6 | 43,756 |
+| sieve          | 22.7M | 41.7 | 3.33K  | 2.84 | 43,742 | 13.6 | 43,742 |
 | sort           | 4.96M | 12.1 | 804    | 3.03 | 63,166 | 13.8 | 63,166 |
 | geometric mean |       | 14.9 |        | 7.01 |        | 12.5 |        |
 
 Not running:
 
-- binary-trees: size image at 2: exit 3: stack overflow
+- binary-trees: size image at 1: exit 3: stack overflow
 - fannkuch-redux: too large
 - inflate: too large
 - k-nucleotide: too large
