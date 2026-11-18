@@ -702,8 +702,11 @@ pub(super) fn append(
         block: naturals.release,
         allocate: naturals.require(Helper::Allocate),
         moving: define_move(program, word_bits),
+        giving: program.declare("seq.give", &[A, W, W, W], &[]),
+        claiming: program.declare("seq.claim", &[A, W, W, W], &[]),
     };
     define_release(program, runtime);
+    define_claims(program, runtime);
     let (routines, joins) = define_growths(program, runtime, wanted);
     let copies = routines
         .keys()
@@ -816,6 +819,10 @@ struct Runtime {
     allocate: FunctionId,
     /// `seq.move(source, dest, bytes)`.
     moving: FunctionId,
+    /// `seq.give(object, descriptor, from, to)`.
+    giving: FunctionId,
+    /// `seq.claim(dest, count, stride, descriptor)`.
+    claiming: FunctionId,
 }
 
 impl Runtime {
@@ -838,12 +845,7 @@ impl Runtime {
             &[],
             |b| b.yield_(&[]),
             |b| {
-                let descriptor = b.convert(A, descriptor);
-                let stride = b.load(Width::Word, object, Offset::Words(STRIDE));
-                let word_bits = self.word_bits();
-                each_claim(b, (self.claims, true), descriptor, (from, to), &|b, at| {
-                    element_at(b, object, (stride, at), word_bits)
-                });
+                b.call(self.giving, &[object, descriptor, from, to]);
                 b.yield_(&[]);
             },
         );
@@ -1333,17 +1335,7 @@ fn claim_run(
         &[],
         |b| b.yield_(&[]),
         |b| {
-            let descriptor = b.convert(A, described);
-            each_claim(
-                b,
-                (runtime.claims, false),
-                descriptor,
-                (zero, count),
-                &|b, at| {
-                    let distance = b.binary(Binary::Mul, at, stride);
-                    byte_offset(b, dest, distance)
-                },
-            );
+            b.call(runtime.claiming, &[dest, count, stride, described]);
             b.yield_(&[]);
         },
     );
@@ -1426,5 +1418,44 @@ fn each_element(
         let one = number(b, 1);
         let next = b.binary(Binary::Add, at, one);
         b.continue_(&[next]);
+    });
+}
+
+/// `seq.give(object, descriptor, from, to)` gives up the claims elements
+/// `from` up to `to` of `object` hold, and `seq.claim(dest, count, stride,
+/// descriptor)` takes another claim to what each of the `count` elements
+/// from `dest`, `stride` apart, holds, as the descriptor, never nought,
+/// lists them: one routine each, which every release and copy of elements
+/// holding claims calls.
+fn define_claims(program: &mut Program, runtime: Runtime) {
+    let word_bits = runtime.word_bits();
+    program.define(runtime.giving, |b, args| {
+        let (object, descriptor, from, to) = (args[0], args[1], args[2], args[3]);
+        let descriptor = b.convert(A, descriptor);
+        let stride = b.load(Width::Word, object, Offset::Words(STRIDE));
+        each_claim(
+            b,
+            (runtime.claims, true),
+            descriptor,
+            (from, to),
+            &|b, at| element_at(b, object, (stride, at), word_bits),
+        );
+        b.ret(&[]);
+    });
+    program.define(runtime.claiming, |b, args| {
+        let (dest, count, stride, descriptor) = (args[0], args[1], args[2], args[3]);
+        let descriptor = b.convert(A, descriptor);
+        let zero = number(b, 0);
+        each_claim(
+            b,
+            (runtime.claims, false),
+            descriptor,
+            (zero, count),
+            &|b, at| {
+                let distance = b.binary(Binary::Mul, at, stride);
+                byte_offset(b, dest, distance)
+            },
+        );
+        b.ret(&[]);
     });
 }
