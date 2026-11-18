@@ -32,6 +32,11 @@ impl Target for Aarch64Macos {
         WORD_BITS
     }
 
+    /// A process is given the low 47 bits of address.
+    fn address(&self) -> u16 {
+        47
+    }
+
     fn provides(&self) -> &'static [&'static str] {
         &["write!", "exit!", "argc", "argv", "fd_put!", "write_fd!"]
     }

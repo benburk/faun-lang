@@ -22,6 +22,13 @@ pub trait Target: fmt::Debug {
     /// unbounded Naturals are legalized separately, never implicitly wrapped.
     fn word(&self) -> u16;
 
+    /// How many bits of address a program's memory lies below: see
+    /// [`crate::platform::Routines::with_address`]. A word's, unless the
+    /// machine says less.
+    fn address(&self) -> u16 {
+        self.word()
+    }
+
     /// The routines it answers for, by the name a target is asked by.
     ///
     /// What a program may reach is what its target provides, and no two
@@ -45,7 +52,8 @@ pub trait Target: fmt::Debug {
     fn routines(&self) -> crate::platform::Routines {
         let routines = crate::platform::Routines::builtin()
             .only(self.provides())
-            .with_word(self.word());
+            .with_word(self.word())
+            .with_address(self.address());
         if self.floats() {
             routines.with_floats()
         } else {

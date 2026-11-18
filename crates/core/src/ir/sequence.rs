@@ -942,7 +942,8 @@ pub(super) fn allocate(
     capacity: ValueId,
     word_bytes: u64,
 ) -> ValueId {
-    let elements = b.binary(Binary::Mul, capacity, stride);
+    let each = allocated_stride(b, stride);
+    let elements = b.binary(Binary::Mul, capacity, each);
     let fixed = number(b, (ELEMENTS - 3) * word_bytes);
     let bytes = b.binary(Binary::Add, elements, fixed);
     let object = b.call_one(allocate, &[bytes]);
@@ -953,6 +954,17 @@ pub(super) fn allocate(
     b.store(Width::Word, object, Offset::Words(STRIDE), stride);
     b.store(Width::Word, object, Offset::Words(DESCRIPTOR), descriptor);
     object
+}
+
+/// The bytes each element of a buffer one `stride` apart is allocated: its
+/// stride, and a byte for an element that takes none, so that a sequence
+/// is never longer than the memory holding it is bytes, which is what
+/// bounds a length by a target's address space
+/// ([`crate::platform::Routines::length`]).
+fn allocated_stride(b: &mut Builder<'_>, stride: ValueId) -> ValueId {
+    let zero = number(b, 0);
+    let none = b.compare(Relation::Equal, stride, zero);
+    b.binary(Binary::Add, stride, none)
 }
 
 /// `seq.move(source, dest, bytes)`: copy a run of bytes, a word at a time

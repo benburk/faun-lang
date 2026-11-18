@@ -275,6 +275,9 @@ pub struct Routines {
     startup: Vec<Startup>,
     /// How many bits a host word is, once a target has said.
     word: Option<u16>,
+    /// How many bits of address a program's memory lies below, once a
+    /// target has said: see [`Self::with_address`].
+    address: Option<u16>,
     /// Whether its machine computes IEEE 754 arithmetic itself: see
     /// [`Self::with_floats`].
     floats: bool,
@@ -383,6 +386,7 @@ impl Routines {
             contracts,
             startup,
             word: None,
+            address: None,
             floats: false,
         }
     }
@@ -411,6 +415,18 @@ impl Routines {
         self.word
     }
 
+    /// Say that everything a program holds in memory lies below `2^bits`,
+    /// as a process's addresses do on its machine: x86-64 Linux gives a
+    /// process the low 47 bits of address unless it asks for more, which a
+    /// Faun program never does, wasm32's memory is at most 4 GiB, and the
+    /// 6502 addresses 64 KiB. Every element of a sequence takes a byte at
+    /// least, so this bounds how long a sequence is.
+    #[must_use]
+    pub const fn with_address(mut self, bits: u16) -> Self {
+        self.address = Some(bits);
+        self
+    }
+
     /// Say that the machine computes each [`crate::float::Float`] with an
     /// instruction of its own, correctly rounded to nearest-even and never
     /// trapping, so that a definition claimed to compute one is answered by
@@ -430,12 +446,22 @@ impl Routines {
     /// What a sequence's length can be. A sequence is held in memory, and
     /// how many elements it has is a word, so no more than a word holds;
     /// and its buffer's header takes memory too, so fewer than that: one
-    /// more than an index into it still fits a word.
+    /// more than an index into it still fits a word. Where a target says
+    /// how much memory there is, every element takes a byte of it at least
+    /// (a buffer of elements that take none still allocates a byte for
+    /// each), so no more elements than bytes: on x86-64 a length times
+    /// eight, a count of bits, still fits a word.
     #[must_use]
     pub fn length(&self) -> crate::barb::Bounds {
         let word = held_bounds(self.word.map_or(Class::Word, Class::fixed));
+        let memory = self
+            .address
+            .filter(|&bits| bits < 64)
+            .map(|bits| (1u64 << bits) - 1);
         crate::barb::Bounds {
-            high: word.high.map(|high| high - 1),
+            high: word
+                .high
+                .map(|high| memory.map_or(high - 1, |memory| memory.min(high - 1))),
             ..word
         }
     }
@@ -486,6 +512,7 @@ impl Routines {
                 .cloned()
                 .collect(),
             word: self.word,
+            address: self.address,
             floats: self.floats,
         }
     }
