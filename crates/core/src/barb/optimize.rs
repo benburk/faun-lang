@@ -15,15 +15,17 @@ use super::{InlineLimits, Program};
 ///    are recognized by their code in between.
 /// 2. Forward list construction.
 /// 3. Descent over natural numbers.
-/// 4. Helper inlining with arithmetic identities.
-/// 5. Producer/consumer fusion.
-/// 6. First-element demand specialization.
-/// 7. List walks expressed through functional replacements.
-/// 8. Simplification, including constant evaluation and identities.
-/// 9. Specialization for known arguments, resimplifying changed definitions.
-/// 10. Joining recursive rounds through helper inlining.
-/// 11. Reachability sweep.
-/// 12. Effect-safe cleanup.
+/// 4. Constants: each taking nothing and doing work is folded, left where
+///    it runs at most once, or worked out once in the entry and handed down.
+/// 5. Helper inlining with arithmetic identities.
+/// 6. Producer/consumer fusion.
+/// 7. First-element demand specialization.
+/// 8. List walks expressed through functional replacements.
+/// 9. Simplification, including constant evaluation and identities.
+/// 10. Specialization for known arguments, resimplifying changed definitions.
+/// 11. Joining recursive rounds through helper inlining.
+/// 12. Reachability sweep.
+/// 13. Effect-safe cleanup.
 ///
 /// Recognized induction equations are left intact. Cleanup removes aliases
 /// and unused pure bindings while preserving observable calls. Inlining and
@@ -37,6 +39,7 @@ pub fn optimize(program: &mut Program) {
     super::structural(program);
     super::forward::forward(program);
     super::descent::descend(program);
+    super::once::once(program);
     super::normalize::inline_with_identities(program, InlineLimits::default());
     super::fuse::fuse(program);
     super::head::heads(program);

@@ -122,6 +122,7 @@ mod inline;
 mod inplace;
 mod model;
 mod normalize;
+mod once;
 mod optimize;
 mod pretty;
 mod program;

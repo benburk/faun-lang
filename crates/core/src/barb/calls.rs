@@ -113,6 +113,19 @@ pub(super) fn pure(program: &Program, recognised: &Recognised) -> Vec<bool> {
     pure
 }
 
+/// Which definitions can call themselves again before they answer: each in
+/// a round with others, and each calling itself.
+pub(super) fn recursive(program: &Program) -> Vec<bool> {
+    let calls = graph(program);
+    let mut recursive = vec![false; calls.len()];
+    for round in rounds(&calls) {
+        for &id in &round {
+            recursive[id.index()] = round.len() > 1 || calls[id.index()].contains(&id);
+        }
+    }
+    recursive
+}
+
 /// The rounds a program's calls make: every definition in one reaches every
 /// other in it, and comes back.
 ///
