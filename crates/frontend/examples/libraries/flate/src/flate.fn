@@ -332,7 +332,9 @@ dynamic_header(input, total, bit) -> (
 # `count` code lengths, read through the code-length code, with its runs.
 code_lengths_read : (List(U8), Nat, Huffman, Nat, Nat, List(Nat)) -> Result((List(Nat), Nat), InflateError)
 code_lengths_read(input, total, code, bit, count, lengths) -> (
-  if lengths.len() >= count return (lengths.len() == count).select(Ok((lengths, bit)), Err(BadCode))
+  if lengths.len() == count return Ok((lengths, bit))
+  # A run past the last length is refused.
+  if lengths.len() > count return Err(BadCode)
   (symbol, at) = decode(input, total, code, bit)?
   if symbol < 16 return code_lengths_read(input, total, code, at, count, lengths.append(symbol))
   (value, extra, least) = symbol is (

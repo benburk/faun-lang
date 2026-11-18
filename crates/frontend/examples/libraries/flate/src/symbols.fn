@@ -38,7 +38,9 @@ fixed_literal_lengths =
 first_codes : (List(Nat), Nat, Nat, List(Nat)) -> List(Nat)
 first_codes(_, 16, _, firsts) -> firsts
 first_codes(counts, length, code, firsts) -> (
-  next = (code + counts.get(length - 1).ok_or(0) * (length > 1).select(1, 0)) * 2
+  # Symbols left out have length nought, and take no codes.
+  shorter = if length > 1 then counts.get(length - 1).ok_or(0) else 0
+  next = (code + shorter) * 2
   first_codes(counts, length + 1, next, firsts.append(next))
 )
 
