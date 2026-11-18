@@ -215,15 +215,17 @@ List(a) : [Nil, Cons(a, List(a))].(
   drop_while([head, *tail], skip) if skip(head) -> drop_while(tail, skip)
   drop_while(values, _) -> values
 
-  # `0 1 ... count - 1`, written `List.range(count)`. Built from the end,
-  # each element the count that is left: every one is below `count`, which
-  # is what a compiler reading the recursion can see.
+  # `0 1 ... count - 1`, written `List.range(count)`. Built front to back,
+  # an element for each step down what is left: so a walk reading it, as
+  # `List.range(n).fold(...)` does, reads each element as it is made and
+  # the list is never built, and every element is below `count`, its sum
+  # with what is left.
   range : Nat -> List(Nat)
-  range(count) -> range_into(count, [])
+  range(count) -> range_from(0, count)
 
   # `count` copies of `value`, written `List.repeat(value, count)`.
   repeat : (a, Nat) -> List(a)
-  repeat(value, count) -> repeat_onto(value, count, [])
+  repeat(value, count) -> repeat_ahead(value, count)
 
   # The first `count` elements and the rest.
   split_at : (List(a), Nat) -> (List(a), List(a))
@@ -307,9 +309,9 @@ reverse_into : (List(a), List(a)) -> List(a)
 reverse_into([], output) -> output
 reverse_into([head, *tail], output) -> reverse_into(tail, [head, *output])
 
-range_into : (Nat, List(Nat)) -> List(Nat)
-range_into(0, built) -> built
-range_into(Succ(left), built) -> range_into(left, [left, *built])
+range_from : (Nat, Nat) -> List(Nat)
+range_from(_, 0) -> []
+range_from(next, Succ(left)) -> [next, *range_from(next + 1, left)]
 
 # The loops the walks above are that build something other than one list
 # element by element, each building its answer backwards onto `built` and
@@ -422,9 +424,9 @@ merge_into([x, *left], right is [y, *_], key, built) if key(x) <= key(y) ->
   merge_into(left, right, key, [x, *built])
 merge_into(left, [y, *right], key, built) -> merge_into(left, right, key, [y, *built])
 
-repeat_onto : (a, Nat, List(a)) -> List(a)
-repeat_onto(_, 0, built) -> built
-repeat_onto(value, Succ(count), built) -> repeat_onto(value, count, [value, *built])
+repeat_ahead : (a, Nat) -> List(a)
+repeat_ahead(_, 0) -> []
+repeat_ahead(value, Succ(count)) -> [value, *repeat_ahead(value, count)]
 
 expect [3, 1, 2].sort() == [1, 2, 3] & [0].drop(1).sort().is_empty()
 expect [5, 3, 9, 1, 5, 6, 2, 8, 7, 4, 0].sort() == [0, 1, 2, 3, 4, 5, 5, 6, 7, 8, 9]
