@@ -135,7 +135,8 @@ Tidy up:
 
 12. **Sweep.** Drop definitions the entry doesn't reach.
 13. **Cleanup.** Drop unused pure work, move work into the one arm that
-    reads it, and compact the term arena.
+    reads it, work a pure read of a list out before an earlier write of it,
+    so the write can be in place, and compact the term arena.
 
 Pure work can be dropped or moved freely. Calls reaching a declaration are
 effects and keep their order, count and path.

@@ -383,11 +383,17 @@ extra(input, total, entry, bit) -> (
   Ok((word.shift_right(4) + bits(input, bit, count), bit + count))
 )
 
-# `length` bytes from `from` on appended, one at a time, so a match may
-# overlap what it writes and repeat it.
+# `length` bytes from `from` on appended. A match that ends before what it
+# writes is a run of `out` joined to it, written where `out` lies; one
+# that overlaps what it writes repeats it, a byte at a time.
 copy : (List(U8), U64, U64) -> List(U8)
-copy(out, _, 0) -> out
-copy(out, from, left) -> copy(out.append(out.get(from.to_nat()).ok_or(0)), from + 1, left - 1)
+copy(out, from, length) if from + length <= U64.of_nat(out.len()) -> out.concat(out.drop(from.to_nat()).take(length.to_nat()))
+copy(out, from, length) -> repeat(out, from, length)
+
+# `left` bytes from `from` on appended, one at a time.
+repeat : (List(U8), U64, U64) -> List(U8)
+repeat(out, _, 0) -> out
+repeat(out, from, left) -> repeat(out.append(out.get(from.to_nat()).ok_or(0)), from + 1, left - 1)
 
 # A stored block of "hi", final.
 expect inflate([1, 2, 0, 0xfd, 0xff, 'h', 'i']) == Ok("hi".to_utf8())

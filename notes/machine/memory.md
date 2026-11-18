@@ -75,10 +75,29 @@ written where it lies:
   joining once larger, which `faun build --small` leaves out where it is.
   The 6502 joins only after the first: its calls carry four values and
   answer one, and the routine takes six and answers two.
+- **Joining a sequence to a run of itself,**
+  `out.concat(out.drop(k).take(n))` as an LZ77 copy writes it, writes the
+  run after `out` where it lies. The run is a view of `out`'s buffer, so the
+  buffer has two claims at the join, `out`'s and the run's; the join gives
+  up the run's first, which never frees the buffer while `out` holds it,
+  and then finds it held once. The run lies before where the writing
+  starts, so it is read whole before anything is written over; where the
+  buffer has no room and is copied, the run is read from the copy. This is
+  done where both sides of the join are the same buffer in the program,
+  as they are when the run is taken where it is joined.
 - **Replacing an element** writes over it.
 - **Otherwise** the sequence is copied first, to a new buffer with as much
   room again, which makes a run of additions cost a bounded number of
   copies each. This is copy-on-write.
+
+A buffer is held once at a write only if nothing read after the write
+holds it too. So a pure read of a sequence, and the runs of it the read
+takes, written after a write of the same sequence is worked out before the
+write wherever everything it reads is known there: in
+`{head: head.put(key, at), prev: prev.put(at, head.get(key).ok_or(0))}`,
+the `get` of `head` goes before its `put`, and the `put` writes in place.
+Barb's cleanup does this; reads are pure, so the order they run in is not
+observable.
 
 Where it is known before the program runs that a buffer is held by nothing
 else, as for one a loop rewrites every round, the count is not asked at
@@ -116,6 +135,40 @@ time releasing cells and buffers, and 36% allocating, for lists a C program
 keeps in one array. The recourses are the ones above: borrowed parameters,
 claims moved rather than copied, and uniqueness known before the program
 runs.
+
+### Why does the compiler move reads before writes rather than the program?
+
+The order a program reads and writes a list is fixed by how it is
+written: a record's fields left to right, an argument before its call.
+Whether a write is in place depends on that order, and nothing in the
+source says so. Hash chains' insert reads the old head in its second field
+after its first field writes the new one, and copied all 1024 heads every
+byte; a run of `out` joined to `out` held its buffer twice and copied the
+whole window every match, quadratic in the output. Both are written the way
+the algorithm reads, and a programmer who does not know the rule above has
+no way to find it but a profile.
+
+Moving a pure computation earlier is semantics-preserving: it reads only
+values, and Barb already moves pure work to either side of an effect and
+leaves out what nothing needs. So the compiler, which knows where a write
+is and what reads the written value afterwards, puts the reads first. The
+cost is a rule with an edge: only a read whose inputs are all known before
+the write moves, only after a write Barb recognizes as replacing, adding
+or joining, and a run joined to its list is written in place only where the
+run is taken in the same function as the join. The recourse elsewhere is
+still to bind the read first.
+
+### Why not a standard-library `extend_from`?
+
+Rust's `extend_from_within` appends a run of a vector to itself in place.
+The same in Faun, `List.extend_from(out, from, count)`, was proposed by the
+[compression](../compression.md) note. Once a run of a list joined to it is
+written in place, `out.concat(out.drop(from).take(count))` is that, written
+with the words a reader already knows, and every program joining a list to
+a part of itself gets it without learning a new name. An LZ77 copy whose
+distance is shorter than its length repeats what it writes, which neither
+`concat` nor `extend_from_within` does, so a decoder still copies that case a
+byte at a time.
 
 ### Why can no value hold itself?
 
@@ -158,6 +211,16 @@ The cost is that the difference shows only in time. Keeping an old value
 alive, as `snapshot` does, makes the next update of `order` a copy of the
 whole list. The recourse is to let a name die before its value is
 updated, which a loop that binds a name again does.
+
+## History
+
+- **2026-11-17:** a run of a list joined to the list is written in place,
+  and a pure read of a sequence is worked out before an earlier write of
+  it. Before, a view held across a join made inflate's slice copy
+  quadratic, 8.2 billion instructions for 300 KB, and a record whose
+  second field read what its first wrote over copied the whole list.
+  Inflate's slice copy now takes 49 million for the 300 KB, and the flate
+  library copies a match that does not overlap as a run of the window.
 
 ## Related
 

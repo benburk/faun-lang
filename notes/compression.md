@@ -115,10 +115,12 @@ form stays.
 ### Growing the output where it lies is cheap
 
 Inflate's output is its window: a literal is `out.append(byte)`, and a
-match appends a byte at a time from `out.get(from)`, so an overlapping
-match repeats what it writes, as RFC 1951 asks. A hundred million
-appends, half of them reading back from the list, took 170 ms, since
-nothing else holds the buffer.
+match that ends before where it writes is a run of the window joined to
+it, `out.concat(out.drop(from).take(length))`. One that overlaps what it
+writes appends a byte at a time from `out.get(from)`, so it repeats what
+it writes, as RFC 1951 asks. A hundred million appends, half of them
+reading back from the list, took 170 ms, since nothing else holds the
+buffer.
 
 ### Narrowing between words goes through `Nat`
 
@@ -342,7 +344,7 @@ list it shares is grown is the next finding's other side.
 
 ### A view held while its list grows copies the list
 
-Copying a match by slices rather than a byte at a time,
+Fixed. Copying a match by slices rather than a byte at a time,
 `out.concat(out.drop(from).take(length))`, made inflate quadratic: 300 KB
 took 8.2 billion instructions where the byte loop takes 94 million. The
 view shares `out`'s buffer, so `out` is no longer held by one, and
@@ -360,6 +362,15 @@ billion against 5.14 for 16 MB, and took as long, an allocation a match,
 so inflate kept the byte loop. A `List.extend_from(out, from, count)`,
 appending a list's own elements where it lies, as Rust's
 `extend_from_within` does, would serve every LZ77 decoder.
+
+The compiler now writes a run of a list joined to the list where the list
+lies ([memory](machine/memory.md#writing-in-place)): the join gives up the
+run's claim first, so the buffer is held once, and the run lies before
+where the writing starts. The probe takes 11 million instructions rather
+than 912 million, and the slice copy 49 million for the 300 KB rather than
+8.2 billion. `flate.fn` copies a match that does not overlap as a run, and
+16 MB of text inflate in 2.43 billion instructions rather than 3.05, 105 ms
+rather than 112. No `extend_from` was added: `concat` of a run is it.
 
 ### Splitting a walk's clauses can lose its loop
 
@@ -584,6 +595,12 @@ reads `head` after it is put, so `head` is shared when it is put and all
 1024 entries are copied a byte. Reading the old head first made 100 KB
 take 49 ms rather than 0.5 s. Nothing in the source says the order of a
 record's fields decides a copy.
+
+Fixed: Barb works a pure read of a list out before an earlier write of it
+wherever what the read needs is known there
+([memory](machine/memory.md#writing-in-place)), so both orders write `head`
+in place. A probe of 10000 such inserts into 1024 heads took 1.43 billion
+instructions, and takes 6 million.
 
 ## Related
 
