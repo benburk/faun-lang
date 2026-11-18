@@ -47,7 +47,7 @@ use std::collections::BTreeMap;
 
 use super::cell::{self, Claims, byte_offset, number};
 use super::natural::{Helper, Library as NaturalLibrary};
-use super::packing::Packed;
+use super::packing::{NATURAL, Packed};
 use super::{
     Binary, Builder, Class, DataId, FunctionId, Offset, Program, Relation, ValueId, Width,
 };
@@ -836,18 +836,9 @@ impl Runtime {
     ) {
         let descriptor = b.convert(A, descriptor);
         let stride = b.load(Width::Word, object, Offset::Words(STRIDE));
-        b.loop_(&[from], &[], |b, state| {
-            let at = state[0];
-            let more = b.compare(Relation::Less, at, to);
-            b.if_(more, &[], |b| b.yield_(&[]), |b| b.break_(&[]));
-            let element = element_at(b, object, (stride, at), self.word_bits());
-            self.claims
-                .each(b, (descriptor, element), &mut |b, kind, value| {
-                    self.claims.release_by_kind(b, kind, value);
-                });
-            let one = number(b, 1);
-            let next = b.binary(Binary::Add, at, one);
-            b.continue_(&[next]);
+        let word_bits = self.word_bits();
+        each_claim(b, (self.claims, true), descriptor, (from, to), &|b, at| {
+            element_at(b, object, (stride, at), word_bits)
         });
     }
 
@@ -1485,22 +1476,97 @@ fn claim_run(
         |b| b.yield_(&[]),
         |b| {
             let descriptor = b.convert(A, described);
-            b.loop_(&[zero], &[], |b, state| {
-                let at = state[0];
-                let done = b.compare(Relation::Equal, at, count);
-                b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                let distance = b.binary(Binary::Mul, at, stride);
-                let element = byte_offset(b, dest, distance);
-                runtime
-                    .claims
-                    .each(b, (descriptor, element), &mut |b, kind, value| {
-                        runtime.claims.claim(b, kind, value);
-                    });
-                let one = number(b, 1);
-                let next = b.binary(Binary::Add, at, one);
-                b.continue_(&[next]);
+            each_claim(
+                b,
+                (runtime.claims, false),
+                descriptor,
+                (zero, count),
+                &|b, at| {
+                    let distance = b.binary(Binary::Mul, at, stride);
+                    byte_offset(b, dest, distance)
+                },
+            );
+            b.yield_(&[]);
+        },
+    );
+}
+
+/// Take or give up, as `giving` says, the claims each element from `from`
+/// up to `to` holds, where `element` says each lies, as the descriptor at
+/// `descriptor` lists them. Where it lists one claim alone, a natural, as a
+/// list of naturals' does, where it lies and what it is are read once
+/// rather than once an element, and an immediate costs one test.
+fn each_claim(
+    b: &mut Builder<'_>,
+    (claims, giving): (Claims, bool),
+    descriptor: ValueId,
+    (from, to): (ValueId, ValueId),
+    element: &dyn Fn(&mut Builder<'_>, ValueId) -> ValueId,
+) {
+    let single = one_natural(b, descriptor);
+    let walk = |b: &mut Builder<'_>, each: &mut dyn FnMut(&mut Builder<'_>, ValueId)| {
+        each_element(b, (from, to), element, each);
+    };
+    b.if_(
+        single,
+        &[],
+        |b| {
+            let leaf = b.load(Width::Word, descriptor, Offset::Words(1));
+            walk(b, &mut |b, place| {
+                let place = byte_offset(b, place, leaf);
+                let value = b.load(Width::Word, place, Offset::Words(0));
+                if giving {
+                    claims.release(b, NATURAL, value);
+                } else {
+                    let natural = number(b, NATURAL);
+                    claims.claim(b, natural, value);
+                }
+            });
+            b.yield_(&[]);
+        },
+        |b| {
+            walk(b, &mut |b, place| {
+                claims.each(b, (descriptor, place), &mut |b, kind, value| {
+                    if giving {
+                        claims.release_by_kind(b, kind, value);
+                    } else {
+                        claims.claim(b, kind, value);
+                    }
+                });
             });
             b.yield_(&[]);
         },
     );
+}
+
+/// One where the descriptor at `descriptor` lists one claim alone, a
+/// natural.
+fn one_natural(b: &mut Builder<'_>, descriptor: ValueId) -> ValueId {
+    let count = b.load(Width::Word, descriptor, Offset::Words(0));
+    let kind = b.load(Width::Word, descriptor, Offset::Words(2));
+    let one = number(b, 1);
+    let alone = b.compare(Relation::Equal, count, one);
+    let natural = number(b, NATURAL);
+    let of_natural = b.compare(Relation::Equal, kind, natural);
+    b.binary(Binary::Mul, alone, of_natural)
+}
+
+/// Do `each` with where each element from `from` up to `to` lies, as
+/// `element` says.
+fn each_element(
+    b: &mut Builder<'_>,
+    (from, to): (ValueId, ValueId),
+    element: &dyn Fn(&mut Builder<'_>, ValueId) -> ValueId,
+    each: &mut dyn FnMut(&mut Builder<'_>, ValueId),
+) {
+    b.loop_(&[from], &[], |b, state| {
+        let at = state[0];
+        let more = b.compare(Relation::Less, at, to);
+        b.if_(more, &[], |b| b.yield_(&[]), |b| b.break_(&[]));
+        let place = element(b, at);
+        each(b, place);
+        let one = number(b, 1);
+        let next = b.binary(Binary::Add, at, one);
+        b.continue_(&[next]);
+    });
 }
