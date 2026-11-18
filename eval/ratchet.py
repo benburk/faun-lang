@@ -5,7 +5,9 @@ into a cache and built there; no git worktrees are created. Both compile the
 suite's programs for every target, with each backend, favouring speed and
 favouring size. A program must print what its C twin prints, and is then
 measured beside it: the instructions, fuel or cycles it ran, the memory it
-used, and the bytes of its image. See RATCHET.md for the rules.
+used, and the bytes of its image. Beside the suite are the probes: each a
+natural Faun program and its hand-written workaround, its twin, which must
+print the same. See RATCHET.md for the rules.
 """
 
 import argparse
@@ -20,6 +22,7 @@ from pathlib import Path
 import platform
 import random
 import re
+import resource
 import secrets
 import shutil
 import statistics
@@ -42,6 +45,9 @@ CACHE = Path(os.environ.get("RATCHET_CACHE", Path.home() / ".cache/faun-ratchet"
 # and it is the incumbent unless another revision is named.
 APPROVED = "origin/main"
 TRUNK = os.environ.get("RATCHET_TRUNK", APPROVED)
+# The log's series: a protected change, once merged, starts the next one, and
+# bumps this with it.
+SERIES = 5
 
 X86, WASM, MOS = "x86_64-linux", "wasm32-wasi", "mos6502-sim65"
 TARGETS = (X86, WASM, MOS)
@@ -79,20 +85,30 @@ for _target in TARGETS:
 TURNS, SLOWER, FLOOR_NS, TIMED_NS = 5, 1.10, 250_000, 250_000_000
 
 SECONDS = 120  # one run's limit
+# The most memory one run may hold, so that a program gone wrong fails its
+# cell rather than the machine: every program here holds a few megabytes.
+MEMORY = 256 << 20
 FUEL = 200_000_000_000
 CYCLES = 4_000_000_000
 
 GAME = ROOT / "crates/frontend/examples/benchmarks-game"
 KERNELS = ROOT / "eval/workloads"
+# Outside eval/, so adding one needs no approval; read from the evaluator's
+# export, the trunk's, so a branch cannot add one and score itself by it.
+PROBES = ROOT / "probes"
+PROBE = "probe-"  # what a probe's workload name starts with
 
 
 class Workload(NamedTuple):
-    """A program in Faun and its C twin, `main.fn` and `main.c` in a folder.
+    """A program in Faun and its C twin, `main.fn` and `main.c` in a folder,
+    or a probe: `main.fn`, the natural spelling, and `twin.fn`, the
+    workaround, which the incumbent's compiler builds.
 
     `input` says what a size means: an `argument`; `fasta`, that the C fasta's
     output of that size is standard input; or `bytes`, that so many seeded
     random bytes are. `sizes` holds the size measured on each target: small
-    enough to take a fraction of a second, since the counts do not vary.
+    enough to take a fraction of a second, since the counts do not vary. A
+    probe runs only on the targets it has a size for.
     """
 
     name: str
@@ -101,6 +117,15 @@ class Workload(NamedTuple):
     sizes: dict
     step: int = 1
     libraries: tuple = ()
+
+    @property
+    def probe(self):
+        return self.name.startswith(PROBE)
+
+    @property
+    def home(self):
+        """The folder holding the program and its twin."""
+        return self.folder / self.name.removeprefix(PROBE)
 
 
 def sizes(x86, wasm, mos):
@@ -129,6 +154,23 @@ WORKLOADS = [
     Workload("sieve", KERNELS, "argument", sizes(1_000_000, 500_000, 1000)),
     Workload("sort", KERNELS, "argument", sizes(100_000, 30_000, 24)),
 ]
+
+
+def probes(folder=PROBES):
+    """The probes: each folder under `probes/` holding `main.fn`, `twin.fn`
+    and `sizes`, a line for each target it runs on, the target and the size
+    its argument is there."""
+    found = []
+    for listed in sorted(folder.glob("*/sizes")):
+        held = {}
+        for line in listed.read_text().splitlines():
+            if line.strip() and not line.lstrip().startswith("#"):
+                target, size = line.split()
+                if target not in TARGETS:
+                    sys.exit(f"{listed}: no target {target}")
+                held[target] = int(size)
+        found.append(Workload(PROBE + listed.parent.name, folder, "argument", held))
+    return found
 
 
 def git(*args, cwd=None):
@@ -276,6 +318,16 @@ def protected_changes(candidate, evaluator):
     return git("diff", "--name-only", base, *against, "--", *PROTECTED, cwd=cwd).split()
 
 
+def probe_changes(candidate, evaluator):
+    """Probes the candidate has that differ from the evaluator's, which are
+    the ones measured: a new probe lands on the trunk first."""
+    against = [candidate.commit] if not candidate.dirty else []
+    cwd = candidate.path if candidate.dirty else None
+    return git(
+        "diff", "--name-only", evaluator, *against, "--", "probes", cwd=cwd
+    ).split()
+
+
 def first_line(text, wanted="error"):
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     chosen = [line for line in lines if wanted in line.lower()] or lines
@@ -295,7 +347,7 @@ def run(target, image, arguments, stdin, out):
         command = [tools / "measure", str(SECONDS), metrics, name, *arguments]
     elif target == WASM:
         command = [sys.executable, ROOT / "eval/wasm.py", name]
-        command += [stdin or os.devnull, out, str(FUEL), *arguments]
+        command += [stdin or os.devnull, out, str(FUEL), str(MEMORY), *arguments]
     else:
         command = [os.environ["SIM65"], "-x", str(CYCLES), name, *arguments]
         env = {"SIM65_METRICS": "1"}
@@ -309,6 +361,9 @@ def run(target, image, arguments, stdin, out):
                 stdout=subprocess.PIPE if target == WASM else sink,
                 stderr=subprocess.PIPE,
                 timeout=SECONDS + 30,
+                # The 6502 has 64 KiB, and wasm32's linear memory is held by
+                # the runtime, whose own reservation is far larger.
+                preexec_fn=held_to_memory if target == X86 else None,
             )
         except subprocess.TimeoutExpired:
             return {"status": "timeout"}
@@ -333,6 +388,11 @@ def run(target, image, arguments, stdin, out):
     return {"status": "ok", "stdout": sha(out)} | taken
 
 
+def held_to_memory():
+    """Limit what a program and its measurer may map to MEMORY."""
+    resource.setrlimit(resource.RLIMIT_AS, (MEMORY, MEMORY))
+
+
 def c_command(target, workload, source, out):
     include = f"-I{source.parent}"
     if target == X86:
@@ -347,13 +407,19 @@ def c_command(target, workload, source, out):
     return ["cl65", "-t", "sim6502", "-O", source, "-o", out], out
 
 
-def c_build(target, workload, directory):
-    """The C twin's image for a target, or why there is none: cc65 has no
-    floats, and there is no GMP for wasm32 or the 6502."""
+def c_build(target, workload, directory, reference):
+    """The twin's image for a target, or why there is none: cc65 has no
+    floats, and there is no GMP for wasm32 or the 6502. A probe's twin is
+    Faun, built by the reference side's compiler with its stock backend."""
+    if workload.probe:
+        image, status, _, _ = faun_build(
+            reference, target, "stock", False, workload, directory, "twin.fn"
+        )
+        return image, status
     directory.mkdir(parents=True, exist_ok=True)
     # cl65 leaves its object files beside the source, so compile a copy.
     copy = directory / f"{workload.name}-source"
-    shutil.copytree(workload.folder / workload.name, copy)
+    shutil.copytree(workload.home, copy)
     command, image = c_command(
         target, workload, copy / "main.c", directory / workload.name
     )
@@ -364,20 +430,22 @@ def c_build(target, workload, directory):
 
 
 class Oracle:
-    """What each program must print: what its C twin, built for this machine,
-    prints for the same input. Also makes the inputs."""
+    """What each program must print: what its twin, built for this machine,
+    prints for the same input. Also makes the inputs. A probe's twin is
+    built by the reference side's compiler, the incumbent's."""
 
-    def __init__(self, work, workloads, pool):
+    def __init__(self, work, workloads, pool, reference):
         self.work = work / "oracle"
         self.known = {}
+        self.reference = reference
         # k-nucleotide reads what the C fasta writes.
         fasta = next(w for w in WORKLOADS if w.name == "fasta")
         needed = {w.name: w for w in [*workloads, fasta]}.values()
-        built = pool.map(lambda w: c_build(X86, w, self.work), needed)
+        built = pool.map(lambda w: c_build(X86, w, self.work, reference), needed)
         self.images = {}
         for workload, (image, why) in zip(needed, built):
             if image is None:
-                sys.exit(f"{workload.name}: the C twin does not build: {why}")
+                sys.exit(f"{workload.name}: the twin does not build: {why}")
             self.images[workload.name] = image
 
     def case(self, workload, size):
@@ -398,12 +466,12 @@ class Oracle:
             out = self.work / f"{workload.name}-{size}.out"
             said = run(X86, self.images[workload.name], arguments, stdin, out)
             if said["status"] != "ok":
-                sys.exit(f"{workload.name} {size}: the C twin: {said['status']}")
+                sys.exit(f"{workload.name} {size}: the twin: {said['status']}")
             self.known[key] = arguments, stdin, said
         return self.known[key]
 
 
-def faun_build(side, target, backend, small, workload, directory):
+def faun_build(side, target, backend, small, workload, directory, file="main.fn"):
     """Build a workload, answering its image or why there is none, and its
     size: for a 6502 image past the machine's 64 KiB, where it would end."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -413,7 +481,7 @@ def faun_build(side, target, backend, small, workload, directory):
         command.append(f"--backend={backend}")
     if small:
         command.append("--small")
-    source = workload.folder / workload.name / "main.fn"
+    source = workload.home / file
     command += [source, "-o", directory / workload.name]
     # The compiler is measured as a program is: its instructions, its time
     # and its peak memory.
@@ -490,8 +558,8 @@ def faun_cell(side, label, target, backend, workload, check, oracle, work):
 
 
 def c_cell(target, workload, oracle, work):
-    """The C twin's measures on a target, where it builds and agrees there."""
-    image, status = c_build(target, workload, work / "c" / target)
+    """The twin's measures on a target, where it builds and agrees there."""
+    image, status = c_build(target, workload, work / "c" / target, oracle.reference)
     if image is None:
         return {"status": f"build: {status}"}
     arguments, stdin, expected = oracle.case(workload, workload.sizes[target])
@@ -500,12 +568,29 @@ def c_cell(target, workload, oracle, work):
         said["status"] = "wrong output"
     if said["status"] != "ok":
         return {"status": said["status"]}
-    size = image.stat().st_size
+    size = small = image.stat().st_size
+    if workload.probe:
+        # A Faun twin has its own image built `--small`; a C twin's is the one.
+        built = faun_build(
+            oracle.reference,
+            target,
+            "stock",
+            True,
+            workload,
+            work / "c" / target / "small",
+            "twin.fn",
+        )
+        small = built[2]
     measures = {k: said.get(k) for k in ("speed", "memory", "ns")}
-    return {"status": "ok", "size": size, "small": size, "image": str(image)} | measures
+    return {
+        "status": "ok",
+        "size": size,
+        "small": small,
+        "image": str(image),
+    } | measures
 
 
-def timed(cpu, cells, oracle):
+def timed(cpu, cells, oracle, workloads):
     """Processor times of the x86 images, pinned to one CPU. The sides take
     turns, one run each in turning order, for as many turns as take the
     incumbent a quarter of a second. Whatever else the CPU is doing can only
@@ -516,7 +601,7 @@ def timed(cpu, cells, oracle):
         ready = {k: v for k, v in sides.items() if v.get("image")}
         if target != X86 or "candidate" not in ready or "incumbent" not in ready:
             continue
-        workload = next(w for w in WORKLOADS if w.name == name)
+        workload = workloads[name]
         arguments, stdin, _ = oracle.case(workload, workload.sizes[target])
 
         def once(side):
@@ -597,9 +682,7 @@ def score(cells):
                 changes.append(where | {"ratio": change, "old": old, "new": new})
     groups = {}
     for change in changes:
-        # Compiling runs here whatever the target, so it is one group.
-        target = "all" if change["metric"] == "compile" else change["target"]
-        groups.setdefault((target, change["metric"]), []).append(change)
+        groups.setdefault(group(change), []).append(change)
     total = sum(WEIGHTS[metric] for _, metric in groups) or 1
     gain = loss = 0.0
     for (_, metric), members in groups.items():
@@ -622,6 +705,18 @@ def score(cells):
         ),
         "broken": broken,
     }
+
+
+def group(cell):
+    """The group a cell's measure counts in. Compiling runs here whatever the
+    target, so it is one group. The probes count as one more target does,
+    every probe on every target in it, so that many probes do not swamp the
+    suite and a fix one of them shows is a gain."""
+    if cell["metric"] == "compile":
+        return "all", "compile"
+    if cell["workload"].startswith(PROBE):
+        return "probes", cell["metric"]
+    return cell["target"], cell["metric"]
 
 
 def geomean(ratios):
@@ -700,13 +795,14 @@ def machine():
 
 
 def measure(sides, seed, jobs, only, work):
-    """Every cell of the suite for each side, and the C twins beside them."""
-    chosen = [w for w in WORKLOADS if only in w.name]
+    """Every cell of the suite and the probes for each side, and the twins
+    beside them."""
+    chosen = [w for w in [*WORKLOADS, *probes()] if only in w.name]
     pool = ThreadPoolExecutor(jobs)
-    oracle = Oracle(work, chosen, pool)
+    oracle = Oracle(work, chosen, pool, sides["incumbent"])
     checks = {}
     for workload in chosen:
-        for target in TARGETS:
+        for target in workload.sizes:
             # A different size from the one measured, fresh with each seed.
             most = workload.sizes[target] // workload.step
             drawn = random.Random(f"{seed}:{workload.name}:{target}")
@@ -717,7 +813,7 @@ def measure(sides, seed, jobs, only, work):
     # Each workload's inputs and answers are made once, here, before two of
     # its cells could ask for the same one.
     def cases(workload):
-        for target in TARGETS:
+        for target in workload.sizes:
             oracle.case(workload, workload.sizes[target])
             oracle.case(workload, checks[workload.name, target])
 
@@ -725,7 +821,7 @@ def measure(sides, seed, jobs, only, work):
     cells = {}
     with pool:
         for workload in chosen:
-            for target in TARGETS:
+            for target in workload.sizes:
                 c = pool.submit(c_cell, target, workload, oracle, work)
                 for backend in BACKENDS:
                     key = target, backend, workload.name
@@ -747,21 +843,41 @@ def measure(sides, seed, jobs, only, work):
             key: {label: pending.result() for label, pending in found.items()}
             for key, found in cells.items()
         }
-    return cells, checks, oracle
+    return cells, checks, oracle, {w.name: w for w in chosen}
 
 
 def table(cells, scored):
     """The summary printed after a run: each target and backend's geometric
-    mean change, and how the candidate stands against C."""
-    lines = [f"{'':22}" + "".join(f"{metric:>18}" for metric in METRICS)]
-    lines.append(f"{'':22}" + f"{'change':>10}{'x C':>8}" * len(METRICS))
+    mean change, and how the candidate stands against C; then the same of
+    the probes, against their twins."""
+    lines = []
+    for probing, twin in ((False, "x C"), (True, "x twin")):
+        heading = "probes" if probing else ""
+        lines.append(f"{heading:22}" + "".join(f"{m:>18}" for m in METRICS))
+        lines.append(f"{'':22}" + f"{'change':>10}{twin:>8}" * len(METRICS))
+        lines += table_rows(cells, probing)
+    for cell in scored["changed"][:12] + scored["changed"][12:][-12:]:
+        lines.append(f"  {cell['ratio'] - 1:+8.2%}  {place(cell)}")
+    failing = sorted(
+        (key, sides["candidate"]["status"])
+        for key, sides in cells.items()
+        if sides["candidate"]["status"] != "ok"
+    )
+    for (target, backend, name), status in failing:
+        lines.append(f"  not running: {target} {backend} {name}: {status}")
+    return "\n".join(lines)
+
+
+def table_rows(cells, probing):
+    """A row for each target and backend, of the suite or of the probes."""
+    lines = []
     for target in TARGETS:
         for backend in BACKENDS:
             row = f"{target + ' ' + backend:22}"
             for metric in METRICS:
                 changes, against = [], []
-                for (t, b, _), sides in cells.items():
-                    if (t, b) != (target, backend):
+                for (t, b, name), sides in cells.items():
+                    if (t, b) != (target, backend) or name.startswith(PROBE) != probing:
                         continue
                     change = ratio(t, metric, sides["incumbent"], sides["candidate"])
                     if isinstance(change, float):
@@ -776,16 +892,7 @@ def table(cells, scored):
                 row += f"{change - 1:>+10.2%}" if change else f"{'-':>10}"
                 row += f"{c:>8.2f}" if c else f"{'-':>8}"
             lines.append(row)
-    for cell in scored["changed"][:12] + scored["changed"][12:][-12:]:
-        lines.append(f"  {cell['ratio'] - 1:+8.2%}  {place(cell)}")
-    failing = sorted(
-        (key, sides["candidate"]["status"])
-        for key, sides in cells.items()
-        if sides["candidate"]["status"] != "ok"
-    )
-    for (target, backend, name), status in failing:
-        lines.append(f"  not running: {target} {backend} {name}: {status}")
-    return "\n".join(lines)
+    return lines
 
 
 def short(count):
@@ -808,7 +915,8 @@ def times(ours, theirs):
 
 def standings(report):
     """A report's candidate against the C twins, as Markdown: a table for
-    each target and backend, and under it what does not run there."""
+    each target and backend, and under it what does not run there; then the
+    probes' natural spellings against their twins the same way."""
     commit = report["candidate"]["commit"][:7]
     lines = [
         "# Standings",
@@ -819,59 +927,68 @@ def standings(report):
         "instructions on x86-64, fuel on wasm32 and cycles on the 6502; memory",
         "and sizes are bytes. K, M and G are thousands, millions and billions.",
         "`vs C` is Faun's measure over the C twin's: below one, Faun is ahead.",
+        "Under the suite are the probes, each program's natural spelling beside",
+        "its workaround in Faun: `vs twin` above one is the compiler's to close.",
     ]
-    for target in TARGETS:
-        for backend in BACKENDS:
-            cells = [
-                c
-                for c in report["cells"]
-                if (c["target"], c["backend"]) == (target, backend)
-            ]
-            rows = [
-                ["Program", "Speed", "vs C", "Memory", "vs C", "Size", "vs C", "Small"]
-            ]
-            ratios, failing = {"speed": [], "memory": [], "size": []}, []
-            for cell in cells:
-                ours, c = cell["candidate"], cell["c"]
-                if ours["status"] != "ok":
-                    failing.append(f"{cell['workload']}: {ours['status']}")
-                    continue
-                # x86-64 memory is measured in KiB.
-                scale = 1024 if target == X86 else 1
-                row = [
-                    cell["workload"],
-                    short(ours["speed"]),
-                    times(ours["speed"], c.get("speed")),
-                ]
-                row += [
-                    short(ours["memory"] * scale),
-                    times(ours["memory"], c.get("memory")),
-                ]
-                row += [
-                    f"{ours['size']:,}",
-                    times(ours["size"], c.get("size")),
-                    f"{ours['small']:,}",
-                ]
-                rows.append(row)
-                for metric, held in ratios.items():
-                    if ours[metric] and c.get(metric):
-                        held.append(ours[metric] / c[metric])
-            means = {metric: geomean(held) for metric, held in ratios.items()}
-            mean = ["geometric mean", ""] + [times(means["speed"], 1), ""]
-            rows.append(
-                mean + [times(means["memory"], 1), "", times(means["size"], 1), ""]
-            )
-            widths = [max(len(row[at]) for row in rows) for at in range(len(rows[0]))]
-            rows.insert(1, ["-" * width for width in widths])
-            lines += ["", f"## {target}, {backend}", ""]
-            for row in rows:
-                padded = (cell.ljust(width) for cell, width in zip(row, widths))
-                lines.append("| " + " | ".join(padded) + " |")
-            if failing:
-                lines += ["", "Not running:", ""] + [
-                    f"- {program}" for program in failing
-                ]
+    for probing, twin in ((False, "vs C"), (True, "vs twin")):
+        for target in TARGETS:
+            for backend in BACKENDS:
+                lines += standing(report, target, backend, probing, twin)
     return "\n".join(lines) + "\n"
+
+
+def standing(report, target, backend, probing, twin):
+    """One target and backend's table of the suite, or of the probes."""
+    lines = []
+    cells = [
+        c
+        for c in report["cells"]
+        if (c["target"], c["backend"]) == (target, backend)
+        and c["workload"].startswith(PROBE) == probing
+    ]
+    if not cells:
+        return []
+    rows = [["Program", "Speed", twin, "Memory", twin, "Size", twin, "Small"]]
+    ratios, failing = {"speed": [], "memory": [], "size": []}, []
+    for cell in cells:
+        ours, c = cell["candidate"], cell["c"]
+        if ours["status"] != "ok":
+            name = cell["workload"].removeprefix(PROBE)
+            failing.append(f"{name}: {ours['status']}")
+            continue
+        # x86-64 memory is measured in KiB.
+        scale = 1024 if target == X86 else 1
+        row = [
+            cell["workload"].removeprefix(PROBE),
+            short(ours["speed"]),
+            times(ours["speed"], c.get("speed")),
+        ]
+        row += [
+            short(ours["memory"] * scale),
+            times(ours["memory"], c.get("memory")),
+        ]
+        row += [
+            f"{ours['size']:,}",
+            times(ours["size"], c.get("size")),
+            f"{ours['small']:,}",
+        ]
+        rows.append(row)
+        for metric, held in ratios.items():
+            if ours[metric] and c.get(metric):
+                held.append(ours[metric] / c[metric])
+    means = {metric: geomean(held) for metric, held in ratios.items()}
+    mean = ["geometric mean", ""] + [times(means["speed"], 1), ""]
+    rows.append(mean + [times(means["memory"], 1), "", times(means["size"], 1), ""])
+    widths = [max(len(row[at]) for row in rows) for at in range(len(rows[0]))]
+    rows.insert(1, ["-" * width for width in widths])
+    heading = f"Probes, {target}" if probing else target
+    lines += ["", f"## {heading}, {backend}", ""]
+    for row in rows:
+        padded = (cell.ljust(width) for cell, width in zip(row, widths))
+        lines.append("| " + " | ".join(padded) + " |")
+    if failing:
+        lines += ["", "Not running:", ""] + [f"- {program}" for program in failing]
+    return lines
 
 
 def evaluate(args):
@@ -885,6 +1002,17 @@ def evaluate(args):
     protected = []
     if evaluator and kind == "eval" and not args.allow_protected:
         protected = protected_changes(candidate, evaluator)
+    # Informational: the probes measured are the evaluator's, the trunk's.
+    differing = []
+    if kind == "eval":
+        differing = probe_changes(candidate, evaluator or TRUNK)
+    if differing:
+        print(
+            "warning: the candidate's probes differ from the trunk's, which are"
+            " the ones measured; a probe lands on the trunk first: "
+            + ", ".join(differing),
+            file=sys.stderr,
+        )
     for side in {candidate, incumbent}:
         side.build()
     seed = args.seed if args.seed is not None else secrets.randbits(32)
@@ -909,12 +1037,13 @@ def evaluate(args):
                 "minimum": MINIMUM,
                 "repaired": REPAIRED,
                 "slower": SLOWER,
+                "memory_limit": MEMORY,
             },
         }
         sides = {"candidate": candidate, "incumbent": incumbent}
-        cells, checks, oracle = measure(sides, seed, args.jobs, args.only, work)
+        cells, checks, oracle, chosen = measure(sides, seed, args.jobs, args.only, work)
         if args.time is not None:
-            timed(args.time, cells, oracle)
+            timed(args.time, cells, oracle, chosen)
     scored = score(cells)
     slowed = [
         {"target": t, "backend": b, "workload": w, "metric": "time"}
@@ -942,7 +1071,9 @@ def evaluate(args):
     report |= {
         "seconds": round(time.time() - started, 1),
         "timed_cpu": args.time,
-        "sizes": {w.name: w.sizes for w in WORKLOADS},
+        "sizes": {w.name: w.sizes for w in chosen.values()},
+        "series": SERIES,
+        "probes_differ": differing,
         "checks": {f"{name} {target}": size for (name, target), size in checks.items()},
         "units": {target: dict(zip(METRICS, units)) for target, units in UNITS.items()},
         "cells": [
@@ -1002,19 +1133,14 @@ LOG = ("series", "idea", "score", *METRICS, "worst", "verdict", "report")
 
 
 def log_row(summary, idea):
-    """A run's row of ratchet/log.tsv, in the series of the log's last row."""
-    try:
-        rows = (REPO / "ratchet/log.tsv").read_text().splitlines()
-        series = rows[-1].split("\t")[0] if len(rows) > 1 else "0"
-    except OSError:
-        series = "0"
+    """A run's row of ratchet/log.tsv, in the evaluator's series."""
     verdict = summary["verdict"]
     if summary["reasons"]:
         verdict += ": " + "; ".join(summary["reasons"])
     if summary["not a promotion"]:
         verdict += ";" if summary["reasons"] else ":"
         verdict += " not a promotion: " + ", ".join(summary["not a promotion"])
-    fields = {"series": series, "idea": idea, "verdict": verdict}
+    fields = {"series": str(SERIES), "idea": idea, "verdict": verdict}
     fields["report"] = Path(summary["report"]).name
     for column in ("score", *METRICS, "worst"):
         fields[column] = f"{summary[column]:.5f}"
@@ -1107,11 +1233,25 @@ def pin(unpinned):
 if __name__ == "__main__":
     args = parser().parse_args()
     if args.command == "standings":
-        # The newest report of the whole suite, unless one is named.
-        whole = len(WORKLOADS) * len(TARGETS) * len(BACKENDS)
+        # The newest report of the whole suite and its probes, unless one is
+        # named.
+        whole = {
+            (w.name, t, b)
+            for w in [*WORKLOADS, *probes()]
+            for t in w.sizes
+            for b in BACKENDS
+        }
         paths = [args.report] if args.report else sorted(REPORTS.glob("*.json"))
         reports = (json.loads(path.read_text()) for path in reversed(paths))
-        report = next((r for r in reports if len(r["cells"]) == whole), None)
+        report = next(
+            (
+                r
+                for r in reports
+                if whole
+                <= {(c["workload"], c["target"], c["backend"]) for c in r["cells"]}
+            ),
+            None,
+        )
         if report is None:
             sys.exit(f"no report of the whole suite in {REPORTS}")
         print(standings(report), end="")

@@ -2,14 +2,15 @@
 burned, the bytes of linear memory it touched, and the nanoseconds `_start`
 ran for.
 
-    wasm.py MODULE STDIN STDOUT FUEL [ARGUMENT...]
+    wasm.py MODULE STDIN STDOUT FUEL MEMORY [ARGUMENT...]
 
 Fuel counts the WebAssembly instructions run, the same every time. Memory
 is the linear memory's pages the module read or wrote, counted where the
 kernel says which are there: a module's memory grows a 64 KiB page at a
 time, far coarser than what it uses, and never shrinks, so what is touched
 at the end is the peak. A module that runs out of fuel is stopped and
-answers 124, as `timeout` does.
+answers 124, as `timeout` does. Its linear memory may grow to MEMORY bytes
+and no further, so a module gone wrong fails rather than the machine.
 """
 
 import ctypes
@@ -35,7 +36,7 @@ def touched(start, length):
 def main():
     # Huge pages would count two megabytes for a touched byte.
     ctypes.CDLL(None).prctl(41, 1, 0, 0, 0)
-    module, stdin, stdout, fuel, *arguments = sys.argv[1:]
+    module, stdin, stdout, fuel, memory, *arguments = sys.argv[1:]
     config = Config()
     config.consume_fuel = True
     engine = Engine(config)
@@ -47,6 +48,7 @@ def main():
     wasi.inherit_stderr()
     store.set_wasi(wasi)
     store.set_fuel(int(fuel))
+    store.set_limits(memory_size=int(memory))
     linker = Linker(engine)
     linker.define_wasi()
     instance = linker.instantiate(store, Module.from_file(engine, module))

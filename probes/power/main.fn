@@ -1,5 +1,6 @@
 # The low `k` bits of a natural, `k` known only at run time, as inflate
-# reads a symbol's extra bits: `x % 2.pow(k)`, `k` the same every step.
+# reads a symbol's extra bits: `x % 2.pow(k)`, `k` the same each of `n`
+# steps.
 package {}
 
 import std.host {Host}
@@ -10,7 +11,8 @@ walk(Succ(left), x, k, sum) -> walk(left, (x * 5 + 1) % 16777216, k, sum + x % 2
 
 main! : Host -> []
 main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
   k = host.args.len() + 9
-  printed = host.println!("${walk(10000000, 1, k, 0)}")
+  printed = host.println!("${walk(n, 1, k, 0)}")
   host.exit!(0)
 )

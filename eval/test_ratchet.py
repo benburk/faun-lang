@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -11,11 +12,15 @@ import ratchet
 from ratchet import (
     LOG,
     MOS,
+    PROBE,
+    SERIES,
     WASM,
     X86,
     decide,
     log_row,
     parser,
+    probe_changes,
+    probes,
     ratio,
     score,
     same_compiler,
@@ -223,6 +228,148 @@ class Ratchet(unittest.TestCase):
             accepted["verdict"],
             "accept: not a promotion: uncommitted changes in the candidate",
         )
+
+
+def probing(candidates, incumbents=None, target=X86):
+    """Cells of probes on one target and backend, a probe for each candidate."""
+    incumbents = incumbents or [cell() for _ in candidates]
+    return {
+        (target, "stock", f"{PROBE}{at}"): {"incumbent": old, "candidate": new}
+        for at, (old, new) in enumerate(zip(incumbents, candidates, strict=True))
+    }
+
+
+def commit_all(repo, message):
+    for command in (["add", "-A"], ["commit", "-qm", message]):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+            + ["-c", "commit.gpgsign=false", *command],
+            cwd=repo,
+            check=True,
+        )
+    said = ["git", "rev-parse", "HEAD"]
+    return subprocess.check_output(said, cwd=repo, text=True).strip()
+
+
+class Probes(unittest.TestCase):
+    """Natural programs beside their workarounds, read from the trunk."""
+
+    def test_a_probe_is_a_folder_with_its_twin_and_sizes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            for name in ("power", "range"):
+                (folder / name).mkdir()
+                (folder / name / "main.fn").touch()
+                (folder / name / "twin.fn").touch()
+            (folder / "power/sizes").write_text(
+                "# too large for the 6502\nx86_64-linux 1000\nwasm32-wasi 300\n"
+            )
+            (folder / "range/sizes").write_text("mos6502-sim65 8\n")
+            # A folder without sizes is not a probe yet.
+            (folder / "draft").mkdir()
+            found = probes(folder)
+        self.assertEqual([w.name for w in found], ["probe-power", "probe-range"])
+        power, range_ = found
+        self.assertTrue(power.probe)
+        self.assertEqual(power.home, folder / "power")
+        self.assertEqual(power.sizes, {X86: 1000, WASM: 300})
+        self.assertEqual(range_.sizes, {MOS: 8})
+        self.assertEqual(power.input, "argument")
+        self.assertFalse(ratchet.WORKLOADS[0].probe)
+
+    def test_the_trunks_probes_each_run_somewhere(self):
+        for probe in probes():
+            self.assertTrue(probe.sizes, probe.name)
+            self.assertTrue((probe.home / "main.fn").exists(), probe.name)
+            self.assertTrue((probe.home / "twin.fn").exists(), probe.name)
+
+    def test_the_probes_count_as_one_more_target(self):
+        quicker = cell(speed=500, image="quick")
+        cells = suite([cell()]) | probing([quicker, cell(), cell(), cell()])
+        scored = score(cells)
+        self.assertIn("probes speed", scored["groups"])
+        self.assertNotIn("x86_64-linux speed", scored["groups"])
+        self.assertAlmostEqual(scored["groups"]["probes speed"], 0.5**0.25)
+        # Eight groups: the suite's target's four, and the probes' four.
+        self.assertAlmostEqual(scored["score"], 0.5 ** (1 / 4 / 8))
+
+    def test_many_probes_weigh_no_more_than_one(self):
+        quicker = cell(speed=500, image="quick")
+        one = score(suite([cell()]) | probing([quicker]))
+        many = score(suite([cell()]) | probing([quicker] * 10))
+        self.assertAlmostEqual(one["score"], many["score"])
+
+    def test_probes_compile_with_the_suite(self):
+        cells = suite([cell(compile=1000)], [cell(compile=1000)])
+        cells |= probing([cell(compile=500)], [cell(compile=1000)])
+        self.assertAlmostEqual(score(cells)["groups"]["all compile"], 0.5**0.5)
+
+    def test_a_probe_cell_more_than_a_tenth_worse_rejects(self):
+        quicker = cell(speed=100, memory=10, image="quick")
+        worse = cell(speed=1101, image="slow")
+        cells = suite([quicker, quicker]) | probing([worse])
+        self.assertEqual(verdict(cells), "reject")
+        broken = cell(speed=None, memory=None, status="wrong output")
+        self.assertEqual(verdict(suite([quicker]) | probing([broken])), "reject")
+
+    def test_probes_differing_from_the_trunks_are_named(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / "probes/power").mkdir(parents=True)
+            (repo / "probes/power/main.fn").write_text("old\n")
+            (repo / "notes.md").write_text("old\n")
+            trunk = commit_all(repo, "trunk")
+            (repo / "notes.md").write_text("new\n")
+            same = commit_all(repo, "notes")
+            (repo / "probes/power/main.fn").write_text("new\n")
+            changed = commit_all(repo, "probe")
+
+            def side(commit, dirty=False):
+                return SimpleNamespace(commit=commit, dirty=dirty, path=repo)
+
+            with mock.patch.object(ratchet, "REPO", repo):
+                self.assertEqual(probe_changes(side(same), trunk), [])
+                self.assertEqual(
+                    probe_changes(side(changed), trunk), ["probes/power/main.fn"]
+                )
+                subprocess.run(["git", "checkout", "-q", same], cwd=repo, check=True)
+                (repo / "probes/key").mkdir()
+                (repo / "probes/key/main.fn").write_text("new\n")
+                subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+                self.assertEqual(
+                    probe_changes(side(same, dirty=True), trunk),
+                    ["probes/key/main.fn"],
+                )
+
+
+class Series(unittest.TestCase):
+    def test_a_log_row_is_in_the_evaluators_series_not_the_last_rows(self):
+        summary = dict(
+            verdict="accept",
+            reasons=[],
+            score=0.99,
+            worst=1.0,
+            report="/r/x.json",
+            speed=1.0,
+            memory=1.0,
+            size=0.99,
+            small=1.0,
+            compile=1.0,
+        )
+        summary["not a promotion"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory, "ratchet/log.tsv")
+            log.parent.mkdir()
+            log.write_text("\t".join(LOG) + "\n" + "2\tolder\n")
+            with mock.patch.object(ratchet, "REPO", Path(directory)):
+                row = log_row(summary, "idea").split("\t")
+        self.assertEqual(row[0], str(SERIES))
+
+    def test_the_series_is_at_least_the_logs(self):
+        rows = (ratchet.REPO / "ratchet/log.tsv").read_text().splitlines()[1:]
+        logged = max(int(row.split("\t")[0]) for row in rows)
+        self.assertGreaterEqual(SERIES, logged)
 
 
 class Compilers(unittest.TestCase):

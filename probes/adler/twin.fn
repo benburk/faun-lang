@@ -24,7 +24,8 @@ adler_bytes(low, high, _, bytes) -> adler_bytes(low % 65521, high % 65521, 41943
 
 main! : Host -> []
 main!(host) -> (
-  input = List.repeat(U8.of_nat(0xab), 16000000)
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  input = List.repeat(U8.of_nat(0xab), n)
   printed = host.println!("${adler_bytes(U64.of_nat(1), U64.of_nat(0), 4194304, input)}")
   host.exit!(0)
 )

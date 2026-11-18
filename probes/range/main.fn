@@ -1,4 +1,4 @@
-# Four bytes a pixel for each of 1024 columns of 1024 rows, written through
+# Four bytes a pixel for each of `n` columns of `n` rows, written through
 # `List.range(n).fold`, as png.fn reads a row's pixels.
 package {}
 
@@ -12,6 +12,8 @@ pixels(width, height) -> List.range(height).fold([], |out, y| List.range(width).
 
 main! : Host -> []
 main!(host) -> (
-  printed = host.println!("${pixels(1024, 1024).len()}")
+  n = Nat.from_str(host.args.get(1).ok_or("100")).ok_or(100)
+  out = pixels(n, n)
+  printed = host.println!("${out.len()} ${out.fold(0, |sum, byte| sum + byte.to_nat())}")
   host.exit!(0)
 )
