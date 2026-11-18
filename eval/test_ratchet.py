@@ -8,7 +8,19 @@ import unittest
 from unittest import mock
 
 import ratchet
-from ratchet import MOS, WASM, X86, decide, ratio, score, same_compiler, slower
+from ratchet import (
+    LOG,
+    MOS,
+    WASM,
+    X86,
+    decide,
+    log_row,
+    parser,
+    ratio,
+    score,
+    same_compiler,
+    slower,
+)
 
 
 def cell(
@@ -172,6 +184,45 @@ class Ratchet(unittest.TestCase):
         # One lucky run of the incumbent's, or one burst in the candidate's.
         self.assertFalse(slower(timed(100, 150, image="old"), timed(150)))
         self.assertFalse(slower(old, timed(100, 150)))
+
+    def test_the_incumbent_is_the_trunk_unless_named(self):
+        self.assertFalse(hasattr(ratchet, "incumbent_of"))
+        self.assertIsNone(parser().parse_args(["eval"]).incumbent)
+
+    def test_a_log_row_names_no_commit(self):
+        summary = dict(
+            verdict="neutral",
+            reasons=["net gain 0.00006 is below 0.001"],
+            score=0.99994,
+            worst=1.00019,
+            report="/r/20261118T020022Z-eval-dafe2bad-vs-be5235d3.json",
+            speed=1.0,
+            memory=1.0,
+            size=0.99988,
+            small=0.99986,
+            compile=1.0,
+        )
+        summary["not a promotion"] = ["uncommitted changes in the candidate"]
+        row = log_row(summary, "an idea").split("\t")
+        header = (ratchet.REPO / "ratchet/log.tsv").read_text().splitlines()[0]
+        self.assertEqual(tuple(header.split("\t")), LOG)
+        self.assertNotIn("commit", LOG)
+        self.assertEqual(len(row), len(LOG))
+        fields = dict(zip(LOG, row))
+        self.assertEqual(fields["idea"], "an idea")
+        self.assertEqual(fields["size"], "0.99988")
+        self.assertEqual(
+            fields["verdict"],
+            "neutral: net gain 0.00006 is below 0.001; "
+            "not a promotion: uncommitted changes in the candidate",
+        )
+        self.assertEqual(fields["report"], Path(summary["report"]).name)
+        summary |= {"verdict": "accept", "reasons": []}
+        accepted = dict(zip(LOG, log_row(summary, "x").split("\t")))
+        self.assertEqual(
+            accepted["verdict"],
+            "accept: not a promotion: uncommitted changes in the candidate",
+        )
 
 
 class Compilers(unittest.TestCase):

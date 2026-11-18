@@ -1,6 +1,6 @@
 # Ratchet
 
-The ratchet improves the compiler: the frontend, Barb, the backends and the standard library. Each candidate is a git revision. `just eval <candidate> [incumbent]` builds both revisions' compilers, has each compile the suite's programs for every target with every backend, holds what the programs print to their C twins, and measures them. The incumbent defaults to the last commit the branch's log calls accepted, and to `origin/main` where it has none. Once the compilers are built, a run takes about ten seconds, on a busy machine too, because what decides is counted rather than timed.
+The ratchet improves the compiler: the frontend, Barb, the backends and the standard library. Each candidate is a git revision. `just eval <candidate> [incumbent]` builds both revisions' compilers, has each compile the suite's programs for every target with every backend, holds what the programs print to their C twins, and measures them. The incumbent defaults to `origin/main`. Once the compilers are built, a run takes about ten seconds, on a busy machine too, because what decides is counted rather than timed.
 
 ## What is measured
 
@@ -29,7 +29,7 @@ Each target measures at its own input size, in `eval/ratchet.py`'s table, small 
 
 ## Promotion
 
-**Incumbent.** No tags are used: the log and the trunk are the record. The incumbent is the newest commit that the candidate's own `ratchet/log.tsv` records as `accept` or `override`, where that commit is in the candidate's history and not yet in `origin/main`. Otherwise it is `origin/main`. So a branch climbs from its last accepted commit, and once it is merged the trunk is what the next branch must beat. `just eval <candidate> <incumbent>` names another.
+**Incumbent.** The incumbent is `origin/main`: no tags are used, and the log records verdicts, not commits. A branch's candidate is scored with everything else on the branch against the trunk, so a second change is accepted only where the branch as a whole still is, and once it is merged the trunk is what the next branch must beat. `just eval <candidate> <incumbent>` names another revision, such as the branch's previous commit to see what one change does alone.
 
 **Golden.** Every image, built for speed and built `--small`, must print exactly what the C twin built for this machine prints at a size drawn afresh from each run's seed, and the measured image again at the measured size, leaving with status zero and nothing on standard error. A measure the incumbent has and the candidate lacks, because the program no longer builds, fits or agrees, rejects the candidate whatever else it gained.
 
@@ -57,9 +57,8 @@ Every run writes a new JSON report to `ratchet/reports/` in the main checkout (g
 
 1. **Start.** Work on a branch `ratchet/<goal>` from `origin/main`, committing each candidate there. Push or merge only when I ask. Read `ratchet/log.tsv` and `ratchet/FINDINGS.md` first, and don't retry a rejected idea without a new reason.
 2. **Change one thing** and commit it. Debug with quick runs: `just eval --only fasta`, `faun emit`, a profiler on a `--symbols` build. Only a full `just eval`, with no `--only`, decides. It says which incumbent it scores the checkout against, and prints the path of its report.
-3. **Record every evaluation** as a row in `ratchet/log.tsv`, with these tab-separated columns, all but the first three from the run's summary:
-   - `series`: the current series number;
-   - `commit`: short hash;
+3. **Record every evaluation** as a row in `ratchet/log.tsv`. Every run prints its row; `just eval --log "<idea>"` appends it. The columns are tab-separated, all but the first two from the run's summary:
+   - `series`: the current series number, which `--log` takes from the log's last row;
    - `idea`: a one-line description;
    - `score`: the overall score, below one being better;
    - `speed`, `memory`, `size`, `small` and `compile`: each metric's change across the targets;
@@ -67,8 +66,9 @@ Every run writes a new JSON report to `ratchet/reports/` in the main checkout (g
    - `verdict`: the verdict and its reasons;
    - `report`: the report's file name.
 4. **Rejected or neutral:** log it, revert the candidate and keep iterating.
-5. **Accepted:** read the diff against the shortcuts below, run `just check` and `just test`, and add a test that exercises the change, since equal output on sixteen programs does not prove a compiler correct. Then log it as `accept`: once that row is committed, the commit is the incumbent for whatever the branch tries next. Run `just standings` and commit it with the row. A rebase gives the accepted commits new hashes, so write those into their rows, or the trunk is the incumbent again.
-6. After five rejections in a row, step back: profile, read what the slow cells run, and try a bigger or different change. Write what was learned in `ratchet/FINDINGS.md`.
+5. **Accepted:** read the diff against the shortcuts below, run `just check` and `just test`, and add a test that exercises the change, since equal output on sixteen programs does not prove a compiler correct. Then log it as `accept` and commit the row. Rows name no commit, so a rebase leaves the log as it is. The standings are not written on a branch.
+6. **Standings** are written on `origin/main` only, once a branch is merged: fetch, then `just standings` measures the trunk against itself and writes `ratchet/standings.md` from that report, to commit on the trunk.
+7. After five rejections in a row, step back: profile, read what the slow cells run, and try a bigger or different change. Write what was learned in `ratchet/FINDINGS.md`.
 
 ## Protected paths
 
