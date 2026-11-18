@@ -273,6 +273,34 @@ fn laid_out(
     (empties, knowns)
 }
 
+/// Every shape a program holds laid out.
+fn packed(source: &Program, word_bits: u16) -> Vec<Packed> {
+    // Small numbers are packed by their bits only in the elements of a
+    // sequence the program builds as it runs, where room is what every
+    // copy moves; a cell, or a table laid out in the image, keeps each
+    // in bytes of its own, read with nothing to undo.
+    let built = shapes_of(source, |op| match op {
+        Op::BufferPush { shape, .. }
+        | Op::BufferAppend { shape, .. }
+        | Op::BufferPrepend { shape, .. }
+        | Op::BufferExtend { shape, .. }
+        | Op::BufferReplace { shape, .. }
+        | Op::BufferRoom { shape, .. } => Some(shape),
+        _ => None,
+    });
+    source
+        .shape_ids()
+        .map(|shape| {
+            let classes = source.shaped(shape);
+            if built.contains(&shape) {
+                Packed::of(classes, word_bits)
+            } else {
+                Packed::plain(classes, word_bits)
+            }
+        })
+        .collect()
+}
+
 /// Every shape a program holds laid out, and the descriptor of each whose
 /// leaves hold a claim, in the data.
 struct Shapes {
@@ -291,10 +319,7 @@ struct Shapes {
 
 impl Shapes {
     fn of(source: &Program, output: &mut Program, word_bits: u16) -> Result<Self, String> {
-        let packed: Vec<_> = source
-            .shape_ids()
-            .map(|shape| Packed::of(source.shaped(shape), word_bits))
-            .collect();
+        let packed = packed(source, word_bits);
         // What any object holds lies past a header of six words at most,
         // and what a target reaches from an address is an `i32` away.
         let header = 6 * u64::from(word_bits / 8);

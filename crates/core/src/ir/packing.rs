@@ -137,7 +137,7 @@ impl Packed {
     }
 
     /// Each leaf in bytes of its own, in the order the shape names them.
-    fn plain(classes: &[Class], word_bits: u16) -> Self {
+    pub(super) fn plain(classes: &[Class], word_bits: u16) -> Self {
         let items = classes
             .iter()
             .enumerate()
