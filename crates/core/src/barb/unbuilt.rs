@@ -35,7 +35,6 @@
 use std::collections::HashMap;
 
 use super::copy::{self, Scope};
-use super::facts::Recognised;
 use super::{Atom, Body, CtorId, Expr, ExprId, FnId, Local, Program, TypeId};
 
 /// The most copies made of one definition.
@@ -47,12 +46,16 @@ const LARGEST: usize = 256;
 /// Send every call handing a definition a construction it takes apart, and
 /// that nothing else reads, to a copy taking the construction's fields.
 pub(crate) fn constructions(program: &mut Program) {
-    let recognised = program.recognised().clone();
+    let count = program.functions().len();
+    let recognised = program.recognised();
+    let answered = (0..count)
+        .map(|at| recognised.answered(FnId::at(at)))
+        .collect();
     let entry = program.entry();
     let reached = super::sweep::reached(program, entry).0;
     let once = super::once::made_once(program, entry, &reached);
     let mut unbuilt = Unbuilt {
-        recognised,
+        answered,
         copies: HashMap::new(),
         made: HashMap::new(),
         program,
@@ -120,7 +123,8 @@ struct Site {
 
 struct Unbuilt<'a> {
     program: &'a mut Program,
-    recognised: Recognised,
+    /// Whether each definition is answered as a recognized operation.
+    answered: Vec<bool>,
     /// The copy made for each definition and key, `None` where one was made
     /// and decided nothing.
     copies: HashMap<(FnId, Key), Option<FnId>>,
@@ -130,7 +134,7 @@ struct Unbuilt<'a> {
 
 impl Unbuilt<'_> {
     fn answered(&self, id: FnId) -> bool {
-        id.index() < self.recognised.operations.len() && self.recognised.answered(id)
+        self.answered.get(id.index()) == Some(&true)
     }
 
     /// Send each call in `id`'s body that hands a construction its callee
@@ -233,23 +237,35 @@ impl Unbuilt<'_> {
     }
 
     /// How many times each binding of `body`, the first at level `base`, is
-    /// read after it, where an arm of an earlier binding cannot bind its
-    /// level again; a construction read by nothing is not counted as reading
-    /// what it holds, as simplifying a copy leaves the one it took apart.
+    /// read after it; a construction read by nothing is not counted as
+    /// reading what it holds, as simplifying a copy leaves the one it took
+    /// apart. Within a binding, and the arms in it, a level below its own is
+    /// one of those bound before it; its arms bind its own level and those
+    /// after for themselves.
     fn live_reads(&self, body: Body, base: usize) -> Vec<usize> {
         let bindings = self.program.bindings(body.bindings);
         let mut reads = vec![0; bindings.len()];
+        for (at, &expr) in bindings.iter().chain([&body.tail]).enumerate() {
+            for inner in super::walk::nested(self.program, [expr]) {
+                for atom in super::walk::operands(self.program, inner) {
+                    let level = atom.0.index();
+                    if (base..base + at).contains(&level) {
+                        reads[level - base] += 1;
+                    }
+                }
+            }
+        }
         for at in (0..bindings.len()).rev() {
-            let later = bindings[at + 1..]
-                .iter()
-                .enumerate()
-                .filter(|&(after, &expr)| {
-                    reads[at + 1 + after] > 0 || !matches!(self.program.expr(expr), Expr::Con(..))
-                })
-                .map(|(_, &expr)| expr)
-                .chain([body.tail]);
-            let later = super::walk::nested(self.program, later);
-            reads[at] = super::walk::reads(self.program, later, base + at);
+            if reads[at] == 0
+                && let Expr::Con(_, fields) = self.program.expr(bindings[at])
+            {
+                for atom in self.program.atoms(fields) {
+                    let level = atom.0.index();
+                    if (base..base + at).contains(&level) {
+                        reads[level - base] -= 1;
+                    }
+                }
+            }
         }
         reads
     }
