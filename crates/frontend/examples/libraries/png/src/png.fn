@@ -237,18 +237,12 @@ unfilter_passes(data, [pass, *rest], bits, at, raw) -> (
   # The bytes back to the same sample of the pixel before, at least one.
   back = (bits + 7) / 8
   if at + pass.rows * (stride + 1) > data.len() return Err(ShortData)
-  done = unfilter_rows(data, at, raw, stride, back, pass.rows, True)?
+  done = List.range(pass.rows).try_fold(raw, |raw, y| (
+    start = at + y * (stride + 1)
+    filter = byte(data, start)
+    if filter > 4 then Err(BadFilter) else Ok(unfilter_row(data.drop(start + 1).take(stride), raw, stride, back, y == 0, filter))
+  ))?
   unfilter_passes(data, rest, bits, at + pass.rows * (stride + 1), done)
-)
-
-unfilter_rows : (List(U8), Nat, List(U8), Nat, Nat, Nat, Bool) -> Result(List(U8), PngError)
-unfilter_rows(_, _, raw, _, _, 0, _) -> Ok(raw)
-unfilter_rows(data, at, raw, stride, back, Succ(rows), first) -> (
-  filter = data.get(at).ok_or(0).to_nat()
-  if filter > 4 return Err(BadFilter)
-  row = data.drop(at + 1).take(stride)
-  done = unfilter_row(row, raw, stride, back, first, filter)
-  unfilter_rows(data, at + 1 + stride, done, stride, back, rows, False)
 )
 
 # One row's bytes reconstructed and appended to `raw`, whose last
@@ -326,7 +320,10 @@ straight_pixels(raw, _, _, {colour: 4, depth: 8, *}) -> grey_alpha(raw, [])
 straight_pixels(raw, _, _, {colour: 3, depth: 8, palette, *}) -> indexed(raw, palette, [])
 straight_pixels(raw, header, _, format) -> (
   stride = (header.width * bits_per_pixel(header) + 7) / 8
-  straight_rows(raw, header.width, stride, format, 0, header.height, [])
+  List.range(header.height).fold([], |out, y| List.range(header.width).fold(out, |out, column| (
+    (red, green, blue, alpha) = colour_at(raw, y * stride, column, format)
+    out.append(red).append(green).append(blue).append(alpha)
+  )))
 )
 
 opaque_rgb : (List(U8), List(U8)) -> List(U8)
@@ -350,18 +347,6 @@ indexed([index, *rest], palette, out) -> (
 )
 indexed(_, _, out) -> out
 
-straight_rows : (List(U8), Nat, Nat, Format, Nat, Nat, List(U8)) -> List(U8)
-straight_rows(_, _, _, _, _, 0, out) -> out
-straight_rows(raw, width, stride, format, row, Succ(rows), out) ->
-  straight_rows(raw, width, stride, format, row + stride, rows, row_pixels(raw, row, format, 0, width, out))
-
-row_pixels : (List(U8), Nat, Format, Nat, Nat, List(U8)) -> List(U8)
-row_pixels(raw, row, format, column, width, out) -> (
-  if column >= width return out
-  (red, green, blue, alpha) = colour_at(raw, row, column, format)
-  row_pixels(raw, row, format, column + 1, width, out.append(red).append(green).append(blue).append(alpha))
-)
-
 # An interlaced image's pixels: every pass's pixels written where they
 # fall in the whole image, which starts as nought and is written in place.
 interlaced_pixels : (List(U8), Header, List(Pass), Format) -> List(U8)
@@ -373,24 +358,12 @@ scatter_passes(_, [], _, _, _, _, out) -> out
 scatter_passes(raw, [pass, *rest], bits, width, format, at, out) -> (
   if pass.columns == 0 | pass.rows == 0 return scatter_passes(raw, rest, bits, width, format, at, out)
   stride = (pass.columns * bits + 7) / 8
-  done = scatter_rows(raw, pass, stride, width, format, at, 0, out)
+  done = List.range(pass.rows).fold(out, |out, y| List.range(pass.columns).fold(out, |out, column| (
+    (red, green, blue, alpha) = colour_at(raw, at + y * stride, column, format)
+    target = ((pass.y + y * pass.dy) * width + pass.x + column * pass.dx) * 4
+    out.put(target, red).put(target + 1, green).put(target + 2, blue).put(target + 3, alpha)
+  )))
   scatter_passes(raw, rest, bits, width, format, at + pass.rows * stride, done)
-)
-
-scatter_rows : (List(U8), Pass, Nat, Nat, Format, Nat, Nat, List(U8)) -> List(U8)
-scatter_rows(raw, pass, stride, width, format, at, y, out) -> (
-  if y >= pass.rows return out
-  first = ((pass.y + y * pass.dy) * width + pass.x) * 4
-  row = scatter_row(raw, at + y * stride, format, 0, pass.columns, first, pass.dx * 4, out)
-  scatter_rows(raw, pass, stride, width, format, at, y + 1, row)
-)
-
-scatter_row : (List(U8), Nat, Format, Nat, Nat, Nat, Nat, List(U8)) -> List(U8)
-scatter_row(raw, row, format, column, columns, target, step, out) -> (
-  if column >= columns return out
-  (red, green, blue, alpha) = colour_at(raw, row, column, format)
-  written = out.put(target, red).put(target + 1, green).put(target + 2, blue).put(target + 3, alpha)
-  scatter_row(raw, row, format, column + 1, columns, target + step, step, written)
 )
 
 # The pixel at `column` of the row starting at `row`, as red, green,
