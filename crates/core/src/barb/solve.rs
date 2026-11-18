@@ -929,11 +929,18 @@ impl<D: Domain> FunctionWalk<'_, D> {
             }
             return;
         }
+        // Both ends at once: they go through the same four nodes.
+        self.state.fresh[x] = false;
+        self.state.fresh[y] = false;
+        let mut said = Vec::with_capacity(2);
         if let Some(most) = most {
-            self.constrain(Constraint::difference(x, y, most));
+            said.push(Constraint::difference(at, other, most));
         }
         if let Some(least) = least {
-            self.constrain(Constraint::difference(y, x, -least));
+            said.push(Constraint::difference(other, at, -least));
+        }
+        if self.state.pack(pack).add_all(&said) {
+            self.state.sync(pack);
         }
     }
 
@@ -994,10 +1001,6 @@ impl<D: Domain> FunctionWalk<'_, D> {
     /// Say everything in `said`, answering whether the values it names can
     /// all still be something. Constraints within one pack are said
     /// together, and the pack closed once where they are many.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "what each kind of thing said narrows, and closing each pack once"
-    )]
     fn apply(&mut self, said: &[Said]) -> bool {
         let mut packed: Vec<Vec<Constraint>> = vec![Vec::new(); self.state.packs.len()];
         for &said in said {
@@ -1033,15 +1036,7 @@ impl<D: Domain> FunctionWalk<'_, D> {
             if constraints.is_empty() {
                 continue;
             }
-            let domain = self.state.pack(pack);
-            let holds = if constraints.len() * 6 > 2 * domain.variables() {
-                for &constraint in &constraints {
-                    domain.assume(constraint);
-                }
-                domain.close()
-            } else {
-                constraints.iter().all(|&constraint| domain.add(constraint))
-            };
+            let holds = self.state.pack(pack).add_all(&constraints);
             if !holds || !self.state.sync(pack) {
                 return false;
             }
