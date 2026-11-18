@@ -16,6 +16,7 @@ hidden(key, Succ(left), x, count) -> (
 
 main! : Host -> []
 main!(host) -> (
-  printed = host.println!("${hidden([7], 10000000, 1, 0)}")
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${hidden([7], n, 1, 0)}")
   host.exit!(0)
 )

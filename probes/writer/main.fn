@@ -1,5 +1,5 @@
-# Writes 10 million 9-bit codes, least significant bit first, through a
-# bit writer holding fewer than 8 bits in a natural, as deflate.fn's does.
+# Writes `n` 9-bit codes, least significant bit first, through a bit writer
+# holding fewer than 8 bits in a natural, as deflate.fn's does.
 package {}
 
 import std.host {Host}
@@ -10,7 +10,7 @@ put : (Writer, Nat, Nat) -> Writer
 put({out, bits, count}, value, width) -> whole_bytes(out, bits + value.shift_left(count), count + width)
 
 whole_bytes : (List(U8), Nat, Nat) -> Writer
-whole_bytes(out, bits, count) if count >= 8 -> whole_bytes(out.append(U8.of_nat(bits)), bits / 256, count - 8)
+whole_bytes(out, bits, count) if count >= 8 -> whole_bytes(out.append(U8.of_nat(bits % 256)), bits / 256, count - 8)
 whole_bytes(out, bits, count) -> {out, bits, count}
 
 walk : (Nat, Nat, Writer) -> Writer
@@ -19,6 +19,8 @@ walk(Succ(left), x, written) -> walk(left, (x * 5 + 1) % 512, put(written, x, 9)
 
 main! : Host -> []
 main!(host) -> (
-  printed = host.println!("${walk(10000000, 1, {out: [], bits: 0, count: 0}).out.len()}")
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  out = walk(n, 1, {out: [], bits: 0, count: 0}).out
+  printed = host.println!("${out.len()} ${out.fold(0, |sum, byte| sum + byte.to_nat())}")
   host.exit!(0)
 )

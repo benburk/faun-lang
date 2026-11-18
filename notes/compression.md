@@ -622,13 +622,19 @@ saving them all as RGBA.
 Each change that wrote a library naturally was measured on its own, in
 instructions run in user mode on the benchmark's inputs, deflate at levels
 6 and 9 on its first megabyte. Where the natural spelling ran slower, a
-probe in `crates/frontend/examples/libraries/flate/bench/probes/` holds
-the natural program, `name.fn`, beside the workaround it replaced,
-`name_workaround.fn`, each a page, printing the same answer:
+probe in [`probes/`](../probes) holds the natural program,
+`probes/name/main.fn`, beside the workaround it replaced, `twin.fn`, each
+a page, taking a size and printing the same answer:
 
 ```sh
-faun build probes/match.fn -o match && perf stat -e instructions:u ./match
+faun build probes/match/main.fn -o match && perf stat -e instructions:u ./match 10000
 ```
+
+The probes are a tier of the ratchet: `just eval` scores a fix by the
+natural program and the standings put it beside its twin, as RATCHET.md
+says. The counts below were measured at each probe's size before it took
+one as an argument, a million samples or ten million codes; the
+standings give them at the ratchet's sizes.
 
 Ranked by what each costs the libraries, most first:
 

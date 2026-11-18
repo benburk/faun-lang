@@ -1,5 +1,6 @@
 # A block's symbols as a list of tags, a literal byte or a match's length
-# and distance, gathered and then counted, as deflate.fn gathers a block.
+# and distance, `n` of them gathered and then counted, as deflate.fn gathers
+# a block.
 package {}
 
 import std.host {Host}
@@ -9,7 +10,7 @@ Symbol = [Literal(U8), Match(Nat, Nat)]
 gather : (Nat, Nat, List(Symbol)) -> List(Symbol)
 gather(0, _, symbols) -> symbols
 gather(Succ(left), x, symbols) if x % 3 == 0 -> gather(left, (x * 5 + 1) % 65536, symbols.append(Match(x % 256 + 3, x % 32768 + 1)))
-gather(Succ(left), x, symbols) -> gather(left, (x * 5 + 1) % 65536, symbols.append(Literal(U8.of_nat(x))))
+gather(Succ(left), x, symbols) -> gather(left, (x * 5 + 1) % 65536, symbols.append(Literal(U8.of_nat(x % 256))))
 
 weight : List(Symbol) -> Nat
 weight(symbols) -> symbols.fold(0, |total, symbol| symbol is (
@@ -19,6 +20,7 @@ weight(symbols) -> symbols.fold(0, |total, symbol| symbol is (
 
 main! : Host -> []
 main!(host) -> (
-  printed = host.println!("${weight(gather(5000000, 1, []))}")
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${weight(gather(n, 1, []))}")
   host.exit!(0)
 )

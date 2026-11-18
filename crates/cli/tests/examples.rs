@@ -503,14 +503,16 @@ fn the_stdin_runner_hands_the_program_arguments_and_input() {
     );
 }
 
-/// Ori's Advent of Code programs and example libraries, ported: every
-/// expectation each file's package holds. A library is asked through its
-/// root, `src/<library>.fn`, which asks every module of it: an inner module
-/// resolves its imports from that root, so it is no package by itself.
+/// Ori's Advent of Code programs and example libraries, ported, and the
+/// ratchet's probes: every expectation each file's package holds. A library
+/// is asked through its root, `src/<library>.fn`, which asks every module of
+/// it: an inner module resolves its imports from that root, so it is no
+/// package by itself.
 #[test]
 fn the_ported_programs_and_libraries_hold() {
     let mut files = Vec::new();
-    let mut pending = vec![example("aoc"), example("libraries")];
+    let probes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../probes");
+    let mut pending = vec![example("aoc"), example("libraries"), probes];
     while let Some(dir) = pending.pop() {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();

@@ -19,6 +19,8 @@ columns(width, y, x, out) -> (
 
 main! : Host -> []
 main!(host) -> (
-  printed = host.println!("${rows(1024, 1024, 0, []).len()}")
+  n = Nat.from_str(host.args.get(1).ok_or("100")).ok_or(100)
+  out = rows(n, n, 0, [])
+  printed = host.println!("${out.len()} ${out.fold(0, |sum, byte| sum + byte.to_nat())}")
   host.exit!(0)
 )

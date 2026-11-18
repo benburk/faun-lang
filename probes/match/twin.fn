@@ -20,7 +20,8 @@ walk(input, at, total) -> (
 
 main! : Host -> []
 main!(host) -> (
-  input = List.range(200000).map(|i| U8.of_nat(i % 64 + i / 4096 % 2))
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  input = List.range(n).map(|i| U8.of_nat(i % 64 + i / 256 % 2))
   printed = host.println!("${walk(input, 64, U64.of_nat(0))}")
   host.exit!(0)
 )

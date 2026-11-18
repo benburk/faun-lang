@@ -16,6 +16,7 @@ weight(symbols) -> symbols.fold(0, |total, symbol|
 
 main! : Host -> []
 main!(host) -> (
-  printed = host.println!("${weight(gather(5000000, 1, []))}")
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${weight(gather(n, 1, []))}")
   host.exit!(0)
 )
