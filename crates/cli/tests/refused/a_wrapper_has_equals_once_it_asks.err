@@ -1,0 +1,7 @@
+error: `Level` has no field or method `equals`
+ --> a_wrapper_has_equals_once_it_asks.fn:9:8
+  |
+9 | expect Level.of_nat(12) == Level.best
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: declare `equals : (Level, Level) -> Bool` with no body in `Level`'s block to derive it

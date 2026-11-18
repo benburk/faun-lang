@@ -1,0 +1,9 @@
+Level : Nat.(
+  of_nat : Nat -> Level
+  of_nat(n) -> Level(n)
+
+  best : Level
+  best = Level(9)
+)
+
+expect Level.of_nat(12) == Level.best

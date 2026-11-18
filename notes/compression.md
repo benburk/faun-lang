@@ -233,6 +233,10 @@ with "`Level` has no field or method `equals`". A record or a tuple has
 signature with no body, `equals : (Level, Level) -> Bool`, which the
 message could say, as the refusal of a binding with `else` says its fix.
 
+Fixed: the refusal now adds "declare `equals : (Level, Level) -> Bool`
+with no body in `Level`'s block to derive it", and the same for `cmp`,
+`to_str` and `hash_into`, with the bounds a type taking variables needs.
+
 ### A lambda is never kept
 
 Binding a lambda to share it, `bump = |counts, i| …`, is refused with

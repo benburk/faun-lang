@@ -31,6 +31,7 @@ impl<'a> Checker<'a> {
             constructors: HashMap::new(),
             methods: HashMap::new(),
             fields: HashMap::new(),
+            data: &program.data,
             visible_methods: &program.visible_methods,
             pending_methods: Vec::new(),
             obliging: None,

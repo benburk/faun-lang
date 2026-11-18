@@ -1,0 +1,4 @@
+Slot(k) : [Slot(k)]
+
+seen : Set(Slot(Nat))
+seen = Set.empty.insert(Slot(1))

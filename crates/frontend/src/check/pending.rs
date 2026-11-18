@@ -1121,7 +1121,10 @@ impl Checker<'_> {
                                 let refused = failure(pending.module, pending.span, message);
                                 match pending.site.and_then(|site| self.prefix_helps.get(&site)) {
                                     Some(help) => refused.help(*help),
-                                    None => refused,
+                                    None => match self.derivable(pending.name, &receiver) {
+                                        Some(help) => refused.help(help),
+                                        None => refused,
+                                    },
                                 }
                             }
                         };
@@ -1156,6 +1159,59 @@ impl Checker<'_> {
             }
             unresolved = next;
         }
+    }
+
+    /// How a declared type asks for `member`, where it is one the compiler
+    /// derives from what the type holds: its signature, written with no
+    /// body in the type's block, a `where` bound asking the same of each
+    /// variable the type takes.
+    fn derivable(&self, member: Symbol, receiver: &Ty) -> Option<String> {
+        let Ty::Named(owner, _) = receiver else {
+            return None;
+        };
+        let data = self.data.get(owner)?;
+        let name = self.symbols.spelling(*owner);
+        let variables: Vec<_> = data
+            .parameters
+            .iter()
+            .map(|parameter| self.symbols.text(*parameter))
+            .collect();
+        let ty = if variables.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{name}({})", variables.join(", "))
+        };
+        let is = |derived: Option<Symbol>| derived == Some(member);
+        let (shape, bound): (String, fn(&str) -> String) = if is(self.prelude.equals) {
+            (format!("({ty}, {ty}) -> Bool"), |a| {
+                format!("Equatable({a})")
+            })
+        } else if is(self.prelude.cmp) {
+            (format!("({ty}, {ty}) -> Order"), |a| {
+                format!("Ordered({a})")
+            })
+        } else if is(self.prelude.to_str) {
+            (format!("{ty} -> Str"), |a| format!("Printable({a})"))
+        } else if is(self.prelude.hash_into) {
+            (format!("({ty}, h) -> h"), |a| {
+                format!("{a}.hash_into : ({a}, h) -> h")
+            })
+        } else {
+            return None;
+        };
+        let mut bounds: Vec<_> = variables.iter().map(|variable| bound(variable)).collect();
+        if is(self.prelude.hash_into) {
+            bounds.insert(0, "Hasher(h)".to_owned());
+        }
+        let bounds = if bounds.is_empty() {
+            String::new()
+        } else {
+            format!(" where {}", bounds.join(", "))
+        };
+        let member = self.symbols.text(member);
+        Some(format!(
+            "declare `{member} : {shape}{bounds}` with no body in `{name}`'s block to derive it"
+        ))
     }
 
     /// A member asked of a value whose type nothing decides, where more
