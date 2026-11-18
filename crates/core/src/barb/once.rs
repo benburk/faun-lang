@@ -149,13 +149,20 @@ fn fold(program: &mut Program, candidates: Vec<FnId>) -> Vec<FnId> {
 
 /// Which of `constants` may be worked out more than once: named at more
 /// than one call, or at one in a definition that may itself be made more
-/// than once. A definition is made at most once where it is the entry, or
-/// is called at one place only, by one made at most once; a body runs each
-/// of its calls at most once, since a walk is a definition calling itself.
+/// than once.
 fn repeated(program: &Program, entry: FnId, reached: &[bool], constants: &[FnId]) -> Vec<FnId> {
-    let count = program.functions().len();
-    // Each definition's callers, one entry per call.
-    let mut callers: Vec<Vec<FnId>> = vec![Vec::new(); count];
+    let callers = callers(program, reached);
+    let once = made_once(program, entry, reached);
+    constants
+        .iter()
+        .copied()
+        .filter(|id| !callers[id.index()].is_empty() && !once[id.index()])
+        .collect()
+}
+
+/// Each definition's callers among those `reached`, one entry per call.
+fn callers(program: &Program, reached: &[bool]) -> Vec<Vec<FnId>> {
+    let mut callers: Vec<Vec<FnId>> = vec![Vec::new(); program.functions().len()];
     for (at, &reached) in reached.iter().enumerate() {
         let id = FnId::at(at);
         let Some(body) = program.function(id).body().filter(|_| reached) else {
@@ -167,7 +174,16 @@ fn repeated(program: &Program, entry: FnId, reached: &[bool], constants: &[FnId]
             }
         }
     }
-    let mut once = vec![false; count];
+    callers
+}
+
+/// Which definitions are made at most once, by definition. One is where it
+/// is the entry, or is called at one place only, by one made at most once;
+/// a body runs each of its calls at most once, since a walk is a definition
+/// calling itself.
+pub(super) fn made_once(program: &Program, entry: FnId, reached: &[bool]) -> Vec<bool> {
+    let callers = callers(program, reached);
+    let mut once = vec![false; callers.len()];
     once[entry.index()] = true;
     let mut changed = true;
     while changed {
@@ -183,11 +199,7 @@ fn repeated(program: &Program, entry: FnId, reached: &[bool], constants: &[FnId]
             }
         }
     }
-    constants
-        .iter()
-        .copied()
-        .filter(|id| !callers[id.index()].is_empty() && !once[id.index()])
-        .collect()
+    once
 }
 
 /// For each definition, which of `handed` (by place) it must be handed:
