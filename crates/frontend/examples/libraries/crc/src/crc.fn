@@ -22,12 +22,7 @@ Crc32 : U32.(
   empty = Crc32(0xffffffff)
 
   update : (Crc32, List(U8)) -> Crc32
-  update(Crc32(register), bytes) -> (
-    # Bound here, since a constant is worked out again wherever it is
-    # named: named inside the walk, the table is built once a byte.
-    table = crc_table
-    Crc32(crc_bytes(table, register, bytes))
-  )
+  update(Crc32(register), bytes) -> Crc32(crc_bytes(register, bytes))
 
   value : Crc32 -> U32
   value(Crc32(register)) -> !register
@@ -37,24 +32,24 @@ Crc32 : U32.(
 # register mixed with the first four, and eight table lookups, one a
 # byte, each table the register after its byte and as many noughts as the
 # table's place. The bytes left over go one at a time.
-crc_bytes : (List(U32), U32, List(U8)) -> U32
-crc_bytes(table, register, [a, b, c, d, e, f, g, h, *rest]) -> (
+crc_bytes : (U32, List(U8)) -> U32
+crc_bytes(register, [a, b, c, d, e, f, g, h, *rest]) -> (
   one = register ^ U32.of_le_bytes(a, b, c, d)
-  crc_bytes(table,
-    lookup(table, 7, one) ^ lookup(table, 6, one.shift_right(8)) ^ lookup(table, 5, one.shift_right(16)) ^ lookup(table, 4, one.shift_right(24))
-      ^ lookup(table, 3, U32.of_u8(e)) ^ lookup(table, 2, U32.of_u8(f)) ^ lookup(table, 1, U32.of_u8(g)) ^ lookup(table, 0, U32.of_u8(h)),
+  crc_bytes(
+    lookup(7, one) ^ lookup(6, one.shift_right(8)) ^ lookup(5, one.shift_right(16)) ^ lookup(4, one.shift_right(24))
+      ^ lookup(3, U32.of_u8(e)) ^ lookup(2, U32.of_u8(f)) ^ lookup(1, U32.of_u8(g)) ^ lookup(0, U32.of_u8(h)),
     rest)
 )
-crc_bytes(table, register, bytes) -> crc_tail(table, register, bytes)
+crc_bytes(register, bytes) -> crc_tail(register, bytes)
 
-crc_tail : (List(U32), U32, List(U8)) -> U32
-crc_tail(_, register, []) -> register
-crc_tail(table, register, [byte, *rest]) ->
-  crc_tail(table, lookup(table, 0, register ^ U32.of_u8(byte)) ^ register.shift_right(8), rest)
+crc_tail : (U32, List(U8)) -> U32
+crc_tail(register, []) -> register
+crc_tail(register, [byte, *rest]) ->
+  crc_tail(lookup(0, register ^ U32.of_u8(byte)) ^ register.shift_right(8), rest)
 
 # The entry of table `slice` for the low byte of `index`.
-lookup : (List(U32), Nat, U32) -> U32
-lookup(table, slice, index) -> table.get(slice * 256 + (index.to_nat() & 0xff)).ok_or(0)
+lookup : (Nat, U32) -> U32
+lookup(slice, index) -> crc_table.get(slice * 256 + (index.to_nat() & 0xff)).ok_or(0)
 
 # Eight tables of 256, one after another: the first the register after
 # each byte alone, from nought, and each after it the one before it with

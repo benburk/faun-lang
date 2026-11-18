@@ -557,6 +557,25 @@ impl Program {
         self.constants.intern_held(value)
     }
 
+    /// Give `id` the parameters `extra` after those it has. Its body and
+    /// every call of it must then be rewritten to match, which the caller
+    /// does before anything reads them.
+    pub(super) fn add_params(&mut self, id: FnId, extra: &[(&str, TypeId)]) {
+        self.redefined();
+        let mut types = self.params(id).to_vec();
+        types.extend(extra.iter().map(|&(_, ty)| ty));
+        let mut names: Vec<_> = self.parameters[self.function(id).parameters.range()].to_vec();
+        for &(name, _) in extra {
+            let name = self.symbol(name);
+            names.push(Parameter { name });
+        }
+        let params = append_range(&mut self.types_pool, &types);
+        let parameters = append_range(&mut self.parameters, &names);
+        let function = &mut self.functions[id];
+        function.params = params;
+        function.parameters = parameters;
+    }
+
     /// Publish roots only after a pass has finished reading the original bodies.
     pub(super) fn replace_bodies(&mut self, bodies: Vec<(FnId, Body)>) {
         for (id, body) in bodies {

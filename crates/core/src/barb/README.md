@@ -299,22 +299,26 @@ Barb.
    in tail calls.
 3. **Descent.** A definition taking two numbers down together becomes its
    base cases on their differences.
-4. **Inlining.** Copy helpers into callers, so mutual recursion becomes
+4. **Constants.** A definition taking nothing that does work is folded
+   where the budget allows, left to be inlined where it runs at most once,
+   and otherwise worked out once in the entry and handed down as a
+   parameter, so a walk naming it does not build it again every round.
+5. **Inlining.** Copy helpers into callers, so mutual recursion becomes
    self-recursion.
-5. **Fusion.** A list built by one walk and read once by another is never
+6. **Fusion.** A list built by one walk and read once by another is never
    built.
-6. **First element.** A list read only for its first element stops once it
+7. **First element.** A list read only for its first element stops once it
    has it.
-7. **In place.** A walk rebuilding a list element by element becomes
+8. **In place.** A walk rebuilding a list element by element becomes
    indexed replacements.
-8. **Simplification.** Callee-first constant folding, identities, and
+9. **Simplification.** Callee-first constant folding, identities, and
    sharing repeated calls.
-9. **Specialization.** Copy a loop for each known value its callers pass,
-   where that decides a match.
-10. **Joining rounds.** Inline again where specializing left two
+10. **Specialization.** Copy a loop for each known value its callers pass,
+    where that decides a match.
+11. **Joining rounds.** Inline again where specializing left two
     definitions calling each other.
-11. **Sweep.** Drop what the entry doesn't reach.
-12. **Cleanup.** Drop unused pure work, and move work into the one arm that
+12. **Sweep.** Drop what the entry doesn't reach.
+13. **Cleanup.** Drop unused pure work, and move work into the one arm that
     reads it.
 
 Pure work may be dropped or moved. Calls reaching a bodyless declaration

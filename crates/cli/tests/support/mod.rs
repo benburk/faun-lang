@@ -98,6 +98,23 @@ pub(crate) fn run_failing(
     run_barb(barb, input, errno)
 }
 
+/// As [`run_file`], answering also the fuel the interpreter spent: a count
+/// of the work the program did, the same from run to run.
+pub(crate) fn run_counted(entry: &std::path::Path, input: &[u8]) -> (u32, String, u64) {
+    let mut barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
+        .unwrap_or_else(|error| panic!("{}", error.message));
+    let mut streams = Streams {
+        input: input.iter().copied().collect(),
+        ..Streams::default()
+    };
+    let (status, spent) = run_spending(&mut barb, &mut streams, 100_000_000);
+    (
+        status,
+        String::from_utf8(streams.output).expect("text written"),
+        spent,
+    )
+}
+
 /// Files by name, beneath where a program runs.
 pub(crate) type Directory = BTreeMap<String, Vec<u8>>;
 
@@ -211,6 +228,15 @@ fn run_barb_fueled(
 
 /// Run `barb` against `streams`: the status it exits with.
 fn run_on(barb: &mut faun_core::barb::Program, streams: &mut Streams, fuel: u64) -> u32 {
+    run_spending(barb, streams, fuel).0
+}
+
+/// The same, and how much of `fuel` it spent.
+fn run_spending(
+    barb: &mut faun_core::barb::Program,
+    streams: &mut Streams,
+    fuel: u64,
+) -> (u32, u64) {
     faun_core::barb::optimize(barb);
     let machine = faun_core::lower_to_machine_ir(barb, &X86_64Linux.routines())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -232,7 +258,10 @@ fn run_on(barb: &mut faun_core::barb::Program, streams: &mut Streams, fuel: u64)
     )
     .unwrap_or_else(|error| panic!("{error:?}"));
     let halted = evaluation.halted().expect("a program that exits");
-    u32::try_from(&halted[0]).expect("a status")
+    (
+        u32::try_from(&halted[0]).expect("a status"),
+        fuel - evaluation.fuel_remaining,
+    )
 }
 
 impl Drop for Package {
