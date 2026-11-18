@@ -35,7 +35,8 @@
 //! Static objects have an all-ones count. Mortal objects live in a private,
 //! reusable, coalescing heap, none of which is in the image: where it grows,
 //! the target's `grow` gives it its first arena on the first allocation and
-//! a new one at least as large as the heap so far each time it is full, or,
+//! a new one at least as large as the heap so far (on a 16-bit target, a
+//! quarter as large) each time it is full, or,
 //! where that is more than the target has, as much as is wanted; where it
 //! does not, it is a fixed arena in the globals. Where there is no more,
 //! exhaustion exits with status two. A block comes back with its digits unwritten: every
@@ -69,7 +70,9 @@ use super::{
 pub struct Config {
     pub word_bits: u16,
     /// The first arena a heap that grows asks the target for, or all of a
-    /// heap that does not, which is then in the globals.
+    /// heap that does not, which is then in the globals. A 16-bit heap that
+    /// grows counts itself this large from the start and asks for a quarter
+    /// of it, or of what it has, each time it is full.
     pub heap_bytes: usize,
     /// Whether the heap asks the target for more when it is full, rather
     /// than exiting. A target whose `grow` has nothing to bound it says no.
@@ -1488,14 +1491,22 @@ fn allocation(
 /// end. A next of nought is the first arena, the one in the globals.
 const ARENA_WORDS: usize = 2;
 
+/// What a 16-bit heap grows by when it is full, as a part of what it has:
+/// a quarter, so it holds at most about a quarter more than the program
+/// has needed at once, and asks the target a number of times logarithmic in
+/// that.
+const NARROW_GROWTH: u64 = 4;
+
 /// The allocator of a heap that grows: a ring of arenas, searched first-fit
 /// from where the last allocation ended. The first is in the globals and
 /// holds no blocks, so the image holds none of the heap: every other comes
 /// from the target's `grow`, the first of them `heap_bytes` large, which the
 /// first allocation asks for. Where no arena has room, a new one at least as
 /// large as the heap so far is asked for, so the heap doubles and a program
-/// asks the target a number of times logarithmic in what it holds; where
-/// the target has not that much, it is asked for no more than is wanted.
+/// asks the target a number of times logarithmic in what it holds; on a
+/// 16-bit target, at least a quarter as large, so the heap grows by a
+/// quarter. Where the target has not that much, it is asked for no more
+/// than is wanted.
 ///
 /// Where the search starts is kept in the globals with the number of
 /// arenas and the heap's size. Every allocation moves it, so a search that
@@ -1667,13 +1678,21 @@ fn growing(
         let total = b.load(Width::Word, kept, Offset::Words(3));
         let header_bytes = number(b, size64(start));
         let least = add(b, wanted, header_bytes);
-        let smaller = lt(b, least, total);
-        let chunk = b.if_(
-            smaller,
-            &[W],
-            |b| b.yield_(&[total]),
-            |b| b.yield_(&[least]),
-        )[0];
+        // A 16-bit heap grows by a quarter of itself rather than doubling:
+        // it searches on from its last allocation, so it writes through
+        // all it has before coming back to what was freed, and on a
+        // 64 KiB machine that is what it holds.
+        let step = if word == 2 {
+            // In whole words, as every block is.
+            let by = number(b, NARROW_GROWTH * size64(word));
+            let words = b.binary(Binary::Div, total, by);
+            let unit = number(b, size64(word));
+            b.binary(Binary::Mul, words, unit)
+        } else {
+            total
+        };
+        let smaller = lt(b, least, step);
+        let chunk = b.if_(smaller, &[W], |b| b.yield_(&[step]), |b| b.yield_(&[least]))[0];
         // A target that has no more answers an address the chunk would run
         // past the end of the address space from. Refused as much as the
         // heap so far, it is asked for as much as is wanted.
