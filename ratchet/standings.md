@@ -1,6 +1,6 @@
 # Standings
 
-Faun at `cbfce5d` beside each program's C twin, from the report of
+Faun at `cb2d987` beside each program's C twin, from the report of
 2026-11-18; `just standings` writes this file and
 [RATCHET.md](../RATCHET.md) says what is measured. Speed is counted in
 instructions on x86-64, fuel on wasm32 and cycles on the 6502; memory
@@ -11,13 +11,13 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 
 | Program        | Speed | vs C | Memory | vs C | Size    | vs C | Small  |
 | -------------- | ----- | ---- | ------ | ---- | ------- | ---- | ------ |
-| binary-trees   | 760M  | 1.16 | 2.08M  | 0.46 | 31,192  | 2.17 | 23,552 |
+| binary-trees   | 760M  | 1.16 | 2.08M  | 0.45 | 31,192  | 2.17 | 23,552 |
 | checksum       | 111M  | 1.05 | 9.75M  | 4.33 | 9,656   | 0.67 | 6,776  |
 | collatz        | 282M  | 31.7 | 377K   | 0.17 | 22,120  | 1.54 | 16,040 |
 | crc32          | 430K  | 1.24 | 45.1K  | 0.02 | 11,779  | 0.82 | 8,684  |
 | fannkuch-redux | 646M  | 55.2 | 123K   | 0.05 | 42,808  | 2.98 | 29,096 |
 | fasta          | 213M  | 1.76 | 98.3K  | 0.05 | 17,552  | 1.22 | 13,760 |
-| inflate        | 1.24G | 65.7 | 4.26M  | 1.46 | 103,104 | 7.14 | 64,640 |
+| inflate        | 1.23G | 65.1 | 4.26M  | 1.46 | 105,344 | 7.30 | 65,624 |
 | k-nucleotide   | 665M  | 74.3 | 8.41M  | 3.34 | 103,024 | 5.58 | 70,960 |
 | mandelbrot     | 128M  | 2.03 | 119K   | 0.05 | 38,880  | 2.71 | 25,232 |
 | md5            | 142M  | 4.61 | 238K   | 0.12 | 19,856  | 1.38 | 16,928 |
@@ -27,7 +27,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | sieve          | 350M  | 29.3 | 2.38M  | 0.72 | 20,376  | 1.42 | 14,416 |
 | sort           | 319M  | 5.98 | 1.98M  | 0.71 | 25,696  | 1.79 | 20,392 |
 | spectral-norm  | 159M  | 1.76 | 131K   | 0.06 | 50,480  | 3.52 | 32,888 |
-| geometric mean |       | 7.46 |        | 0.18 |         | 2.12 |        |
+| geometric mean |       | 7.45 |        | 0.18 |         | 2.12 |        |
 
 ## x86_64-linux, lab
 
@@ -39,7 +39,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | crc32          | 426K  | 1.23 | 41K    | 0.02 | 8,064  | 0.56 | 6,748  |
 | fannkuch-redux | 644M  | 55   | 119K   | 0.05 | 37,459 | 2.61 | 26,579 |
 | fasta          | 210M  | 1.73 | 94.2K  | 0.04 | 15,731 | 1.10 | 12,507 |
-| inflate        | 1.24G | 65.9 | 4.24M  | 1.46 | 91,915 | 6.37 | 57,987 |
+| inflate        | 1.23G | 65.2 | 4.25M  | 1.46 | 94,131 | 6.52 | 58,995 |
 | k-nucleotide   | 511M  | 57.2 | 8.46M  | 3.36 | 89,491 | 4.85 | 64,403 |
 | mandelbrot     | 87.8M | 1.39 | 115K   | 0.05 | 34,579 | 2.41 | 23,507 |
 | md5            | 128M  | 4.15 | 98.3K  | 0.05 | 16,155 | 1.13 | 14,283 |
@@ -61,7 +61,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | crc32          | 268K  | 2.80 | 16.4K  | 1.33 | 9,186   | 0.52 | 7,172   |
 | fannkuch-redux | 788M  | 37.1 | 73.7K  | 3.60 | 30,134  | 1.14 | 19,564  |
 | fasta          | 289M  | 2.75 | 73.7K  | 6.00 | 13,308  | 1.02 | 10,530  |
-| inflate        | 571M  | 48.5 | 467K   | 2.19 | 76,984  | 2.36 | 42,714  |
+| inflate        | 566M  | 48.1 | 467K   | 2.19 | 78,330  | 2.40 | 43,277  |
 | k-nucleotide   | 774M  | 78.5 | 2.06M  | 10.9 | 326,744 | 9.17 | 152,718 |
 | mandelbrot     | 852M  | 6.2k | 73.7K  | 4.50 | 279,962 | 10.7 | 120,827 |
 | md5            | 78.5M | 3.17 | 209K   | 2.83 | 17,190  | 4.18 | 15,059  |
@@ -83,7 +83,7 @@ and sizes are bytes. K, M and G are thousands, millions and billions.
 | crc32          | 267K  | 2.78 | 16.4K  | 1.33 | 7,172   | 0.40 | 6,143   |
 | fannkuch-redux | 784M  | 36.9 | 73.7K  | 3.60 | 28,347  | 1.07 | 18,584  |
 | fasta          | 289M  | 2.75 | 73.7K  | 6.00 | 12,687  | 0.97 | 10,076  |
-| inflate        | 564M  | 48   | 467K   | 2.19 | 74,625  | 2.29 | 41,365  |
+| inflate        | 560M  | 47.6 | 467K   | 2.19 | 75,965  | 2.33 | 41,922  |
 | k-nucleotide   | 699M  | 70.8 | 2.06M  | 10.9 | 333,763 | 9.37 | 153,944 |
 | mandelbrot     | 858M  | 6.2k | 73.7K  | 4.50 | 289,953 | 11.1 | 123,875 |
 | md5            | 78.3M | 3.16 | 209K   | 2.83 | 15,496  | 3.77 | 13,812  |
