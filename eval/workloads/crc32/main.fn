@@ -1,0 +1,38 @@
+# The CRC-32 of standard input, as zlib, gzip and PNG compute it: the
+# polynomial 0xEDB88320 reflected, the register starting and ending
+# inverted, and the bytes taken one at a time through a table of 256.
+
+import std.host {Host}
+
+# The register after each of the 256 bytes alone, from nought: eight
+# steps of the division, one a bit.
+table : List(U32)
+table = List.range(256).map(|n| entry(U32.of_nat(n), 8))
+
+entry : (U32, Nat) -> U32
+entry(register, 0) -> register
+entry(register, Succ(bits)) if (register & 1) == 1 -> entry(0xedb88320 ^ register.shift_right(1), bits)
+entry(register, Succ(bits)) -> entry(register.shift_right(1), bits)
+
+# One byte into the register: the low byte of the two together picks the
+# entry, and the rest moves down a byte.
+step : (U32, U8) -> U32
+step(register, byte) -> (
+  index = (register ^ U32.of_u8(byte)).to_nat() & 0xff
+  table.get(index).ok_or(0) ^ register.shift_right(8)
+)
+
+crc32 : List(U8) -> U32
+crc32(bytes) -> !bytes.fold(0xffffffff, step)
+
+expect crc32([]) == 0
+expect crc32("123456789".to_utf8()) == 0xcbf43926
+expect crc32("The quick brown fox jumps over the lazy dog".to_utf8()) == 0x414fa339
+
+main! : Host -> []
+main!(host) -> (
+  input = host.stdin.read_to_end!()
+  input is Ok(bytes) else return host.exit!(1)
+  printed = host.println!("${crc32(bytes)}")
+  host.exit!(0)
+)
