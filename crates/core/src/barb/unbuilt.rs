@@ -32,7 +32,7 @@
 //! with a match of two or more arms. Copying keeps every call and effect
 //! where it was.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::copy::{self, Scope};
 use super::{Atom, Body, CtorId, Expr, ExprId, FnId, Local, Program, TypeId};
@@ -56,8 +56,8 @@ pub(crate) fn constructions(program: &mut Program) {
     let once = super::once::made_once(program, entry, &reached);
     let mut unbuilt = Unbuilt {
         answered,
-        copies: HashMap::new(),
-        made: HashMap::new(),
+        copies: HashMap::default(),
+        made: HashMap::default(),
         program,
     };
     let count = unbuilt.program.functions().len();

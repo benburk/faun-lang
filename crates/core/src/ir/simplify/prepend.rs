@@ -19,10 +19,10 @@ pub(super) fn temporary_pushes(source: &Program) -> HashMap<ValueId, Pushed> {
         .iter()
         .any(|op| matches!(op, Op::BufferPrepend { .. }))
     {
-        return HashMap::new();
+        return HashMap::default();
     }
     let uses = source.use_counts();
-    let mut pushes = HashMap::new();
+    let mut pushes = HashMap::default();
     for region in source.regions.ids() {
         for (op, results) in source.walk(region) {
             if let (Op::BufferPush { operands, shape }, &[buffer, start]) = (*op, results)

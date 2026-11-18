@@ -15,7 +15,7 @@
 //! accident, and a definition answered by its fingerprint keeps its body,
 //! which a target without the instruction walks.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::model::TypeDefinition;
 use super::{Atom, Body, CtorId, Expr, FnId, Program, TypeId};
@@ -31,9 +31,9 @@ pub fn fingerprint(program: &Program, id: FnId) -> Option<u128> {
     let mut writer = Writer {
         program,
         hash: Fnv::new(),
-        functions: HashMap::new(),
+        functions: HashMap::default(),
         pending_functions: Vec::new(),
-        types: HashMap::new(),
+        types: HashMap::default(),
         pending_types: Vec::new(),
         work: WORK,
     };

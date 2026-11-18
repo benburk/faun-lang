@@ -2,7 +2,7 @@
 //! or reading memory fewer times. In particular, legalization computes the
 //! same element address for each leaf of a flat record in a sequence.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::float::Float;
 
@@ -38,8 +38,8 @@ pub(super) fn common(source: &Program) -> Program {
             regions,
             current: None,
             canonical: (0..source.values_count()).map(ValueId::at).collect(),
-            constants: HashMap::new(),
-            available: HashMap::new(),
+            constants: HashMap::default(),
+            available: HashMap::default(),
         },
     )
 }

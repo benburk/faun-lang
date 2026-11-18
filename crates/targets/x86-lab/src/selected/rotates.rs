@@ -1,7 +1,7 @@
 //! Select ROL when the low and high parts of a shifted word are rejoined.
 //! Track uses across region boundaries so any separately read part survives.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::WORD_BITS;
 use crate::ir::{Binary, Direction, Function, Op, Program, ValueId};

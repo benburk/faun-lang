@@ -17,7 +17,7 @@
 mod banks_tests;
 mod distance;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use distance::Distances;
 
@@ -2030,7 +2030,7 @@ fn copies_at_points<R: Register>(
     transitions: &[Transition<R>],
 ) -> Vec<(Point, Vec<ParallelCopy<R>>)> {
     let mut at_point: Vec<(Point, Vec<ParallelCopy<R>>)> = Vec::new();
-    let mut found: HashMap<usize, usize> = HashMap::new();
+    let mut found: HashMap<usize, usize> = HashMap::default();
     for transition in transitions {
         let copy = ParallelCopy::between(place(transition.from), place(transition.to));
         if let Some(&group) = found.get(&transition.at.index()) {

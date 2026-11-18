@@ -253,6 +253,7 @@ version = "0.1.0"
 dependencies = [
  "num-bigint",
  "num-traits",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -271,6 +272,7 @@ version = "0.1.0"
 dependencies = [
  "faun-core",
  "faun-frontend",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -287,6 +289,7 @@ version = "0.1.0"
 dependencies = [
  "faun-core",
  "faun-frontend",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -298,6 +301,7 @@ dependencies = [
  "faun-x86-64-linux",
  "num-bigint",
  "num-traits",
+ "rustc-hash",
 ]
 
 [[package]]

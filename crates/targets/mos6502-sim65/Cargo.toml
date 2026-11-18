@@ -7,6 +7,7 @@ description = "The mos6502-sim65 target for Faun"
 
 [dependencies]
 faun-core.workspace = true
+rustc-hash = "2.1.3"
 
 [dev-dependencies]
 faun-frontend.workspace = true

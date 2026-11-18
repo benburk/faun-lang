@@ -18,7 +18,7 @@
 //! first jump or return, so every place control may reach stays where it
 //! was, and so does the entry, which is the first instruction.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use super::machine::{Condition, Inst};
 use faun_core::targets::code::{Code, Label};
@@ -146,7 +146,7 @@ fn retarget(code: &mut Code<Inst>) -> bool {
 /// each of them.
 fn landing(code: &Code<Inst>, mut label: Label, landed: &mut [Option<Label>]) -> Label {
     let mut seen = Vec::new();
-    let mut passed = HashSet::new();
+    let mut passed = HashSet::default();
     let mut ended = true;
     while let Some(at) = code.position(label)
         && let Some(&Inst::Jump {

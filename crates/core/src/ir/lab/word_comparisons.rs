@@ -3,7 +3,8 @@
 //! exact word and all its uses compare it with other proven words. Naturals
 //! used anywhere else still keep their original arbitrary-precision form.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::{BTreeMap, VecDeque};
 
 use super::rewrite::{self, Declarations, Rebuild};
 use super::{Builder, Class, Op, Program, ValueId};
@@ -61,8 +62,8 @@ impl Word {
 
 /// A parameter may change representation only if every caller agrees.
 fn word_params(p: &Program, words: &BTreeMap<ValueId, Word>) -> HashSet<ValueId> {
-    let mut candidates = HashSet::new();
-    let mut wide = HashSet::new();
+    let mut candidates = HashSet::default();
+    let mut wide = HashSet::default();
     for op in &p.ops {
         let Op::Call { function, args } = *op else {
             continue;
@@ -95,9 +96,9 @@ fn compared_params(p: &Program, words: &BTreeMap<ValueId, Word>) -> HashSet<Valu
     if params.is_empty() {
         return params;
     }
-    let mut peers = HashMap::<ValueId, Vec<ValueId>>::new();
+    let mut peers = HashMap::<ValueId, Vec<ValueId>>::default();
     let mut rejected = VecDeque::new();
-    let mut compared = HashSet::new();
+    let mut compared = HashSet::default();
     for r in p.regions.ids() {
         for op in p.ops(r) {
             if let Op::Compare { left, right, .. } = *op {

@@ -19,7 +19,7 @@
 //! Only buffers of elements holding no claims take part. Replacing one of
 //! those gives up nothing the element held, so writing it is all there is.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::ownership;
 use super::{Class, Exit, Op, Program, RegionId, ShapeId, ValueId};
@@ -132,15 +132,15 @@ impl<'a> Walk<'a> {
             source,
             owned,
             ops: Vec::new(),
-            defs: HashMap::new(),
-            homes: HashMap::new(),
-            uses: HashMap::new(),
+            defs: HashMap::default(),
+            homes: HashMap::default(),
+            uses: HashMap::default(),
             paths: vec![Vec::new()],
             position: 0,
-            yields: HashMap::new(),
-            continues: HashMap::new(),
-            breaks: HashMap::new(),
-            loops: HashMap::new(),
+            yields: HashMap::default(),
+            continues: HashMap::default(),
+            breaks: HashMap::default(),
+            loops: HashMap::default(),
         }
     }
 
@@ -393,7 +393,7 @@ impl<'a> Walk<'a> {
         let shapes = self.candidates(ownable);
         let mut carried: Carried = shapes.keys().copied().collect();
         loop {
-            let mut known = Fresh::new();
+            let mut known = Fresh::default();
             let kept: Carried = carried
                 .iter()
                 .copied()
@@ -404,7 +404,7 @@ impl<'a> Walk<'a> {
             }
             carried = kept;
         }
-        let mut known = Fresh::new();
+        let mut known = Fresh::default();
         for &(body, index) in &carried {
             let (site, initial) = self.initial(body);
             let entered = initial[index];
@@ -435,7 +435,7 @@ impl<'a> Walk<'a> {
     /// shape.
     fn candidates(&self, ownable: &dyn Fn(ShapeId) -> bool) -> HashMap<(RegionId, usize), ShapeId> {
         let source = self.source;
-        let mut shapes = HashMap::new();
+        let mut shapes = HashMap::default();
         for &body in self.loops.keys() {
             let params = source.values(source.region(body).params);
             for (index, &param) in params.iter().enumerate() {

@@ -39,7 +39,7 @@
 
 mod semantic;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::budget::{Budget, FoldLimits};
 use super::constant::Held;
@@ -461,7 +461,7 @@ impl<'a> Rewrite<'a> {
             budget: Budget::new(limits),
             inline_depth: 0,
             written: Vec::new(),
-            calls: HashMap::new(),
+            calls: HashMap::default(),
             shadowed: Vec::new(),
         }
     }

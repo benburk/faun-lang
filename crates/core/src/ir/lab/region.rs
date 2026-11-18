@@ -7,7 +7,7 @@
 #[path = "region/nullable.rs"]
 mod nullable;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::natural::{Helper, Library};
 use super::packing::Packed;
@@ -95,7 +95,7 @@ fn connected(p: &Program, region: RegionId, exit: super::Exit) -> bool {
     {
         return false;
     }
-    let mut live = HashSet::new();
+    let mut live = HashSet::default();
     for (op, results) in p.walk(region) {
         for v in p.operands(op).filter(|&v| p.class(v) == Class::Cell) {
             if !matches!(op, Op::Cell { .. }) || !live.remove(&v) {
@@ -168,7 +168,7 @@ fn reader(p: &Program, id: FunctionId) -> bool {
 }
 
 fn caller_roots(p: &Program, constructors: &HashSet<FunctionId>) -> HashMap<ValueId, FunctionId> {
-    let mut roots = HashMap::new();
+    let mut roots = HashMap::default();
     for (caller, f) in p.functions.iter_enumerated() {
         if let Some(body) = f.body() {
             for (op, results) in p.walk_within(body) {

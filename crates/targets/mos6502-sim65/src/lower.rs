@@ -503,7 +503,7 @@ struct Lowering<'a> {
     /// constant arguments, emitted after the code.
     pool: Vec<(super::asm::Label, [u16; 2])>,
     /// Intermediates answered directly by their sole consumer, by value index.
-    fused: std::collections::HashSet<usize>,
+    fused: rustc_hash::FxHashSet<usize>,
     /// A byte sum consumed only by a one-place downward shift. The sum's
     /// ninth bit can remain in carry until the shift reads it.
     halved_sums: Vec<Option<(ValueId, ValueId)>>,
@@ -551,7 +551,7 @@ impl<'a> Lowering<'a> {
             plans: Vec::new(),
             needs: Vec::new(),
             pool: Vec::new(),
-            fused: std::collections::HashSet::new(),
+            fused: std::collections::HashSet::default(),
             halved_sums: vec![None; program.values_count()],
             pending: None,
             starts: Vec::new(),

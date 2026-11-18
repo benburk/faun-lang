@@ -2,7 +2,7 @@
 //! the null pointer for the first. Non-null pointers identify reservations
 //! containing only fields. Every caller of a reader must agree on the layout.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::super::{Builder, Class, FunctionId, Op, Program, Range, Relation, ValueId};
 
@@ -62,7 +62,7 @@ fn tags(p: &Program, id: FunctionId) -> Option<Tags> {
 type Calls = HashMap<FunctionId, Vec<(FunctionId, Range)>>;
 
 fn calls(p: &Program) -> Calls {
-    let mut calls = Calls::new();
+    let mut calls = Calls::default();
     for (caller, f) in p.functions.iter_enumerated() {
         if let Some(body) = f.body() {
             for op in p.every(body) {
@@ -98,7 +98,7 @@ fn reader_cells(
     if params.next().is_some() {
         return None;
     }
-    let mut descendants = HashSet::from([param]);
+    let mut descendants = std::iter::once(param).collect::<HashSet<_>>();
     for (op, results) in p.walk_within(body) {
         if let Op::CellField { cell, .. } = *op
             && p.class(results[0]) == Class::Cell
@@ -129,7 +129,7 @@ impl Layout {
             return layout;
         }
         let calls = calls(p);
-        let mut consumers = HashMap::<FunctionId, HashSet<FunctionId>>::new();
+        let mut consumers = HashMap::<FunctionId, HashSet<FunctionId>>::default();
         for (&reader, sites) in &calls {
             for &(_, args) in sites {
                 for root in p.values(args) {

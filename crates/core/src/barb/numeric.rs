@@ -19,7 +19,7 @@
 //! solver walks a numeric body as it would the Barb body, without asking
 //! the program what any of it is.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::facts::{Operation, Recognised, SequenceOperation};
 use super::model::{Body, CtorId, Expr, ExprId, FnId, TypeId};
@@ -628,11 +628,11 @@ fn told(program: &Program, body: Body, params: usize) -> HashSet<ExprId> {
     let mut found = Told {
         program,
         scope: vec![None; params],
-        aliases: HashMap::new(),
+        aliases: HashMap::default(),
         wanted: Vec::new(),
     };
     found.body(body);
-    let mut told = HashSet::new();
+    let mut told = HashSet::default();
     while let Some(expr) = found.wanted.pop() {
         if !told.insert(expr) {
             continue;
