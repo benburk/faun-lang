@@ -66,6 +66,8 @@ syntax shown on purpose, marks its fence `` ```ruby ignore ``.
   IR and the three targets
 - [Barb](machine/barb.md): the first-order core's shape
 - [Memory](machine/memory.md): reference counting and in-place reuse
+- [Ranges](machine/ranges.md): what a number can be, as intervals and
+  octagons over the values a program relates
 
 ### Decisions and explorations
 
