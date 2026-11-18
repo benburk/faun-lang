@@ -161,15 +161,11 @@ found(context, prev, at, candidate, chain, best) -> (
   if distance == 0 | length == 3 & distance > 4096 then (0, 0) else (length, distance)
 )
 
-# A symbol of a block: a literal byte below 65536, or a match, its length
-# times 65536 plus its distance.
-Symbol = U32
+# A symbol of a block: a literal byte, or a match, its length and distance.
+Symbol = [Literal(U8), Match(Nat, Nat)]
 
 literal : (List(U8), Nat) -> Symbol
-literal(input, at) -> U32.of_u8(byte_at(input, at))
-
-match_of : (Nat, Nat) -> Symbol
-match_of(length, distance) -> U32.of_nat(length * 65536 + distance)
+literal(input, at) -> Literal(byte_at(input, at))
 
 # Levels 1 to 3: each match taken as found.
 greedy : (Context, Nat, List(Nat), List(Nat), List(Symbol), Nat, Writer) -> Writer
@@ -184,7 +180,7 @@ greedy(context, at, head, prev, symbols, start, written) -> (
   if length < 3 return greedy(context, at + 1, head2, prev2, symbols.append(literal(input, at)), start, written)
   (head3, prev3) = if length <= context.search.lazy then insert_until(context, head2, prev2, at + 1, at + length)
     else (head2, prev2)
-  greedy(context, at + length, head3, prev3, symbols.append(match_of(length, distance)), start, written)
+  greedy(context, at + length, head3, prev3, symbols.append(Match(length, distance)), start, written)
 )
 
 # Levels 4 to 9: the match at `at - 1`, `pending` long, is taken only where
@@ -209,7 +205,7 @@ lazy(context, at, head, prev, pending, pending_distance, waiting, symbols, start
   if pending >= 3 & length <= pending return (
     end = at - 1 + pending
     (head3, prev3) = insert_until(context, head2, prev2, at + 1, end)
-    lazy(context, end, head3, prev3, 0, 0, False, symbols.append(match_of(pending, pending_distance)), start, written)
+    lazy(context, end, head3, prev3, 0, 0, False, symbols.append(Match(pending, pending_distance)), start, written)
   )
   next = if waiting then symbols.append(literal(input, at - 1)) else symbols
   lazy(context, at + 1, head2, prev2, length, distance, True, next, start, written)
@@ -235,32 +231,31 @@ aligned : Writer -> Writer
 aligned({out, bits, count}) if count > 0 -> {out: out.append(U8.of_nat(bits)), bits: 0, count: 0}
 aligned(written) -> written
 
-# A code to write with: for each symbol, its length times 65536 plus its
-# bits in the order they are written. A length of nought leaves a symbol
-# out.
-Code = List(U32)
+# A code to write with: for each symbol, its length and its bits in the
+# order they are written. A length of nought leaves a symbol out.
+Code = List((Nat, Nat))
 
 code_of : List(Nat) -> Code
 code_of(lengths) -> (
   counts = lengths.fold(List.repeat(0, 16), bump)
   firsts = first_codes(counts, 1, 0, [0])
   (_, code) = lengths.fold((firsts, []), |(next, code), length|
-    if length == 0 then (next, code.append(U32.of_nat(0)))
+    if length == 0 then (next, code.append((0, 0)))
     else (
       bits = next.get(length).ok_or(0)
-      (next.put(length, bits + 1), code.append(U32.of_nat(length * 65536 + reversed(bits, length, 0))))
+      (next.put(length, bits + 1), code.append((length, reversed(bits, length, 0))))
     ))
   code
 )
 
 put_symbol : (Writer, Code, Nat) -> Writer
 put_symbol(written, code, symbol) -> (
-  entry = code.get(symbol).ok_or(0).to_nat()
-  put(written, entry % 65536, entry / 65536)
+  (length, bits) = code.get(symbol).ok_or((0, 0))
+  put(written, bits, length)
 )
 
 # For each length less 3, its symbol less 257.
-length_symbols : List(U8)
+length_symbols : List(Nat)
 length_symbols = (
   length_bases = bases(length_table)
   List.range(256).map(|less| symbol_at(length_bases, less + 3))
@@ -268,7 +263,7 @@ length_symbols = (
 
 # For each distance less one below 256, its symbol; from 256 on, for each
 # 128 distances from nought.
-distance_symbols : List(U8)
+distance_symbols : List(Nat)
 distance_symbols = (
   distance_bases = bases(distance_table)
   List.range(512).map(|i| symbol_at(distance_bases, if i < 256 then i + 1 else (i - 256) * 128 + 1))
@@ -284,25 +279,27 @@ bases : List((Nat, Nat)) -> List(Nat)
 bases(entries) -> entries.map(|(base, _)| base)
 
 # The symbol whose base is the last at or below `value`.
-symbol_at : (List(Nat), Nat) -> U8
-symbol_at(bases, value) -> U8.of_nat(bases.partition_point(|base| base <= value) - 1)
+symbol_at : (List(Nat), Nat) -> Nat
+symbol_at(bases, value) -> bases.partition_point(|base| base <= value) - 1
 
 # A match's length and distance symbols.
 symbols_of : (Nat, Nat) -> (Nat, Nat)
 symbols_of(length, distance) -> (
   less = distance - 1
   at = if less < 256 then less else 256 + less / 128
-  (length_symbols.get(length - 3).ok_or(0).to_nat(), distance_symbols.get(at).ok_or(0).to_nat())
+  (length_symbols.get(length - 3).ok_or(0), distance_symbols.get(at).ok_or(0))
 )
 
 # How often each literal and length symbol and each distance symbol comes.
 frequencies : List(Symbol) -> (List(Nat), List(Nat))
 frequencies(symbols) -> (
   (literals, distances) = symbols.fold((List.repeat(0, 286), List.repeat(0, 30)), |(literals, distances), symbol|
-    if symbol < 65536 then (bump(literals, symbol.to_nat()), distances)
-    else (
-      (l, d) = symbols_of(symbol.shift_right(16).to_nat(), (symbol & 0xffff).to_nat())
-      (bump(literals, 257 + l), bump(distances, d))
+    symbol is (
+      Literal(byte) then (bump(literals, byte.to_nat()), distances)
+      Match(length, distance) then (
+        (l, d) = symbols_of(length, distance)
+        (bump(literals, 257 + l), bump(distances, d))
+      )
     ))
   (bump(literals, 256), distances)
 )
@@ -367,13 +364,13 @@ count_of(runs, symbol) -> runs.count(|(s, _)| s == symbol)
 symbols_put : (Writer, List(Symbol), Code, Code) -> Writer
 symbols_put(written, symbols, literals, distances) -> (
   body = symbols.fold(written, |w, symbol|
-    if symbol < 65536 then put_symbol(w, literals, symbol.to_nat())
-    else (
-      length = symbol.shift_right(16).to_nat()
-      distance = (symbol & 0xffff).to_nat()
-      (l, d) = symbols_of(length, distance)
-      w2 = put_with_extra(put_symbol(w, literals, 257 + l), length_table.get(l).ok_or((0, 0)), length)
-      put_with_extra(put_symbol(w2, distances, d), distance_table.get(d).ok_or((0, 0)), distance)
+    symbol is (
+      Literal(byte) then put_symbol(w, literals, byte.to_nat())
+      Match(length, distance) then (
+        (l, d) = symbols_of(length, distance)
+        w2 = put_with_extra(put_symbol(w, literals, 257 + l), length_table.get(l).ok_or((0, 0)), length)
+        put_with_extra(put_symbol(w2, distances, d), distance_table.get(d).ok_or((0, 0)), distance)
+      )
     ))
   put_symbol(body, literals, 256)
 )
