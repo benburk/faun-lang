@@ -109,14 +109,33 @@ so there is one mode.
 
 A worklist of definitions, callees first, walked in sweeps: a sweep walks
 what is waiting in order, and a definition waits again when what it is
-handed, what something it calls answers or a field it reads grows. A
-value, an entry, an answer or a field, counts a sweep it grew in; past
-eight such sweeps, a bound that moved jumps to the next threshold: a
-machine width, 2^8, 2^16, 2^32 or 2^64 less one, the most a sequence's
-length can be, or one less than a divisor the program names; and past the
-widest to none. A constraint between two parameters widens to the widths
-alone. Counting sweeps rather than walks keeps a value many callers each
-hand a little more from being taken for a value counting up. A recursive
+handed, what something it calls answers or a field it reads grows. Only a
+call that reads its callee's answer waits on it: a call of an operation
+works out its answer from its operands where it is made, so `+` answering
+more never walks again everything that adds.
+
+A round that goes round, a definition calling itself or several calling
+each other, is gone round where the sweep meets it until none of it
+waits, before the sweep goes on; what it hands a definition before it
+waits for the next sweep. So what calls a recursion reads where it settled,
+widened and all, rather than walking again for each step of its climb: a
+climb of twenty rungs in `bit_length`'s `widen` once walked the float
+routines that call it twenty times, and now walks them once.
+
+A value, an entry, an answer or a field, counts each sweep it grew in, and,
+where the round going round reads it, each time round it grew within that
+round; past eight of either, a bound that moved jumps to the next
+threshold: a machine width, 2^8, 2^16, 2^32 or 2^64 less one, the most a
+sequence's length can be, or one less than a divisor the program names;
+and past the widest to none. A constraint between two parameters widens to
+the widths alone. Counting sweeps rather than walks keeps a value many
+callers each hand a little more from being taken for a value counting up,
+and a round counts afresh each time it is gone round, so a climb it began
+before what it is handed was known does not use up the next one's. What a
+round answers or builds is counted only in a time round after what its
+definitions are handed stopped growing: it grows as they do, and widening
+them first bounds it, where widening it alongside would lose the bound, as
+a count beside a list of at most ten answering at most ten. A recursive
 call handing on a value no more than the parameter it becomes hands on
 only how low it goes, and one handing a parameter on unchanged hands
 nothing, so a bound widened while callers settled comes back down.
@@ -187,6 +206,22 @@ instructions. Against the old walk under the same assumptions, a length
 bounded by memory in both, no range is wider but for 1,981 terms, matches
 and fields the octagons prove unreached, such as `List.drop` of a 256-entry
 table by an index below 256 coming back empty.
+
+Those twice-the-instructions were the order of the walk, not the
+octagons: each rung of a recursion's climb was a sweep, and each sweep
+walked again everything reading what the recursion answered, and
+everything that adds whenever a sum grew. Going round a recursion where
+the sweep meets it, and waking only what reads an answer, n-body settles
+in 11 sweeps and 345 walks of a body where it took 29 and 639, mandelbrot
+in 11 and 329 where it took 26 and 648. Over the 94 programs, analysing
+takes 25.8 billion instructions where it took 37.3, and compiling 154.9
+where it took 166.3; n-body, mandelbrot and spectral-norm analyse in a
+third of what they did and k-nucleotide in half, and a few with large
+recursions, such as `png`'s deflate, about a tenth more. Across 102
+programs for x86-64 stock and lab, wasm32 and the 6502, no range is wider
+but three terms of `topam` on the 6502, in an arm of `inflate`'s `blocks`
+now proved unreached; thousands are narrower, from a climb no longer
+widened before what it read had settled.
 
 ## Memory bounds a length
 
