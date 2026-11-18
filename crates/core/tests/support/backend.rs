@@ -982,6 +982,60 @@ fn lists_of_every_element_hold_what_they_were_given() {
     }
 }
 
+/// A list of small tags holds each tag and its fields packed by their bits:
+/// a literal byte, or a match's length below 259 and distance up to 32768,
+/// share four bytes. Built by pushing and appending, then matched, compared,
+/// replaced and reversed, it reads back what was written.
+#[test]
+fn a_list_of_small_tags_reads_back_its_packed_fields() {
+    let program = read(
+        "import std.host {Host}
+
+         Symbol = [Literal(U8), Match(Nat, Nat)]
+
+         weigh : (Nat, Symbol) -> Nat
+         weigh(total, Literal(byte)) -> total + byte.to_nat()
+         weigh(total, Match(length, distance)) -> total + length + distance % 100
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len() % 4
+           symbols = [Literal(U8.of_nat(n + 6))].concat([Match(n + 257, n + 32767), Literal(200)]).append(Match(3, 1))
+           changed = symbols.put(2, Match(258, 32768)).reverse()
+           same = symbols.reverse().reverse() == symbols & symbols != changed
+           host.exit!(U8.of_nat(symbols.fold(0, weigh) % 32 + changed.fold(0, weigh) % 32 + same.select(64, 0)))
+         )",
+    )
+    .expect("a program");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    // 7 + 258 + 68 + 200 + 3 + 1 = 537, 537 % 32 = 25; replacing the 200
+    // by 258 + 68 makes 663, 663 % 32 = 23; and they compare as they should.
+    assert_eq!(status(&prepared), 25 + 23 + 64);
+}
+
+/// A shift down read as a byte is worked out as wide as the bits it moves
+/// down: 1300 moved down nine places is 2, not what its low byte moved
+/// down nine places would be.
+#[test]
+fn a_shift_down_read_narrow_keeps_what_it_moves_down() {
+    let program = read(
+        "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) -> (
+           x = U16.of_nat(host.args.len() * 1000 + 300)
+           host.exit!(U8.of_nat((x.shift_right(9) & 0x7f).to_nat()))
+         )",
+    )
+    .expect("a program");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(status(&prepared), 2);
+}
+
 /// A list is written where it lies where nothing else holds it, and copied
 /// first where something does, which then reads what it held: numbers and
 /// strings, each replaced in a list threaded through a fold and in one held
