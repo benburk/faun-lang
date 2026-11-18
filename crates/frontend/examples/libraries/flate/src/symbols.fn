@@ -3,8 +3,7 @@
 
 export {Tables, tables, fixed_literal_lengths, first_codes, reversed}
 
-# The tables a stream is read and written with, built once a stream, since a constant
-# is worked out again wherever it is named.
+# The tables a stream is read and written with.
 Tables = {
   # For each length symbol from 257, its base length times 16 plus how
   # many extra bits follow it.

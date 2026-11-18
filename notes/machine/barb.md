@@ -101,33 +101,40 @@ Shape the program:
    so its recursive calls are tail calls.
 3. **Descent.** A definition taking two numbers down together becomes its
    base cases on their differences, so it stops recursing.
-4. **Inlining.** Copy helpers into their callers, keeping one loop breaker
+4. **Constants.** A definition taking nothing that does work is folded
+   where the budget allows, left alone where it is named once in a
+   definition made at most once, so inlining can fuse it with its reader,
+   and otherwise worked out once in the entry and handed to every
+   definition reaching it as a parameter. A walk naming a table then reads
+   it rather than building it every round
+   ([computation](../computation.md#a-constant-is-worked-out-once)).
+5. **Inlining.** Copy helpers into their callers, keeping one loop breaker
    per cycle. Mutual recursion becomes self-recursion. Arithmetic
    identities apply here too.
 
 Remove list work:
 
-5. **Fusion.** A list built by one walk and read once by another is never
+6. **Fusion.** A list built by one walk and read once by another is never
    built.
-6. **First element.** A list read only for its first element, such as a
+7. **First element.** A list read only for its first element, such as a
    search, stops once it has it.
-7. **In place.** A walk rebuilding a list element for element becomes
+8. **In place.** A walk rebuilding a list element for element becomes
    indexed replacements, which lowering can do in place on an unshared
    buffer.
 
 Fold what is known:
 
-8. **Simplification.** Callee-first constant folding, identities, and
+9. **Simplification.** Callee-first constant folding, identities, and
    sharing repeated calls, so a caller sees its callees' answers.
-9. **Specialization.** Copy a loop for each known value its callers pass,
-   where that decides a match, then simplify again.
-10. **Joining rounds.** Inline again where specializing left two
+10. **Specialization.** Copy a loop for each known value its callers pass,
+    where that decides a match, then simplify again.
+11. **Joining rounds.** Inline again where specializing left two
     definitions calling each other, so the loop calls itself.
 
 Tidy up:
 
-11. **Sweep.** Drop definitions the entry doesn't reach.
-12. **Cleanup.** Drop unused pure work, move work into the one arm that
+12. **Sweep.** Drop definitions the entry doesn't reach.
+13. **Cleanup.** Drop unused pure work, move work into the one arm that
     reads it, and compact the term arena.
 
 Pure work can be dropped or moved freely. Calls reaching a declaration are

@@ -29,6 +29,13 @@ cell with no fields, a constructor such as `Continue` of a sum whose other
 constructors have them: every one is the same, so each constructor's is
 one static cell, and making one allocates nothing.
 
+A constant worked out as the program runs, such as a table too large to
+fold, is not static: the entry builds it and hands it down as a parameter
+([computation](../computation.md#a-constant-is-worked-out-once)), so it is
+counted like any value, borrowed by each definition passing it on, copied
+before a write while shared, and freed once nothing still running can read
+it.
+
 ## Where counts are placed
 
 Lowering places every retain and release, after the program's
