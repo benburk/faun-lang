@@ -290,8 +290,8 @@ fixed_literals = code_of(fixed_literal_lengths)
 fixed_distances : Code
 fixed_distances = code_of(List.repeat(5, 30))
 
-bases : List(U32) -> List(Nat)
-bases(entries) -> entries.map(|entry| entry.shift_right(4).to_nat())
+bases : List((Nat, Nat)) -> List(Nat)
+bases(entries) -> entries.map(|(base, _)| base)
 
 # The symbol whose base is the last at or below `value`.
 symbol_at : (List(Nat), Nat) -> U8
@@ -367,8 +367,8 @@ used(lengths, least) -> (lengths.len() - lengths.reverse().take_while(|length| l
 cost : (List(Nat), List(Nat)) -> Nat
 cost(counts, lengths) -> counts.zip(lengths).fold(0, |total, (count, length)| total + count * length)
 
-extra_bits : (List(U32), List(Nat)) -> Nat
-extra_bits(entries, counts) -> entries.zip(counts).fold(0, |total, (entry, count)| total + count * (entry & 15).to_nat())
+extra_bits : (List((Nat, Nat)), List(Nat)) -> Nat
+extra_bits(entries, counts) -> entries.zip(counts).fold(0, |total, ((_, extra), count)| total + count * extra)
 
 count_of : (List((Nat, Nat)), Nat) -> Nat
 count_of(runs, symbol) -> runs.count(|(s, _)| s == symbol)
@@ -382,18 +382,16 @@ symbols_put(written, symbols, literals, distances) -> (
       length = symbol.shift_right(16).to_nat()
       distance = (symbol & 0xffff).to_nat()
       (l, d) = symbols_of(length, distance)
-      w2 = put_with_extra(put_symbol(w, literals, 257 + l), length_table.get(l).ok_or(0), length)
-      put_with_extra(put_symbol(w2, distances, d), distance_table.get(d).ok_or(0), distance)
+      w2 = put_with_extra(put_symbol(w, literals, 257 + l), length_table.get(l).ok_or((0, 0)), length)
+      put_with_extra(put_symbol(w2, distances, d), distance_table.get(d).ok_or((0, 0)), distance)
     ))
   put_symbol(body, literals, 256)
 )
 
 # What `value` is past its symbol's base, in the symbol's extra bits.
-put_with_extra : (Writer, U32, Nat) -> Writer
-put_with_extra(written, entry, value) -> (
-  count = (entry & 15).to_nat()
-  if count == 0 then written else put(written, U64.of_nat(value - entry.shift_right(4).to_nat()), count)
-)
+put_with_extra : (Writer, (Nat, Nat), Nat) -> Writer
+put_with_extra(written, (base, count), value) ->
+  if count == 0 then written else put(written, U64.of_nat(value - base), count)
 
 # The input from `start` below `end` as stored blocks of at most 65535
 # bytes, the last final where `last` says.
