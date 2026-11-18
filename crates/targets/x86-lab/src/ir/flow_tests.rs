@@ -398,5 +398,5 @@ fn immediate_operands_leave_nested_regions_and_exits_to_the_caller() {
     ownership::deep_uses(&p, loop_, &mut uses);
     assert_eq!(uses, [zero, one, zero, one, zero]);
     let live = ownership::Liveness::of(&p, body);
-    assert!(!live.only_last(one, 3), "the loop reads one twice");
+    assert!(!live.last_times(one, 3, 1), "the loop reads one twice");
 }
