@@ -668,6 +668,23 @@ would carry that bound through a walk's tail calls, a position that only
 grows by bounded steps while it is below a length staying below it, and
 work the natural out as a word, `/ 8` a shift and `% 8` a mask.
 
+Partly fixed (2026-11-18). Range analysis now narrows a sum's operands by
+what a guard says of the sum, so `bit + 9 <= total` bounds `bit` itself;
+an arm answering one of a few tags says what it narrowed of each, so the
+`True` of `a < n & b < m` says `a < n` held; and a walk handing itself one
+of its parameters unchanged hands it nothing new, so a bound settles at
+what its callers hand it. A position stepped under a guard on a known
+bound is a word, `/ 8` and `% 8` a shift and a mask. The probe `match`
+went from 13.2 billion instructions to 3.22, against 3.12 for its
+workaround; the suite's inflate halved its instructions on x86-64 and
+wasm32. `position` and `writer` stay at 1.72 and 1.69 billion: `position`
+compares with `input.len() * 8`, and a length bounded by the memory a
+target addresses (2^47 bytes on x86-64, 2^32 on wasm32, 2^16 on the 6502)
+was rejected twice by the ratchet, checksum's loop running the same
+instructions 19% slower for where it fell in the image; `writer`'s bits
+are an accumulator no guard bounds, so they stay a tagged natural, a word
+with an overflow test.
+
 ### A list of tags is a cell a tag
 
 A block's symbols as tags, `[Literal(U8), Match(Nat, Nat)]`, and a code
