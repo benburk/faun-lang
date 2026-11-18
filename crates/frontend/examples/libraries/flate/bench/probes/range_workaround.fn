@@ -1,0 +1,24 @@
+# The same pixels through recursions counting rows and columns, as png.fn
+# had them.
+package {}
+
+import std.host {Host}
+
+rows : (Nat, Nat, Nat, List(U8)) -> List(U8)
+rows(width, height, y, out) -> (
+  if y >= height return out
+  rows(width, height, y + 1, columns(width, y, 0, out))
+)
+
+columns : (Nat, Nat, Nat, List(U8)) -> List(U8)
+columns(width, y, x, out) -> (
+  if x >= width return out
+  level = U8.of_nat(x + y)
+  columns(width, y, x + 1, out.append(level).append(level).append(level).append(255))
+)
+
+main! : Host -> []
+main!(host) -> (
+  printed = host.println!("${rows(1024, 1024, 0, []).len()}")
+  host.exit!(0)
+)

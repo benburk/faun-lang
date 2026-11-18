@@ -1,0 +1,16 @@
+# Whether each of 10 million samples is tRNS's key, `key == [sample]`, as
+# png.fn asks of a grey pixel: a one-element list built to be compared.
+package {}
+
+import std.host {Host}
+
+hidden : (List(Nat), Nat, Nat, Nat) -> Nat
+hidden(_, 0, _, count) -> count
+hidden(key, Succ(left), x, count) ->
+  hidden(key, left, (x * 5 + 1) % 256, if key == [x] then count + 1 else count)
+
+main! : Host -> []
+main!(host) -> (
+  printed = host.println!("${hidden([7], 10000000, 1, 0)}")
+  host.exit!(0)
+)

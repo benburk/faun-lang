@@ -1,0 +1,30 @@
+# The same sums eight bytes a step, unrolled by hand, as crc.fn had them.
+package {}
+
+import std.host {Host}
+
+adler_bytes : (U64, U64, U64, List(U8)) -> (U64, U64)
+adler_bytes(low, high, left, [a, b, c, d, e, f, g, h, *rest]) if left >= 8 -> (
+  s1 = low + U64.of_u8(a)
+  s2 = s1 + U64.of_u8(b)
+  s3 = s2 + U64.of_u8(c)
+  s4 = s3 + U64.of_u8(d)
+  s5 = s4 + U64.of_u8(e)
+  s6 = s5 + U64.of_u8(f)
+  s7 = s6 + U64.of_u8(g)
+  s8 = s7 + U64.of_u8(h)
+  adler_bytes(s8, high + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8, left - 8, rest)
+)
+adler_bytes(low, high, left, [byte, *rest]) if left > 0 -> (
+  sum = low + U64.of_u8(byte)
+  adler_bytes(sum, high + sum, left - 1, rest)
+)
+adler_bytes(low, high, _, []) -> (low % 65521, high % 65521)
+adler_bytes(low, high, _, bytes) -> adler_bytes(low % 65521, high % 65521, 4194304, bytes)
+
+main! : Host -> []
+main!(host) -> (
+  input = List.repeat(U8.of_nat(0xab), 16000000)
+  printed = host.println!("${adler_bytes(U64.of_nat(1), U64.of_nat(0), 4194304, input)}")
+  host.exit!(0)
+)

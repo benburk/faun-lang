@@ -1,0 +1,16 @@
+# The low `k` bits of a natural, `k` known only at run time, as inflate
+# reads a symbol's extra bits: `x % 2.pow(k)`, `k` the same every step.
+package {}
+
+import std.host {Host}
+
+walk : (Nat, Nat, Nat, Nat) -> Nat
+walk(0, _, _, sum) -> sum
+walk(Succ(left), x, k, sum) -> walk(left, (x * 5 + 1) % 16777216, k, sum + x % 2.pow(k))
+
+main! : Host -> []
+main!(host) -> (
+  k = host.args.len() + 9
+  printed = host.println!("${walk(10000000, 1, k, 0)}")
+  host.exit!(0)
+)

@@ -1,0 +1,17 @@
+# Four bytes a pixel for each of 1024 columns of 1024 rows, written through
+# `List.range(n).fold`, as png.fn reads a row's pixels.
+package {}
+
+import std.host {Host}
+
+pixels : (Nat, Nat) -> List(U8)
+pixels(width, height) -> List.range(height).fold([], |out, y| List.range(width).fold(out, |out, x| (
+  level = U8.of_nat(x + y)
+  out.append(level).append(level).append(level).append(255)
+)))
+
+main! : Host -> []
+main!(host) -> (
+  printed = host.println!("${pixels(1024, 1024).len()}")
+  host.exit!(0)
+)

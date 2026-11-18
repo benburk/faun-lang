@@ -1,0 +1,26 @@
+# The same search with its positions and counts `U64`, as deflate.fn had
+# them.
+package {}
+
+import std.host {Host}
+
+byte_at : (List(U8), U64) -> U8
+byte_at(input, at) -> input.get(at.to_nat()).ok_or(0)
+
+matching : (List(U8), U64, U64, U64, U64) -> U64
+matching(input, a, b, count, most) if count < most & byte_at(input, a + count) == byte_at(input, b + count) ->
+  matching(input, a, b, count + 1, most)
+matching(_, _, _, count, _) -> count
+
+walk : (List(U8), U64, U64) -> U64
+walk(input, at, total) -> (
+  if (at + 258).to_nat() >= input.len() return total
+  walk(input, at + 1, total + matching(input, at - 64, at, U64.of_nat(0), 258))
+)
+
+main! : Host -> []
+main!(host) -> (
+  input = List.range(200000).map(|i| U8.of_nat(i % 64 + i / 4096 % 2))
+  printed = host.println!("${walk(input, 64, U64.of_nat(0))}")
+  host.exit!(0)
+)
