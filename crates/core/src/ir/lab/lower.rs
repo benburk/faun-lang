@@ -109,9 +109,30 @@ fn lower_with(
     wanted: Arguments,
 ) -> Result<Program, String> {
     barb::validate(program)?;
-    let assumed = assumed(program, routines);
-    let facts = &program.assuming(&assumed);
+    // A counted walk handed numbers the target holds in half a word runs
+    // on a copy whose numbers analysis can then bound.
+    let split = counted_most(routines).and_then(|most| barb::counted(program, most));
+    let program = split.as_ref().unwrap_or(program);
+    let facts = &program.assuming(&assumed(program, routines));
     lowered(program, routines, facts, wanted)
+}
+
+/// The most a counted walk is handed for its copy to run with narrow
+/// numbers ([`barb::counted`]): a list's length, and no more than half a
+/// word holds, so that two numbers it counts up multiplied still fit a
+/// word. Where a target names no word, or its word is sixteen bits,
+/// nothing: a 16-bit target runs short of room before it runs short of
+/// time, and its narrow arithmetic is written out where a natural's is a
+/// call, so a copy of a walk costs it a tenth of a small program.
+fn counted_most(routines: &Routines) -> Option<u64> {
+    let word = routines.word().filter(|&word| word >= 32)?;
+    let half = (1u64 << (word / 2)) - 1;
+    Some(
+        routines
+            .length()
+            .high
+            .map_or(half, |length| length.min(half)),
+    )
 }
 
 /// [`lower_with`], given the program's facts.
