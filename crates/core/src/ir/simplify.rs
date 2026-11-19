@@ -177,6 +177,7 @@ impl rewrite::Pass for Simplify {
             Op::Convert { value } => {
                 let class = rebuild.source().class(results[0]);
                 self.converted(rebuild, b, class, value, results[0])
+                    || self.cleared(rebuild, class, value, results[0])
                     || self.wrapping(rebuild, b, class, value, results[0])
                     || self.widened(rebuild, b, class, value, results[0])
             }
@@ -184,7 +185,11 @@ impl rewrite::Pass for Simplify {
                 direction,
                 value,
                 by,
-            } => self.shifted(rebuild, b, direction, value, by, results[0]),
+            } => {
+                self.shifted(rebuild, b, direction, value, by, results[0])
+                    || (direction == Direction::Down
+                        && self.unshifted(rebuild, b, value, by, results[0]))
+            }
             Op::Binary {
                 op: Binary::Add,
                 left,
@@ -397,6 +402,87 @@ impl Simplify {
         }
         self.folded[result.index()] = Some(answer);
         rebuild.stands_for(result, b.constant(class, answer));
+        true
+    }
+
+    /// What `value` was moved up from, and by how many places, where it
+    /// was moved up at a word and read back, as a word or the address an
+    /// immediate natural is, with nothing else done to it.
+    fn moved_up(&self, source: &Program, mut value: ValueId) -> Option<(ValueId, u16)> {
+        let word = |class: Class| matches!(class, Class::Word | Class::Address);
+        loop {
+            match self.wrote.0[value.index()]? {
+                (Op::Convert { value: from }, class, _)
+                    if word(class) && word(source.class(from)) =>
+                {
+                    value = from;
+                }
+                (
+                    Op::Shift {
+                        direction: Direction::Up,
+                        value: from,
+                        by,
+                    },
+                    Class::Word,
+                    _,
+                ) => return Some((from, by)),
+                _ => return None,
+            }
+        }
+    }
+
+    /// The low bits of a value moved up some places are nought: kept to no
+    /// more bits than it was moved, it is nought, as an immediate natural's
+    /// tag is. Said of the conversion, which is left where it stands, so
+    /// that what asks of it is answered.
+    fn cleared(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        class: Class,
+        value: ValueId,
+        result: ValueId,
+    ) -> bool {
+        let Some(bits) = class.width() else {
+            return false;
+        };
+        if class.wraps() || class.facts().is_none_or(|facts| facts.low > 0) {
+            return false;
+        }
+        let Some((_, by)) = self.moved_up(rebuild.source(), value) else {
+            return false;
+        };
+        if bits <= by {
+            self.folded[result.index()] = Some(0);
+        }
+        false
+    }
+
+    /// A value moved up some places at a word and down as many is what it
+    /// was, where it had room at the top for them: an immediate natural's
+    /// number, made one and read back.
+    fn unshifted(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        value: ValueId,
+        by: u16,
+        result: ValueId,
+    ) -> bool {
+        let (Some(word_bits), class) = (self.word_bits, rebuild.source().class(result)) else {
+            return false;
+        };
+        let Some((from, moved)) = self.moved_up(rebuild.source(), value) else {
+            return false;
+        };
+        let held = rebuild.value(from);
+        let room = b
+            .class(held)
+            .width()
+            .is_some_and(|bits| bits + by <= word_bits);
+        if moved != by || !room || !b.class(held).fits(class) {
+            return false;
+        }
+        rebuild.stands_for(result, held);
         true
     }
 

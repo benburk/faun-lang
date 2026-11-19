@@ -1072,3 +1072,58 @@ fn a_branch_on_a_number_known_before_it_runs_is_the_arm_it_takes() {
     // Six is not below two, so the second arm answers.
     assert_eq!(returns(&held), BigUint::from(20u8));
 }
+
+/// A number worked out while the program runs, moved up one place at a
+/// word, as a small natural is held: its lowest bit is nought, so a test of
+/// it is decided, but not of the two lowest; and moved down again it is
+/// what it was where it had a place to spare at the top, but not a word,
+/// whose top bit the move up lost.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "three cases of one program, each checked for what it answers and what is left"
+)]
+fn a_number_moved_up_has_its_low_bits_clear_and_comes_back_down() {
+    for (class, bits) in [(Class::fixed(8), 1), (Class::fixed(8), 2), (Class::Word, 1)] {
+        let (mut p, main) = Program::new("main");
+        p.bind_layout(super::Layout { word_bits: 64 })
+            .expect("a layout the program allows");
+        p.define(main, |b, _| {
+            let word = opaque(b, 200);
+            let number = if class == Class::Word {
+                word
+            } else {
+                b.convert(class, word)
+            };
+            let doubled = b.shift(Class::Word, super::Direction::Up, number, 1);
+            let handle = b.convert(Class::Address, doubled);
+            let held = b.convert(Class::Word, handle);
+            let low = b.convert(Class::fixed(bits), held);
+            let back = b.shift(Class::Word, super::Direction::Down, held, 1);
+            let answer = b.if_(
+                low,
+                &[Class::Word],
+                |b| {
+                    let nought = b.constant(Class::Word, 0);
+                    b.yield_(&[nought]);
+                },
+                |b| b.yield_(&[back]),
+            )[0];
+            b.ret(&[answer]);
+        });
+        let held = settled(&p);
+        assert_eq!(returns(&held), BigUint::from(200u8));
+        let decided = bits == 1;
+        assert_eq!(count(&held, is_if) == 0, decided, "{class:?} {bits}");
+        let down = |op: &Op| {
+            matches!(
+                *op,
+                Op::Shift {
+                    direction: super::Direction::Down,
+                    ..
+                }
+            )
+        };
+        assert_eq!(count(&held, down), usize::from(class == Class::Word));
+    }
+}

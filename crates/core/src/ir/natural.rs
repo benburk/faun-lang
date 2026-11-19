@@ -433,6 +433,86 @@ impl Library {
         )[0]
     }
 
+    /// A natural's quotient or remainder by a word, as `helper` answers it,
+    /// with the case of an immediate dividend written here: the number it
+    /// holds divided as a word, whose quotient and remainder are never more
+    /// than it, and so immediates too. A word nought divides as the helper
+    /// divides, a quotient nought and a remainder the dividend.
+    ///
+    /// A remainder is below its divisor whatever it divides, so where
+    /// `remainder` names a class narrower than half a word that every
+    /// divisor fits, the helper's answer is unwrapped too and both ways
+    /// meet at that class, made an immediate after: what then asks whether
+    /// it is an object, to release it or to read its number, is answered
+    /// where it is asked.
+    pub(super) fn by_word(
+        &self,
+        b: &mut Builder<'_>,
+        (op, helper): (Binary, FunctionId),
+        (a, divisor): (ValueId, ValueId),
+        remainder: Option<Class>,
+    ) -> ValueId {
+        if !self.inline_small {
+            return b.call_one(helper, &[a, divisor]);
+        }
+        let small_a = is_small(b, a);
+        if let Some(class) = remainder {
+            let remainder = b.if_(
+                small_a,
+                &[class],
+                |b| {
+                    let n = unwrapped(b, a);
+                    let out = b.binary(op, n, divisor);
+                    let kept = b.convert(class, out);
+                    b.yield_(&[kept]);
+                },
+                |b| {
+                    let out = b.call_one(helper, &[a, divisor]);
+                    let n = unwrapped(b, out);
+                    let kept = b.convert(class, n);
+                    b.yield_(&[kept]);
+                },
+            )[0];
+            let number = b.convert(W, remainder);
+            return small_word(b, number);
+        }
+        b.if_(
+            small_a,
+            &[A],
+            |b| {
+                let n = unwrapped(b, a);
+                let out = b.binary(op, n, divisor);
+                let held = small_word(b, out);
+                b.yield_(&[held]);
+            },
+            |b| {
+                let out = b.call_one(helper, &[a, divisor]);
+                b.yield_(&[out]);
+            },
+        )[0]
+    }
+
+    /// The word a natural is, modulo the word's size, as `helper` answers
+    /// it, with an immediate's number unwrapped here.
+    pub(super) fn narrowed(&self, b: &mut Builder<'_>, helper: FunctionId, a: ValueId) -> ValueId {
+        if !self.inline_small {
+            return b.call_one(helper, &[a]);
+        }
+        let small_a = is_small(b, a);
+        b.if_(
+            small_a,
+            &[W],
+            |b| {
+                let n = unwrapped(b, a);
+                b.yield_(&[n]);
+            },
+            |b| {
+                let out = b.call_one(helper, &[a]);
+                b.yield_(&[out]);
+            },
+        )[0]
+    }
+
     pub(super) const fn get(&self, helper: Helper) -> Option<FunctionId> {
         self.helpers[helper.index()]
     }

@@ -1383,7 +1383,34 @@ impl Pass<'_> {
                         }
                         _ => v(right),
                     };
-                    b.call_one(function, &[v(left), divisor])
+                    if matches!(op, Binary::Div | Binary::Mod) && self.divisors.contains_key(&right)
+                    {
+                        // A remainder is below a divisor that is not
+                        // nought: where every divisor is no more than half
+                        // a word, it is an immediate.
+                        let most = match self.divisors[&right] {
+                            Word::Constant(value) => value.checked_sub(1),
+                            Word::Scalar(value) => self
+                                .source
+                                .class(value)
+                                .facts()
+                                .filter(|facts| facts.low > 0)
+                                .and_then(|facts| facts.high)
+                                .map(|high| high - 1),
+                        };
+                        let small = most
+                            .filter(|&most| op == Binary::Mod && most < self.library.half)
+                            .map(|most| {
+                                Class::Held(crate::facts::Facts {
+                                    low: 0,
+                                    high: Some(most),
+                                })
+                            });
+                        self.library
+                            .by_word(b, (op, function), (v(left), divisor), small)
+                    } else {
+                        b.call_one(function, &[v(left), divisor])
+                    }
                 }
             },
             Op::Binary { op, left, right } => {
@@ -1440,7 +1467,8 @@ impl Pass<'_> {
                         b.convert(class, number)
                     }
                     (Class::Natural, _) => {
-                        let word = b.call_one(self.library.require(Helper::ToWord), &[v(value)]);
+                        let helper = self.library.require(Helper::ToWord);
+                        let word = self.library.narrowed(b, helper, v(value));
                         if class == Class::Word {
                             word
                         } else {
