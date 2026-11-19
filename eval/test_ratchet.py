@@ -395,6 +395,8 @@ class Ratchet(unittest.TestCase):
             mock.patch.object(sys, "argv", argv),
             mock.patch.dict(os.environ, clear=False) as env,
             mock.patch.object(ratchet, "CACHE", Path(cache)),
+            # CI's checkout has no origin/main; HEAD holds an evaluator too.
+            mock.patch.object(ratchet, "TRUNK", "HEAD"),
             mock.patch.object(ratchet, "export"),
             mock.patch.object(os, "execve") as execve,
         ):
