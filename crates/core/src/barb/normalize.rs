@@ -138,6 +138,27 @@ pub(super) fn inline_with_identities(program: &mut Program, limits: InlineLimits
     rewrite(program, inlining, rules, FoldLimits::default(), None);
 }
 
+/// [`inline_with_identities`] for only `changed`: what a later stage wrote
+/// calling small definitions it made for it.
+pub(super) fn reinline(program: &mut Program, changed: &[FnId]) {
+    if changed.is_empty() {
+        return;
+    }
+    let inlining = Inlining::new(program, InlineLimits::default());
+    let rules = Rules {
+        identities: true,
+        share: true,
+        ..Rules::default()
+    };
+    rewrite(
+        program,
+        inlining,
+        rules,
+        FoldLimits::default(),
+        Some(changed),
+    );
+}
+
 /// Inline the definitions that keep a round of calls apart, and nothing
 /// else: no identity, no folding. The stages after inlining change what
 /// calls what -- simplifying a walk over a list it knows has one element

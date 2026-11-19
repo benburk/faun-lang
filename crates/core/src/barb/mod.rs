@@ -118,6 +118,7 @@ mod floats;
 mod forward;
 mod fuse;
 mod head;
+mod indexed;
 mod inline;
 mod inplace;
 mod model;
