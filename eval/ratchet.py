@@ -7,7 +7,9 @@ favouring size. A program must print what its C twin prints, and is then
 measured beside it: the instructions, fuel or cycles it ran, the memory it
 used, and the bytes of its image. Beside the suite are the probes: each a
 natural Faun program and its hand-written workaround, its twin, which must
-print the same. See RATCHET.md for the rules.
+print the same. Probes named `family-spelling` are one computation spelled
+several ways, a family, whose spread, its worst spelling over its best, is
+scored beside them. See RATCHET.md for the rules.
 """
 
 import argparse
@@ -47,7 +49,7 @@ APPROVED = "origin/main"
 TRUNK = os.environ.get("RATCHET_TRUNK", APPROVED)
 # The log's series: a protected change, once merged, starts the next one, and
 # bumps this with it.
-SERIES = 6
+SERIES = 7
 
 X86, WASM, MOS = "x86_64-linux", "wasm32-wasi", "mos6502-sim65"
 TARGETS = (X86, WASM, MOS)
@@ -73,6 +75,11 @@ MINIMUM = 0.001  # a gain below a tenth of a percent overall is neutral
 SLACK = {(X86, "memory"): 16, (WASM, "memory"): 16 << 10, (MOS, "memory"): 128}
 MARGIN = 2.0  # gains must outweigh losses this many times over
 REPAIRED = 0.5  # a cell that starts working counts as a halving
+# A family's spread on a target, backend and metric, its worst spelling over
+# its best, counts in the probes' group as half one spelling's cell: closing
+# a gap earns half again what the faster spelling earns, opening one costs
+# half what it earns, and slowing the best spelling to close one never pays.
+FAMILY = 0.5
 # The counts that are not exact. A program's x86 instructions vary in their
 # last digits, by a part in ten million where measured, so one in a hundred
 # thousand is the same. The compiler's vary by about a part in a hundred, from
@@ -106,6 +113,10 @@ KERNELS = ROOT / "eval/workloads"
 # export, the trunk's, so a branch cannot add one and score itself by it.
 PROBES = ROOT / "probes"
 PROBE = "probe-"  # what a probe's workload name starts with
+# What a spelling's measure is held against in its family: the four each
+# target measures. Compiling is one group across targets, and its counts
+# vary by a percent, so a spread of them says nothing of a spelling.
+SPREAD = ("speed", "memory", "size", "small")
 
 
 class Workload(NamedTuple):
@@ -179,7 +190,36 @@ def probes(folder=PROBES):
                     sys.exit(f"{listed}: no target {target}")
                 held[target] = int(size)
         found.append(Workload(PROBE + listed.parent.name, folder, "argument", held))
+    for family, members in families(w.name for w in found).items():
+        named = {w.name: w for w in found if w.name in members}
+        first, *rest = members
+        for other in rest:
+            if named[other].sizes != named[first].sizes:
+                sys.exit(f"family {family}: {other} and {first} differ in sizes")
+            twins = (named[name].home / "twin.fn" for name in (other, first))
+            if len({path.read_bytes() for path in twins}) > 1:
+                sys.exit(f"family {family}: {other} and {first} differ in twins")
     return found
+
+
+def family(name):
+    """The family a probe named `family-spelling` is a spelling of, or `None`
+    for a workload of the suite or a probe whose name has no hyphen."""
+    if not name.startswith(PROBE):
+        return None
+    head, hyphen, _ = name.removeprefix(PROBE).partition("-")
+    return head if hyphen else None
+
+
+def families(names):
+    """The families among these workloads' names, each the names of its
+    spellings, sorted: a family is at least two probes sharing what comes
+    before a hyphen. A probe alone with its prefix is a probe like another."""
+    found = {}
+    for name in sorted(set(names)):
+        if family(name):
+            found.setdefault(family(name), []).append(name)
+    return {k: v for k, v in found.items() if len(v) > 1}
 
 
 def git(*args, cwd=None):
@@ -733,7 +773,9 @@ def ratio(target, metric, incumbent, candidate):
 def score(cells):
     """Weigh every cell's ratio into one score, the geometric mean of the
     candidate over the incumbent with each target's metric counting the same,
-    and split it into the gain of the better cells and the loss of the worse."""
+    and split it into the gain of the better cells and the loss of the worse.
+    Each family's spreads count in the probes' groups beside its spellings,
+    each weighing FAMILY of one of their cells."""
     changes, broken = [], []
     for (target, backend, name), sides in sorted(cells.items()):
         for metric in METRICS:
@@ -752,23 +794,30 @@ def score(cells):
                 if metric == "memory" and "again" in sides:
                     where["again"] = sides["again"]
                 changes.append(where)
+    widths = spreads(cells)
     groups = {}
     for change in changes:
-        groups.setdefault(group(change), []).append(change)
+        groups.setdefault(group(change), []).append((change, 1.0))
+    for change in widths:
+        groups.setdefault(("probes", change["metric"]), []).append((change, FAMILY))
     total = sum(WEIGHTS[metric] for _, metric in groups) or 1
     gain = loss = 0.0
     for (_, metric), members in groups.items():
-        for change in members:
-            share = WEIGHTS[metric] / total / len(members) * math.log(change["ratio"])
+        held = sum(weight for _, weight in members)
+        for change, weight in members:
+            share = WEIGHTS[metric] / total * weight / held * math.log(change["ratio"])
             gain -= min(share, 0.0)
             loss += max(share, 0.0)
+    cell_groups = {}
+    for change in changes:
+        cell_groups.setdefault(group(change), []).append(change)
     return {
         "score": math.exp(loss - gain),
         "gain": gain,
         "loss": loss,
         "groups": {
             f"{target} {metric}": geomean(c["ratio"] for c in members)
-            for (target, metric), members in sorted(groups.items())
+            for (target, metric), members in sorted(cell_groups.items())
         },
         "better": sum(c["ratio"] < 1 for c in changes),
         "worse": sum(c["ratio"] > 1 for c in changes),
@@ -776,7 +825,71 @@ def score(cells):
             (c for c in changes if c["ratio"] != 1), key=lambda c: c["ratio"]
         ),
         "broken": broken,
+        "spreads": widths,
+        "spread": {
+            metric: geomean(c["ratio"] for c in widths if c["metric"] == metric)
+            for metric in SPREAD
+            if any(c["metric"] == metric for c in widths)
+        },
     }
+
+
+def spread(target, metric, members, label, steady=False):
+    """A family's spread on one side: its worst spelling's measure over its
+    best's, with the two spellings' names; `None` where a spelling has no
+    measure there. Held `steady`, a measure the same as the incumbent's, by
+    the rules a cell's ratio follows, is the incumbent's, so a spread
+    changes only where a spelling's measure does."""
+    held = {}
+    for name, sides in members.items():
+        side = sides[label]
+        if side.get("status") != "ok" or not side.get(metric):
+            return None
+        held[name] = side[metric]
+        if steady:
+            old = sides["incumbent"]
+            if old.get("status") != "ok" or not old.get(metric):
+                return None
+            if ratio(target, metric, old, side) == 1.0:
+                held[name] = old[metric]
+    best, worst = min(held, key=held.get), max(held, key=held.get)
+    return held[worst] / held[best], best, worst
+
+
+def spreads(cells):
+    """Each family's spread on each target, backend and metric both its
+    spellings run, the candidate's over the incumbent's: below one, the
+    family's spellings are nearer each other."""
+    found = []
+    named = families(name for _, _, name in cells)
+    for target, backend in sorted({(t, b) for t, b, _ in cells}):
+        for name, spellings in named.items():
+            members = {
+                spelling: cells[target, backend, spelling]
+                for spelling in spellings
+                if (target, backend, spelling) in cells
+            }
+            if len(members) < 2:
+                continue
+            for metric in SPREAD:
+                old = spread(target, metric, members, "incumbent")
+                new = spread(target, metric, members, "candidate", steady=True)
+                if old is None or new is None:
+                    continue
+                found.append(
+                    {
+                        "target": target,
+                        "backend": backend,
+                        "family": name,
+                        "metric": metric,
+                        "ratio": 1.0 if new[0] == old[0] else new[0] / old[0],
+                        "old": old[0],
+                        "new": new[0],
+                        "best": new[1].removeprefix(f"{PROBE}{name}-"),
+                        "worst": new[2].removeprefix(f"{PROBE}{name}-"),
+                    }
+                )
+    return found
 
 
 def group(cell):
@@ -960,15 +1073,26 @@ def measure(sides, seed, jobs, only, work):
 def table(cells, scored):
     """The summary printed after a run: each target and backend's geometric
     mean change, and how the candidate stands against C; then the same of
-    the probes, against their twins."""
+    the probes, against their twins; then each family's spread on each
+    target, its worst spelling over its best, and how much it changed."""
     lines = []
     for probing, twin in ((False, "x C"), (True, "x twin")):
         heading = "probes" if probing else ""
         lines.append(f"{heading:22}" + "".join(f"{m:>18}" for m in METRICS))
         lines.append(f"{'':22}" + f"{'change':>10}{twin:>8}" * len(METRICS))
         lines += table_rows(cells, probing)
+    lines += family_rows(scored["spreads"])
     for cell in scored["changed"][:12] + scored["changed"][12:][-12:]:
         lines.append(f"  {cell['ratio'] - 1:+8.2%}  {place(cell)}")
+    moved = sorted(
+        (c for c in scored["spreads"] if c["ratio"] != 1), key=lambda c: c["ratio"]
+    )
+    for change in moved[:6] + moved[6:][-6:]:
+        where = f"{change['target']} {change['backend']} {change['family']}"
+        lines.append(
+            f"  {change['ratio'] - 1:+8.2%}  {where} {change['metric']} spread,"
+            f" {change['old']:.3g} to {change['new']:.3g}"
+        )
     failing = sorted(
         (key, sides["candidate"]["status"])
         for key, sides in cells.items()
@@ -977,6 +1101,33 @@ def table(cells, scored):
     for (target, backend, name), status in failing:
         lines.append(f"  not running: {target} {backend} {name}: {status}")
     return "\n".join(lines)
+
+
+def family_rows(widths):
+    """A row for each family and target: each metric's spread, the
+    candidate's worst spelling over its best, and its change, each the
+    geometric mean of the two backends'."""
+    if not widths:
+        return []
+    lines = [f"{'families':22}" + "".join(f"{m:>18}" for m in SPREAD)]
+    lines.append(f"{'':22}" + f"{'change':>10}{'spread':>8}" * len(SPREAD))
+    for name in sorted({c["family"] for c in widths}):
+        for target in TARGETS:
+            row, seen = f"{name + ' ' + target:22}", False
+            for metric in SPREAD:
+                held = [
+                    c
+                    for c in widths
+                    if (c["family"], c["target"], c["metric"]) == (name, target, metric)
+                ]
+                change = geomean(c["ratio"] for c in held)
+                width = geomean(c["new"] for c in held)
+                row += f"{change - 1:>+10.2%}" if change else f"{'-':>10}"
+                row += f"{width:>8.2f}" if width else f"{'-':>8}"
+                seen = seen or bool(held)
+            if seen:
+                lines.append(row)
+    return lines
 
 
 def table_rows(cells, probing):
@@ -1040,12 +1191,49 @@ def standings(report):
         "`vs C` is Faun's measure over the C twin's: below one, Faun is ahead.",
         "Under the suite are the probes, each program's natural spelling beside",
         "its workaround in Faun: `vs twin` above one is the compiler's to close.",
+        "Last are the families, one computation spelled several natural ways,",
+        "each a probe: a spread is the worst spelling's measure over the best's,",
+        "and above one is a cliff, the slowest and the largest spelling named.",
     ]
     for probing, twin in ((False, "vs C"), (True, "vs twin")):
         for target in TARGETS:
             for backend in BACKENDS:
                 lines += standing(report, target, backend, probing, twin)
+    for target in TARGETS:
+        for backend in BACKENDS:
+            lines += family_standing(report, target, backend)
     return "\n".join(lines) + "\n"
+
+
+def family_standing(report, target, backend):
+    """One target and backend's table of the families: each metric's spread,
+    the worst spelling's measure over the best's, and for speed and memory
+    the worst spelling, a cliff to close."""
+    cells = {
+        c["workload"]: c
+        for c in report["cells"]
+        if (c["target"], c["backend"]) == (target, backend)
+    }
+    rows = [["Family", "Speed", "Slowest", "Memory", "Most", "Size", "Small"]]
+    for name, spellings in families(cells).items():
+        members = {s: cells[s] for s in spellings}
+        row = [name]
+        for metric in SPREAD:
+            found = spread(target, metric, members, "candidate")
+            row.append(f"{found[0]:.2f}" if found else "-")
+            if metric in ("speed", "memory"):
+                worst = found[2].removeprefix(f"{PROBE}{name}-") if found else "-"
+                row.append(worst)
+        rows.append(row)
+    if len(rows) == 1:
+        return []
+    widths = [max(len(row[at]) for row in rows) for at in range(len(rows[0]))]
+    rows.insert(1, ["-" * width for width in widths])
+    lines = ["", f"## Families, {target}, {backend}", ""]
+    for row in rows:
+        padded = (cell.ljust(width) for cell, width in zip(row, widths))
+        lines.append("| " + " | ".join(padded) + " |")
+    return lines
 
 
 def standing(report, target, backend, probing, twin):
@@ -1147,6 +1335,7 @@ def evaluate(args):
                 "compile_worst": COMPILE_WORST,
                 "minimum": MINIMUM,
                 "repaired": REPAIRED,
+                "family": FAMILY,
                 "slower": SLOWER,
                 "again": AGAIN,
                 "steady": STEADY,
@@ -1236,6 +1425,8 @@ def evaluate(args):
         )
         for metric in METRICS
     }
+    # How far the families' spreads moved, each metric's geometric mean.
+    summary["spread"] = {k: round(v, 5) for k, v in scored["spread"].items()}
     print(json.dumps(summary, indent=1))
     row = log_row(summary, idea_of(candidate, args.idea))
     if args.log:

@@ -1,5 +1,6 @@
 """Decision boundaries of the ratchet. Run with python3 -B test_ratchet.py."""
 
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +20,8 @@ from ratchet import (
     X86,
     again_size,
     decide,
+    families,
+    family_rows,
     idea_of,
     log_row,
     noted,
@@ -30,6 +33,7 @@ from ratchet import (
     same_compiler,
     same_work,
     slower,
+    standings,
 )
 
 
@@ -523,6 +527,128 @@ class Probes(unittest.TestCase):
                     probe_changes(side(same, dirty=True), trunk),
                     ["probes/key/main.fn"],
                 )
+
+
+def family(spellings, name="count", target=X86, backend="stock"):
+    """Cells of one family's spellings on one target and backend, each
+    spelling's name to its incumbent and candidate."""
+    return {
+        (target, backend, f"{PROBE}{name}-{spelling}"): {
+            "incumbent": old,
+            "candidate": new,
+        }
+        for spelling, (old, new) in spellings.items()
+    }
+
+
+def spelled(speeds, olds=(1000, 2000)):
+    """A family of two spellings, `fast` and `slow`, at these speeds."""
+    cells = {}
+    for name, old, new in zip(("fast", "slow"), olds, speeds, strict=True):
+        image = "same" if old == new else "new"
+        cells[name] = (cell(speed=old, image="same"), cell(speed=new, image=image))
+    return family(cells)
+
+
+class Families(unittest.TestCase):
+    """One computation spelled several ways, scored by its spread."""
+
+    def test_a_family_is_probes_sharing_what_comes_before_a_hyphen(self):
+        names = [
+            "fasta",
+            f"{PROBE}adler",
+            f"{PROBE}count-u64",
+            f"{PROBE}count-fold",
+            # Alone with its prefix, a probe is a probe like another.
+            f"{PROBE}bit-writer",
+        ]
+        self.assertEqual(
+            families(names), {"count": [f"{PROBE}count-fold", f"{PROBE}count-u64"]}
+        )
+
+    def test_a_familys_spellings_share_their_sizes_and_twin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            for name in ("count-fold", "count-u64"):
+                (folder / name).mkdir()
+                (folder / name / "main.fn").write_text(name)
+                (folder / name / "twin.fn").write_text("twin")
+                (folder / name / "sizes").write_text("x86_64-linux 1000\n")
+            self.assertEqual(len(probes(folder)), 2)
+            (folder / "count-u64/sizes").write_text("x86_64-linux 999\n")
+            with self.assertRaises(SystemExit):
+                probes(folder)
+            (folder / "count-u64/sizes").write_text("x86_64-linux 1000\n")
+            (folder / "count-u64/twin.fn").write_text("another")
+            with self.assertRaises(SystemExit):
+                probes(folder)
+
+    def test_closing_a_spread_earns_half_again_what_its_spelling_does(self):
+        cells = suite([cell()]) | spelled((1000, 1000))
+        scored = score(cells)
+        [speed] = [c for c in scored["spreads"] if c["metric"] == "speed"]
+        self.assertEqual((speed["old"], speed["new"], speed["ratio"]), (2, 1, 0.5))
+        self.assertAlmostEqual(scored["spread"]["speed"], 0.5)
+        # Two spellings and a spread at half a spelling: the group is 2.5.
+        self.assertAlmostEqual(scored["gain"], 1.5 / 2.5 * math.log(2) / 8)
+        self.assertEqual(verdict(cells), "accept")
+        # The same cell outside a family earns its own part alone.
+        quicker = cell(speed=1000, image="quick")
+        alone = probing([cell(), quicker], [cell(), cell(speed=2000)])
+        alone |= suite([cell()])
+        self.assertAlmostEqual(score(alone)["gain"], 1 / 2 * math.log(2) / 8)
+
+    def test_opening_a_spread_costs_half_what_its_spelling_earns(self):
+        scored = score(suite([cell()]) | spelled((500, 2000)))
+        [speed] = [c for c in scored["spreads"] if c["metric"] == "speed"]
+        self.assertEqual((speed["old"], speed["new"]), (2, 4))
+        self.assertAlmostEqual(scored["loss"], scored["gain"] / 2)
+
+    def test_slowing_the_best_spelling_to_close_a_spread_never_pays(self):
+        cells = suite([cell()]) | spelled((1090, 2000))
+        scored = score(cells)
+        self.assertLess(scored["gain"], scored["loss"])
+        self.assertEqual(verdict(cells), "reject")
+
+    def test_a_spread_moved_within_a_counts_jitter_is_no_change(self):
+        cells = suite([cell()]) | spelled((1000.001, 2000), (1000, 2000))
+        scored = score(cells)
+        self.assertTrue(all(c["ratio"] == 1.0 for c in scored["spreads"]))
+        self.assertEqual(decide(scored)[0], "no change")
+
+    def test_many_families_weigh_no_more_than_one(self):
+        one = score(suite([cell()]) | spelled((1000, 1000)))
+        many = suite([cell()])
+        for at in range(10):
+            many |= {
+                (t, b, name.replace("count", f"count{at}")): sides
+                for (t, b, name), sides in spelled((1000, 1000)).items()
+            }
+        self.assertEqual(len(score(many)["spreads"]), 40)
+        self.assertAlmostEqual(one["score"], score(many)["score"])
+
+    def test_a_family_with_a_spelling_not_running_has_no_spread(self):
+        broken = cell(speed=None, memory=None, status="wrong output")
+        cells = family({"fast": (cell(), cell()), "slow": (cell(), broken)})
+        self.assertEqual(score(cells)["spreads"], [])
+        self.assertEqual(verdict(suite([cell()]) | cells), "reject")
+
+    def test_the_summary_and_the_standings_give_each_familys_spread(self):
+        cells = spelled((1000, 1000))
+        rows = "\n".join(family_rows(score(cells)["spreads"]))
+        self.assertIn("count x86_64-linux", rows)
+        self.assertIn("-50.00%    1.00", rows)
+        report = {
+            "candidate": {"commit": "abcdef0"},
+            "started": "2026-11-19T00:00:00",
+            "cells": [
+                {"target": t, "backend": b, "workload": w, "c": {}} | sides
+                for (t, b, w), sides in spelled((1000, 3000), (1000, 3000)).items()
+            ],
+        }
+        written = standings(report)
+        self.assertIn("## Families, x86_64-linux, stock", written)
+        self.assertIn("| count  | 3.00  | slow    | 1.00   | fast", written)
 
 
 class Series(unittest.TestCase):
