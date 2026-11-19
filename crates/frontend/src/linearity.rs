@@ -521,7 +521,7 @@ impl<'a> Facts<'a> {
                     .collect();
                 fields
                     .iter()
-                    .map(|field| surface_type(field, &variables).ok())
+                    .map(|field| surface_type(field, &variables, &self.cx.symbols).ok())
                     .collect()
             }
             _ => None,

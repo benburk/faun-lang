@@ -1,0 +1,5 @@
+error: `{aardvark: Nat, zebra: Nat}` has no field or method `cmp`
+ --> a_record_shows_its_fields_in_the_order_of_their_names_not_the_order_first_met.fn:2:3
+  |
+2 |   cmp : (Pair, Pair) -> Order
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^

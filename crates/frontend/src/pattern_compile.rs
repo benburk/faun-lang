@@ -351,10 +351,10 @@ impl Compiler<'_> {
                 .into_iter()
                 .map(|binding| d::Binding {
                     pattern: binding.pattern,
-                    value: tested(binding.value, self.prelude),
+                    value: tested(binding.value, self.prelude, self.symbols),
                 })
                 .collect(),
-            result: tested(body.result, self.prelude),
+            result: tested(body.result, self.prelude, self.symbols),
         };
         let body = exported(self.hoisted(body));
         let body = self.joined(body, key)?;
@@ -540,10 +540,10 @@ impl Compiler<'_> {
                 .into_iter()
                 .map(|binding| d::Binding {
                     pattern: binding.pattern,
-                    value: tested(binding.value, self.prelude),
+                    value: tested(binding.value, self.prelude, self.symbols),
                 })
                 .collect(),
-            result: tested(body.result, self.prelude),
+            result: tested(body.result, self.prelude, self.symbols),
         };
         self.compiled(hoisted(body, &mut 0))
     }
@@ -678,7 +678,7 @@ impl Compiler<'_> {
                 .map(|(pattern, ty)| self.unpack(pattern, ty))
                 .collect::<Result<_, _>>()?,
             (Pattern::Constructor(constructor, patterns), Type::Named(..)) => {
-                let constructors = ty.constructors(self.data)?;
+                let constructors = ty.constructors(self.data, self.symbols)?;
                 let [(only, fields)] = constructors.as_slice() else {
                     return Err(error(format!(
                         "a binding takes apart only what always matches, and `{}` is one of several constructors",
@@ -778,7 +778,8 @@ impl Compiler<'_> {
             let mut going_on = vec![first];
             going_on.extend(rest);
             let answer = self.plan(&going_on, subjects, next)?;
-            let booleans = Type::Named(self.prelude.bool_, Vec::new()).constructors(self.data)?;
+            let booleans = Type::Named(self.prelude.bool_, Vec::new())
+                .constructors(self.data, self.symbols)?;
             if booleans.len() != 2
                 || booleans.iter().any(|(_, fields)| !fields.is_empty())
                 || !booleans
@@ -898,7 +899,7 @@ impl Compiler<'_> {
                 otherwise: Box::new(below.plan(&otherwise, subjects, next)?),
             });
         }
-        let constructors = subject.ty.constructors(self.data)?;
+        let constructors = subject.ty.constructors(self.data, self.symbols)?;
         let mut arms = Vec::with_capacity(constructors.len());
         for (constructor, field_types) in constructors {
             let fields: Vec<_> = field_types
@@ -1584,20 +1585,24 @@ fn free_in(body: &d::Body, own: &HashSet<LocalId>) -> Vec<(LocalId, Type)> {
 /// turn, as [`branched`] does, so what a test binds is in scope for the
 /// rest of the chain and `then`; a test or such a chain standing as a
 /// value is an `if` answering `True` or `False`.
-fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
+fn tested(expression: Expr, prelude: &PreludeIds, symbols: &Symbols) -> Expr {
     let Expr {
         module,
         span,
         ty,
         kind,
     } = expression;
-    let each = |list: Vec<Expr>| list.into_iter().map(|e| tested(e, prelude)).collect();
-    let one = |e: Box<Expr>| Box::new(tested(*e, prelude));
+    let each = |list: Vec<Expr>| {
+        list.into_iter()
+            .map(|e| tested(e, prelude, symbols))
+            .collect()
+    };
+    let one = |e: Box<Expr>| Box::new(tested(*e, prelude, symbols));
     let kind = match kind {
         ExprKind::If(condition, yes, no) => {
-            let yes = tested(*yes, prelude);
-            let no = tested(*no, prelude);
-            return branched(*condition, yes, no, prelude);
+            let yes = tested(*yes, prelude, symbols);
+            let no = tested(*no, prelude, symbols);
+            return branched(*condition, yes, no, prelude, symbols);
         }
         kind @ ExprKind::Is(..) => {
             let condition = Expr {
@@ -1610,7 +1615,7 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
                 boolean(&condition, true, prelude),
                 boolean(&condition, false, prelude),
             );
-            return branched(condition, yes, no, prelude);
+            return branched(condition, yes, no, prelude, symbols);
         }
         kind @ ExprKind::Connective(..) if binds_within(&kind) => {
             let condition = Expr {
@@ -1623,21 +1628,21 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
                 boolean(&condition, true, prelude),
                 boolean(&condition, false, prelude),
             );
-            return branched(condition, yes, no, prelude);
+            return branched(condition, yes, no, prelude, symbols);
         }
         kind @ (ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_)) => kind,
         ExprKind::Construct(constructor, fields) => ExprKind::Construct(constructor, each(fields)),
         ExprKind::Record(fields) => ExprKind::Record(
             fields
                 .into_iter()
-                .map(|(name, field)| (name, tested(field, prelude)))
+                .map(|(name, field)| (name, tested(field, prelude, symbols)))
                 .collect(),
         ),
         ExprKind::Update(base, fields) => ExprKind::Update(
             one(base),
             fields
                 .into_iter()
-                .map(|(name, field)| (name, tested(field, prelude)))
+                .map(|(name, field)| (name, tested(field, prelude, symbols)))
                 .collect(),
         ),
         ExprKind::Tuple(members) => ExprKind::Tuple(each(members)),
@@ -1655,7 +1660,7 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
             arms.into_iter()
                 .map(|arm| d::Arm {
                     rows: arm.rows,
-                    body: tested(arm.body, prelude),
+                    body: tested(arm.body, prelude, symbols),
                 })
                 .collect(),
         ),
@@ -1665,10 +1670,10 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
                 .into_iter()
                 .map(|binding| d::Binding {
                     pattern: binding.pattern,
-                    value: tested(binding.value, prelude),
+                    value: tested(binding.value, prelude, symbols),
                 })
                 .collect(),
-            result: tested(body.result, prelude),
+            result: tested(body.result, prelude, symbols),
         })),
     };
     Expr {
@@ -1688,7 +1693,7 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
 /// branches itself is written once, after the condition is worked out
 /// (see [`outcome`]), as copying it would copy what it holds as often as
 /// the chains before it have parts.
-fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
+fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds, symbols: &Symbols) -> Expr {
     let (module, span, ty) = (yes.module, condition.span, yes.ty.clone());
     let header = |kind| Expr {
         module,
@@ -1697,7 +1702,7 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
         kind,
     };
     if !binds(&condition) {
-        let condition = tested(condition, prelude);
+        let condition = tested(condition, prelude, symbols);
         return header(ExprKind::If(
             Box::new(condition),
             Box::new(yes),
@@ -1710,23 +1715,23 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
         _ => None,
     };
     if copied.is_some_and(branches) {
-        return outcome(condition, yes, no, prelude);
+        return outcome(condition, yes, no, prelude, symbols);
     }
     match condition.kind {
         ExprKind::Is(value, pattern) => {
             let part = Expr {
-                kind: ExprKind::Is(Box::new(tested(*value, prelude)), pattern),
+                kind: ExprKind::Is(Box::new(tested(*value, prelude, symbols)), pattern),
                 ..condition
             };
             header(ExprKind::If(Box::new(part), Box::new(yes), Box::new(no)))
         }
         ExprKind::Connective(Connective::And, left, right) => {
-            let answer = branched(*right, yes, no.clone(), prelude);
-            branched(*left, answer, no, prelude)
+            let answer = branched(*right, yes, no.clone(), prelude, symbols);
+            branched(*left, answer, no, prelude, symbols)
         }
         ExprKind::Connective(Connective::Or, left, right) => {
-            let otherwise = branched(*right, yes.clone(), no, prelude);
-            branched(*left, yes, otherwise, prelude)
+            let otherwise = branched(*right, yes.clone(), no, prelude, symbols);
+            branched(*left, yes, otherwise, prelude, symbols)
         }
         _ => unreachable!("only a test, `&` and `|` bind"),
     }
@@ -1737,7 +1742,7 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
 /// holding what its tests bound that `yes` reads, or another saying it
 /// failed, and that tag taken apart once, `yes` in one arm and `no` in the
 /// other. Only the tags are copied along the chain.
-fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
+fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds, symbols: &Symbols) -> Expr {
     let (module, span) = (condition.module, condition.span);
     let bound = bound_by(&condition);
     let mut read: Vec<(LocalId, Type)> = Vec::new();
@@ -1750,12 +1755,13 @@ fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
         }
     });
     let (held, failed) = (prelude.bool_true, prelude.bool_false);
-    let mut tags = vec![
-        (held, read.iter().map(|(_, ty)| ty.clone()).collect()),
-        (failed, Vec::new()),
-    ];
-    tags.sort_by_key(|(label, _)| *label);
-    let ty = Type::Variants(tags);
+    let ty = Type::row(
+        vec![
+            (held, read.iter().map(|(_, ty)| ty.clone()).collect()),
+            (failed, Vec::new()),
+        ],
+        symbols,
+    );
     let tag = |label, fields| Expr {
         module,
         span,
@@ -1776,6 +1782,7 @@ fn outcome(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
         tag(held, reads),
         tag(failed, Vec::new()),
         prelude,
+        symbols,
     );
     let holding = read
         .iter()

@@ -85,9 +85,12 @@ nesting, `{a: {b, *}, *}`.
 
 A closed record has `equals`, `to_str` and `hash_into` without declaring
 them, each by its fields' own. Equality ignores the order fields were
-written in, and so does hashing: one record type always feeds its fields in
-one order. Text writes them in the order of their names, so
-`"${{y: 2, x: 1}}"` is `"{x: 1, y: 2}"`.
+written in, and so does hashing: a record feeds its fields in the order of
+their names. Text writes them in that order too, so `"${{y: 2, x: 1}}"` is
+`"{x: 1, y: 2}"`, and so does a message naming a record type. The order is
+the names' alone, never the order the compiler first met them in, so what
+a record hashes to, how it is laid out and how a message shows it do not
+change with code elsewhere in the program or its libraries.
 
 A record with `*` has none of the three: its other fields are a caller's,
 and comparing them would make a function's behaviour depend on fields its
@@ -236,6 +239,12 @@ with an `x`"; the recourse is to leave that definition unsigned.
 
 ## History
 
+- **2026-11-18:** a record's fields, and a tag row's tags, are kept in the
+  order of their names wherever the order shows: a type's identity, its
+  layout, its tags' numbers, hashing and messages. Before, they were kept
+  in the order the compiler first met each name, so a library body naming
+  `y` before a program named `x` printed `{y: Nat, x: Nat}` and laid
+  n-body's `Vec3` out as `(y, x, z)`.
 - **2026-11-11:** an update's fields may be paths, `{a.b: e, *r}`. Writing
   an assembler in Faun turned up the nested form,
   `{asm: {macros, *cursor.asm}, *cursor}`.

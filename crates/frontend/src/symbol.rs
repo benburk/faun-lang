@@ -59,6 +59,23 @@ impl Symbols {
         text.rsplit_once("$$").map_or(text, |(_, spelled)| spelled)
     }
 
+    /// The order a record's fields and a tag row's tags are kept in
+    /// wherever it shows: by how the program spells them, and by the whole
+    /// text where two spellings are the same. It is fixed by the names
+    /// alone, so a type is laid out, compared and printed alike whatever
+    /// else the compilation interned first.
+    #[must_use]
+    pub fn order(&self, a: Symbol, b: Symbol) -> std::cmp::Ordering {
+        self.spelling(a)
+            .cmp(self.spelling(b))
+            .then_with(|| self.text(a).cmp(self.text(b)))
+    }
+
+    /// `entries` in [`Self::order`] of their names.
+    pub fn sort_named<T>(&self, entries: &mut [(Symbol, T)]) {
+        entries.sort_by(|(a, _), (b, _)| self.order(*a, *b));
+    }
+
     #[must_use]
     pub fn find(&self, text: &str) -> Option<Symbol> {
         self.buckets.get(&hash(text.as_bytes())).and_then(|bucket| {
@@ -104,5 +121,18 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols.text(first), "Nat");
+    }
+
+    /// Names are ordered by their spelling, not by when each was first
+    /// seen.
+    #[test]
+    fn names_are_ordered_by_spelling() {
+        let mut symbols = Symbols::default();
+        let y = symbols.intern("y");
+        let x = symbols.intern("x");
+        let mut fields = [(y, 1), (x, 0)];
+        symbols.sort_named(&mut fields);
+        assert_eq!(fields, [(x, 0), (y, 1)]);
+        assert_eq!(symbols.order(y, x), std::cmp::Ordering::Greater);
     }
 }
