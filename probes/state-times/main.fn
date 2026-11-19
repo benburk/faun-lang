@@ -1,0 +1,17 @@
+# The `n`th Fibonacci number modulo 1000003: a pair stepped `n` times.
+package {}
+
+import std.host {Host}
+
+fib : Nat -> Nat
+fib(n) -> (
+  (a, _) = n.times((0, 1), |(a, b)| (b, (a + b) % 1000003))
+  a
+)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${fib(n)}")
+  host.exit!(0)
+)

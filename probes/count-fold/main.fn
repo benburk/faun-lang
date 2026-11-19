@@ -1,0 +1,14 @@
+# The multiples of 3 or 5 below `n`, added up: a fold over the range.
+package {}
+
+import std.host {Host}
+
+total : Nat -> Nat
+total(n) -> List.range(n).fold(0, |sum, i| if i % 3 == 0 | i % 5 == 0 then sum + i else sum)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${total(n)}")
+  host.exit!(0)
+)

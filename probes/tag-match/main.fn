@@ -1,0 +1,19 @@
+# `n` operations, each a code from 0 to 3, run on an accumulator: the code
+# matched where it is read.
+package {}
+
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  ops = List.range(n).map(|i| (i * 7 + i / 5) % 4)
+  done = ops.fold(1, |acc, op| op is (
+    0 then (acc + 3) % 65521
+    1 then acc * 2 % 65521
+    2 then acc / 2
+    _ then (acc + acc / 3 + 7) % 65521
+  ))
+  printed = host.println!("${done}")
+  host.exit!(0)
+)

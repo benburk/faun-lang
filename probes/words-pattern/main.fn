@@ -1,0 +1,17 @@
+# The little-endian 32-bit words of `4 * n` bytes, added up: a walk taking
+# four bytes off the list at a time.
+package {}
+
+import std.host {Host}
+
+walk : (List(U8), Nat) -> Nat
+walk([a, b, c, d, *rest], sum) -> walk(rest, sum + a.to_nat() + b.to_nat() * 256 + c.to_nat() * 65536 + d.to_nat() * 16777216)
+walk(_, sum) -> sum
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  input = List.range(4 * n).map(|i| U8.of_nat(i * 7919 % 251))
+  printed = host.println!("${walk(input, 0)}")
+  host.exit!(0)
+)

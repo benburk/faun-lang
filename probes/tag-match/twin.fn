@@ -1,0 +1,19 @@
+# `n` operations, each a code from 0 to 3, run on an accumulator: a clause
+# for each code. The family's twin.
+package {}
+
+import std.host {Host}
+
+apply : (Nat, Nat) -> Nat
+apply(acc, 0) -> (acc + 3) % 65521
+apply(acc, 1) -> acc * 2 % 65521
+apply(acc, 2) -> acc / 2
+apply(acc, _) -> (acc + acc / 3 + 7) % 65521
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  ops = List.range(n).map(|i| (i * 7 + i / 5) % 4)
+  printed = host.println!("${ops.fold(1, apply)}")
+  host.exit!(0)
+)

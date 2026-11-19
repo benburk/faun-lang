@@ -1,0 +1,16 @@
+# The multiples of 3 or 5 below `n`, added up: a clause for each case.
+package {}
+
+import std.host {Host}
+
+total : (Nat, Nat, Nat) -> Nat
+total(i, n, sum) if i >= n -> sum
+total(i, n, sum) if i % 3 == 0 | i % 5 == 0 -> total(i + 1, n, sum + i)
+total(i, n, sum) -> total(i + 1, n, sum)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${total(0, n, 0)}")
+  host.exit!(0)
+)

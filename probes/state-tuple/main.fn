@@ -1,0 +1,16 @@
+# The `n`th Fibonacci number modulo 1000003: its two last values handed on
+# as a pair.
+package {}
+
+import std.host {Host}
+
+fib : (Nat, (Nat, Nat)) -> Nat
+fib(0, (a, _)) -> a
+fib(k, (a, b)) -> fib(k - 1, (b, (a + b) % 1000003))
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${fib(n, (0, 1))}")
+  host.exit!(0)
+)

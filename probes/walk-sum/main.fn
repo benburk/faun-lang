@@ -1,0 +1,12 @@
+# The elements of a list of `n` naturals, added up: the list's `sum`.
+package {}
+
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  input = List.range(n).map(|i| i * 7919 % 251)
+  printed = host.println!("${input.sum()}")
+  host.exit!(0)
+)
