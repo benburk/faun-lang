@@ -47,6 +47,7 @@ pub fn optimize(program: &mut Program) {
     super::head::heads(program);
     super::inplace::in_place(program);
     super::normalize::simplify(program);
+    super::indexed::positions(program);
     super::unbuilt::constructions(program);
     super::specialize::specialize(program);
     super::normalize::join_rounds(program);

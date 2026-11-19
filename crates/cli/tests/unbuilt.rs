@@ -193,3 +193,32 @@ fn a_longer_literal_compared_is_taken_apart_an_element_at_a_time() {
         ",
     );
 }
+
+#[test]
+fn a_range_mapped_and_read_by_position_is_never_built() {
+    // Each element read once, by `get` at a position counted up, and two
+    // positions past the end, which find nothing there as they would in
+    // the list built.
+    as_cheap(
+        "unbuilt-positions",
+        5,
+        r"
+        indexed : (List(Nat), Nat, Nat) -> Nat
+        indexed(xs, i, sum) -> (
+          if i >= xs.len() + 2 return sum
+          indexed(xs, i + 1, sum + xs.get(i).ok_or(7))
+        )
+
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> indexed(List.range(48).map(|column| column * 3 + at), 0, total)
+        ",
+        r"
+        columns : (Nat, Nat, Nat, Nat) -> Nat
+        columns(_, _, 0, sum) -> sum + 14
+        columns(at, column, Succ(left), sum) -> columns(at, column + 1, left, sum + column * 3 + at)
+
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> columns(at, 0, 48, total)
+        ",
+    );
+}

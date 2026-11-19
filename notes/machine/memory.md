@@ -137,9 +137,10 @@ size dies, as a tree's insert does, frees one and allocates the other.
 Writing the new cell into the old one, touching only the fields that
 change, is planned. A cell whose fields are its only readers is not built
 at all: each field is read where it was made. Nor, above this tier, is a
-list made only to be walked once or only to be compared:
-`List.range(n).fold(...)` is one loop, and `key == [grey]` compares the
-key's element where the caller made it
+list made only to be walked once, read only by position, or only to be
+compared: `List.range(n).fold(...)` is one loop, `xs.get(i)` of
+`List.range(n).map(f)` read at `i` counted up is `f` worked out at `i`,
+and `key == [grey]` compares the key's element where the caller made it
 ([Barb](barb.md#the-schedule)).
 
 ## Rationale
