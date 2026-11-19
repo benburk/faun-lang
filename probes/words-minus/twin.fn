@@ -1,0 +1,23 @@
+# The little-endian 32-bit words of `4 * n` bytes, added up: a position
+# stepping four bytes while `at + 3 < len`. The family's twin.
+package {}
+
+import std.host {Host}
+
+byte : (List(U8), Nat) -> Nat
+byte(input, at) -> input.get(at).ok_or(0).to_nat()
+
+word : (List(U8), Nat) -> Nat
+word(input, at) -> byte(input, at) + byte(input, at + 1) * 256 + byte(input, at + 2) * 65536 + byte(input, at + 3) * 16777216
+
+walk : (List(U8), Nat, Nat) -> Nat
+walk(input, at, sum) if at + 3 < input.len() -> walk(input, at + 4, sum + word(input, at))
+walk(_, _, sum) -> sum
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  input = List.range(4 * n).map(|i| U8.of_nat(i * 7919 % 251))
+  printed = host.println!("${walk(input, 0, 0)}")
+  host.exit!(0)
+)

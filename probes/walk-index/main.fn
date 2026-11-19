@@ -1,0 +1,19 @@
+# The elements of a list of `n` naturals, added up: a walk over the
+# positions, reading each with `get`.
+package {}
+
+import std.host {Host}
+
+summed : (List(Nat), Nat, Nat) -> Nat
+summed(xs, i, total) -> (
+  if i >= xs.len() return total
+  summed(xs, i + 1, total + xs.get(i).ok_or(0))
+)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  input = List.range(n).map(|i| i * 7919 % 251)
+  printed = host.println!("${summed(input, 0, 0)}")
+  host.exit!(0)
+)

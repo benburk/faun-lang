@@ -1,0 +1,13 @@
+# A list of `i * i % 1000` for each `i` below `n`, its length and sum
+# printed: the range mapped.
+package {}
+
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  out = List.range(n).map(|i| i * i % 1000)
+  printed = host.println!("${out.len()} ${out.sum()}")
+  host.exit!(0)
+)

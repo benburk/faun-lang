@@ -1,0 +1,17 @@
+# The elements of a list of `n` naturals, added up: a walk taking the list
+# apart. The family's twin.
+package {}
+
+import std.host {Host}
+
+summed : (List(Nat), Nat) -> Nat
+summed([], total) -> total
+summed([x, *xs], total) -> summed(xs, total + x)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  input = List.range(n).map(|i| i * 7919 % 251)
+  printed = host.println!("${summed(input, 0)}")
+  host.exit!(0)
+)

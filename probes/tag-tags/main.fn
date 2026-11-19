@@ -1,0 +1,26 @@
+# `n` operations run on an accumulator, each a tag: a clause for each tag.
+package {}
+
+import std.host {Host}
+
+Op = [Add, Double, Halve, Mix]
+
+op : Nat -> Op
+op(0) -> Add
+op(1) -> Double
+op(2) -> Halve
+op(_) -> Mix
+
+apply : (Nat, Op) -> Nat
+apply(acc, Add) -> (acc + 3) % 65521
+apply(acc, Double) -> acc * 2 % 65521
+apply(acc, Halve) -> acc / 2
+apply(acc, Mix) -> (acc + acc / 3 + 7) % 65521
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  ops = List.range(n).map(|i| op((i * 7 + i / 5) % 4))
+  printed = host.println!("${ops.fold(1, apply)}")
+  host.exit!(0)
+)

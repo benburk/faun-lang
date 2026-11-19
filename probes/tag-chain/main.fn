@@ -1,0 +1,21 @@
+# `n` operations, each a code from 0 to 3, run on an accumulator: the code
+# compared with each in turn.
+package {}
+
+import std.host {Host}
+
+apply : (Nat, Nat) -> Nat
+apply(acc, op) -> (
+  if op == 0 return (acc + 3) % 65521
+  if op == 1 return acc * 2 % 65521
+  if op == 2 return acc / 2
+  (acc + acc / 3 + 7) % 65521
+)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  ops = List.range(n).map(|i| (i * 7 + i / 5) % 4)
+  printed = host.println!("${ops.fold(1, apply)}")
+  host.exit!(0)
+)

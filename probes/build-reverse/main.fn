@@ -1,0 +1,20 @@
+# A list of `i * i % 1000` for each `i` below `n`, its length and sum
+# printed: each element put before what was built, the list reversed at
+# the end.
+package {}
+
+import std.host {Host}
+
+built : (Nat, Nat, List(Nat)) -> List(Nat)
+built(i, n, out) -> (
+  if i >= n return out.reverse()
+  built(i + 1, n, [i * i % 1000, *out])
+)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  out = built(0, n, [])
+  printed = host.println!("${out.len()} ${out.sum()}")
+  host.exit!(0)
+)
