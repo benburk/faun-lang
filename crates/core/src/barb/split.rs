@@ -49,13 +49,13 @@ use super::{
 /// it counts with are at most `most`, and calls a copy of the walk where
 /// they are; nothing comes back where there is no such walk.
 #[must_use]
-pub fn counted(program: &Program, most: u64) -> Option<Program> {
+pub fn counted(program: &Program, most: u64, lists: bool) -> Option<Program> {
     let below = most.checked_add(1)?;
     let recognised = program.recognition();
     let found: Vec<(FnId, Vec<usize>)> = (0..program.functions().len())
         .map(FnId::at)
         .filter(|&id| id != program.entry())
-        .filter_map(|id| Some((id, guarded(program, &recognised, id)?)))
+        .filter_map(|id| Some((id, guarded(program, &recognised, id, lists)?)))
         .collect();
     if found.is_empty() {
         return None;
@@ -301,7 +301,7 @@ fn known_arguments(
 /// Visit every binding and tail in `body`, however deep, with what bound
 /// each level in scope there: the expression, or nothing for a parameter or
 /// a field.
-fn scoped(
+pub(super) fn scoped(
     program: &Program,
     body: Body,
     bound: &mut Vec<Option<ExprId>>,
@@ -351,7 +351,7 @@ enum Role {
 
 /// What a walk hands itself in one place.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Handed {
+pub(super) enum Handed {
     /// The local at this level.
     Local(usize),
     /// The parameter at this level, plus a known number.
@@ -361,7 +361,12 @@ enum Handed {
 
 /// Which numbers a call of `id` must hand at most the bound for its copy
 /// to count narrowly, where `id` is an innermost counted walk.
-fn guarded(program: &Program, recognised: &Recognised, id: FnId) -> Option<Vec<usize>> {
+fn guarded(
+    program: &Program,
+    recognised: &Recognised,
+    id: FnId,
+    lists: bool,
+) -> Option<Vec<usize>> {
     if recognised.answered(id) {
         return None;
     }
@@ -378,9 +383,12 @@ fn guarded(program: &Program, recognised: &Recognised, id: FnId) -> Option<Vec<u
     // A walk reading a sequence it keeps counts positions in it, which
     // the sequence's length bounds where it is read, and the copy would
     // copy all it does with it.
+    // And where `lists` is false, a walk holding a list at all is left: its
+    // count is bounded by that list's length, and narrower than that is
+    // worth less than its copy.
     let keeps_a_sequence = (0..arity).any(|at| {
         matches!(type_shape(program, params[at]), TypeShape::Sequence { .. })
-            && calls.iter().all(|call| call[at] == Handed::Local(at))
+            && (!lists || calls.iter().all(|call| call[at] == Handed::Local(at)))
     });
     if keeps_a_sequence {
         return None;
@@ -418,7 +426,7 @@ fn walks_within(program: &Program, recognised: &Recognised, id: FnId, body: Body
 }
 
 /// Each call `id`'s body makes of itself, each argument as it hands it on.
-fn self_calls(
+pub(super) fn self_calls(
     program: &Program,
     recognised: &Recognised,
     id: FnId,
@@ -612,7 +620,7 @@ mod tests {
     fn a_counted_walk_is_asked_for_and_its_copy_counts_narrowly() {
         let most = 1000;
         let (program, w, [outside, small, large]) = program(most);
-        let split = counted(&program, most).expect("a counted walk to split");
+        let split = counted(&program, most, true).expect("a counted walk to split");
         validate(&split).expect("a valid split program");
         assert_eq!(called(&split, outside), ["w.counted.asked"]);
         assert_eq!(called(&split, small), ["w.counted"]);
@@ -629,6 +637,9 @@ mod tests {
             .expect("a bound on the copy's count up");
         assert!(counted_up <= 2 * most, "{counted_up}");
         assert_eq!(facts.takes(w)[0].high, None);
+        // A walk of numbers alone is split where a walk holding a list is
+        // not.
+        assert!(counted(&program, most, false).is_some());
     }
 
     #[test]
@@ -650,6 +661,6 @@ mod tests {
         let entry = enter(p, &[down]);
         p.set_entry(entry);
         validate(p).expect("a valid program");
-        assert!(counted(&lib.program, 1000).is_none());
+        assert!(counted(&lib.program, 1000, true).is_none());
     }
 }
