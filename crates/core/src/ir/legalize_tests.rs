@@ -623,6 +623,41 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     assert_eq!(host.calls, ["exit!"]);
 }
 
+/// A call that does not come back ends its region, so a claim the caller
+/// still holds when it is made is never released after it: the call reads
+/// a cell it borrows and leaves the program, and nothing follows it. The
+/// 6502 hands every argument past its fourth over in a cell, so a function
+/// taking five that never comes back, as md5's loop over its input does,
+/// is called this way.
+#[test]
+fn nothing_is_released_after_a_call_that_does_not_come_back() {
+    let (mut p, main) = Program::new("main");
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit!");
+    let leave = p.declare_never("leave", &[Class::Cell]);
+    let word = p.shape(&[Class::Word]);
+    p.define(leave, |b, params| {
+        let status = b.cell_field((Class::Word, word), params[0], 0);
+        b.call(exit, &[status]);
+    });
+    p.define(main, |b, _| {
+        let status = b.constant(Class::Word, 42);
+        let cell = b.cell(0, word, &[status]);
+        b.call(leave, &[cell]);
+    });
+    for bits in [16, 32, 64] {
+        let legalized = legalize(&p, fixed_heap(bits, 256)).unwrap();
+        let ops = legalized.ops(legalized.function(main).body().unwrap());
+        assert!(matches!(ops.last(), Some(Op::Call { function, .. }) if *function == leave));
+        let mut host = TestHost::default();
+        let config = evaluate::Config {
+            word_bits: bits,
+            ..evaluate::Config::default()
+        };
+        let result = evaluate::evaluate(&legalized, main, &[], config, &mut host).unwrap();
+        assert_eq!(result.halted().unwrap(), [BigUint::from(42u8)]);
+    }
+}
+
 /// A heap of `heap_bytes` that exits when it is full.
 const fn fixed_heap(word_bits: u16, heap_bytes: usize) -> Config {
     Config {

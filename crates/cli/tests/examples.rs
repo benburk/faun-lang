@@ -327,6 +327,75 @@ fn a_needed_call_that_never_comes_back_hangs_the_program() {
     assert!(running, "the program exited rather than hanging");
 }
 
+/// A function that never comes back, taking more arguments than the 6502
+/// passes as they are, builds and runs on every target and backend. The
+/// 6502 hands those past its fourth over in a cell its caller makes, and
+/// the call is the end of the caller: nothing may be released after it, as
+/// md5's loop over its input once was.
+#[test]
+fn a_call_that_never_comes_back_with_five_arguments_runs_everywhere() {
+    let package = support::Package::new(
+        "never-five",
+        "count! : (Host, U16, U16, U16, U16, U16) -> []
+         count!(host, a, b, c, d, e) -> (
+           read = host.stdin.read!(4)
+           read is Ok(chunk) else return host.exit!(1)
+           if chunk is Data(bytes) then count!(host, b, c, d, e, a + U16.of_nat(bytes.len()))
+           else (
+             host.println!((a.to_nat() + b.to_nat() + c.to_nat() + d.to_nat() + e.to_nat()).to_str())
+             host.exit!(0)
+           )
+         )
+
+         main! : Host -> []
+         main!(host) -> count!(host, 1, 2, 3, 4, 5)",
+    );
+    for (target, backend) in MACHINES {
+        let (status, written, said) = run_on(target, backend, &package.entry(), b"hello world\n");
+        assert_eq!(
+            (status, written.as_str()),
+            (Some(0), "27\n"),
+            "{target} {backend}: {said}"
+        );
+    }
+}
+
+/// Every target and backend `faun run` builds for.
+const MACHINES: [(&str, &str); 6] = [
+    ("x86_64-linux", "stock"),
+    ("x86_64-linux", "lab"),
+    ("wasm32-wasi", "stock"),
+    ("wasm32-wasi", "lab"),
+    ("mos6502-sim65", "stock"),
+    ("mos6502-sim65", "lab"),
+];
+
+/// Build `entry` for `target` with `backend` and run it with `input` on
+/// standard input: its status, and what it wrote to standard output and to
+/// standard error.
+fn run_on(
+    target: &str,
+    backend: &str,
+    entry: &Path,
+    input: &[u8],
+) -> (Option<i32>, String, String) {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .args(["run", "--backend", backend, "--target", target])
+        .arg(entry)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), input).unwrap();
+    let output = child.wait_with_output().unwrap();
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 /// A call going deeper than the stack has room for ends the program saying
 /// so on standard error, with a status of its own, rather than with a fault
 /// and nothing said. The stack is held to eight megabytes, as a shell
