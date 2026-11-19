@@ -64,13 +64,13 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("writing the heap", 217),
     ("a computed length", 221),
     ("eight bits", 133),
-    ("less", 140),
+    ("less", 139),
     ("two worked out", 151),
     ("a flag", 216),
     ("a countdown", 187),
     ("a carried total", 156),
     ("a step first", 205),
-    ("a long arm", 261),
+    ("a long arm", 260),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("exit", 128),
