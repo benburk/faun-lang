@@ -2,6 +2,8 @@
 //! only low exit statuses. Runtime inputs are parameters, never folded terms.
 use num_bigint::BigUint;
 
+use crate::facts::Facts;
+
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
 use super::natural::Config;
 use super::test_support::{live_objects, no_live_objects, word};
@@ -283,6 +285,127 @@ fn arithmetic_across_the_immediate_boundary_matches_the_reference() {
                         usize::from(object),
                         "{bits} {op:?} {x} {y}"
                     );
+                }
+            }
+        }
+    }
+}
+
+/// A natural's quotient and remainder by a word -- a constant, or a number
+/// of a class a machine holds, nought among them or not -- and the
+/// remainder read back as a word: on either side of half a word and past
+/// a word, each answers what the reference answers, legalized and then
+/// optimized, with nothing left claimed but an answer that is an object.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "differential fixture over widths, divisors, operations and dividends"
+)]
+fn division_by_a_word_across_the_immediate_boundary_matches_the_reference() {
+    enum By {
+        Constant(u64),
+        Scalar(Class),
+    }
+    for bits in [16, 32, 64] {
+        let half = natural::half(bits);
+        let most = u64::MAX >> (64 - bits);
+        let dividends = [0, 1, 7, half - 2, half - 1, half, half + 1, most];
+        let past = BigUint::from(1u8) << (2 * usize::from(bits) + 5);
+        let divisors = [
+            By::Constant(1),
+            By::Constant(3),
+            By::Constant(10),
+            By::Constant(half),
+            By::Constant(half + 1),
+            By::Constant(most),
+            By::Scalar(Class::fixed(8)),
+            By::Scalar(Class::Held(Facts {
+                low: 1,
+                high: Some(200),
+            })),
+            By::Scalar(Class::Word),
+        ];
+        for by in &divisors {
+            for op in [Binary::Div, Binary::Mod] {
+                for large in [false, true] {
+                    let params = match by {
+                        By::Scalar(class) => vec![Class::Word, *class],
+                        By::Constant(_) => vec![Class::Word],
+                    };
+                    // The entry calls the test, so that optimizing keeps it.
+                    let (mut p, main) = Program::new("main");
+                    let test = p.declare("test", &params, &[Class::Natural, Class::Word]);
+                    p.define(main, |b, _| {
+                        let one: Vec<_> =
+                            params.iter().map(|&class| b.constant(class, 1)).collect();
+                        let answers = b.call(test, &one);
+                        b.ret(&answers[1..]);
+                    });
+                    p.define(test, |b, args| {
+                        let mut left = b.convert(Class::Natural, args[0]);
+                        if large {
+                            let far = b.natural(&past);
+                            left = b.binary(Binary::Add, left, far);
+                        }
+                        let right = match by {
+                            By::Constant(value) => b.constant(Class::Natural, *value),
+                            By::Scalar(_) => b.convert(Class::Natural, args[1]),
+                        };
+                        let answer = b.binary(op, left, right);
+                        let low = b.convert(Class::Word, answer);
+                        b.ret(&[answer, low]);
+                    });
+                    let config = Config {
+                        word_bits: bits,
+                        heap_bytes: 2048,
+                        grows: false,
+                        inline_small: true,
+                        inline_counts: false,
+                        join_routines: false,
+                    };
+                    let legalized = legalize(&p, config).expect("legalized");
+                    let optimized = optimize(&legalized);
+                    // A remainder below half a word whatever it divides is
+                    // read back as the word it holds with nothing called.
+                    let narrow = match by {
+                        By::Constant(value) => (1..=half).contains(value),
+                        By::Scalar(class) => class.facts().is_some_and(|facts| facts.low > 0),
+                    };
+                    let narrows = |p: &Program| {
+                        let body = p.function(test).body().expect("a body");
+                        p.walk_within(body).any(|(op, _)| {
+                            matches!(op, Op::Call { function, .. }
+                                if p.name(p.function(*function).name) == "nat.to_word")
+                        })
+                    };
+                    assert!(narrows(&legalized));
+                    assert_eq!(narrows(&optimized), op == Binary::Div || !narrow, "{bits}");
+                    let scalars: &[u64] = match by {
+                        By::Constant(_) => &[0],
+                        By::Scalar(Class::Word) => &[0, 1, 3, half - 1, half, most],
+                        By::Scalar(_) => &[1, 3, 10, 200],
+                    };
+                    for &x in &dividends {
+                        for &d in scalars {
+                            let args = [BigUint::from(x), BigUint::from(d)];
+                            let args = &args[..params.len()];
+                            let expected = run(&p, test, args, bits).returned().unwrap().to_vec();
+                            for scalar in [&legalized, &optimized] {
+                                let actual = run(scalar, test, args, bits);
+                                let what = format!("{bits} {op:?} {large} {x} {d}");
+                                assert!(actual.returned().is_some(), "{what} {actual:?}");
+                                let answer = decoded(scalar, &actual, bits);
+                                assert_eq!(answer, expected[0], "{what}");
+                                assert_eq!(actual.returned().unwrap()[1], expected[1], "{what}");
+                                let object = answer >= BigUint::from(half);
+                                assert_eq!(
+                                    live_objects(scalar, &actual, config),
+                                    usize::from(object),
+                                    "{what}"
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -623,9 +746,11 @@ fn guarded_naturals_decode_only_within_the_immediate_range() {
             let args = [BigUint::from(n)];
             let actual = run(&scalar, main, &args, bits);
             assert_eq!(actual.outcome, run(&p, main, &args, bits).outcome);
+            // Past the guard an immediate is still read where it is; only
+            // an object asks the helper.
             assert_eq!(
                 actual.counts.calls_to(&scalar, "nat.to_word"),
-                u64::from(n >= limit)
+                u64::from(n >= natural::half(bits))
             );
             no_live_objects(&scalar, &actual, config);
         }

@@ -114,7 +114,11 @@ needs no allocation. A larger one is a reference-counted object of
 word-sized digits, least significant first, which the runtime adds and
 multiplies a word at a time and divides by Knuth's algorithm D. A sum of
 two small numbers is the small sum, so the common case costs a test of the
-tag. Where range analysis proves a value below a bound, it is held as a
+tag. So does a quotient or a remainder by a word, and a natural read back
+as a word. A remainder by a divisor no larger than half a word is below it
+whatever it divides, so `i % 3 == 0` on a natural nothing bounds is a test
+of the tag, a word's division and a comparison of words, with nothing to
+release, as on a `U64`. Where range analysis proves a value below a bound, it is held as a
 plain word with no test: in `spectralnorm` the row index, taken from
 `List.range`, is a word, while the column, a counter nothing bounds, is a
 natural ([spectral-norm](../spectralnorm-performance.md)). A loop's
