@@ -107,6 +107,14 @@ expect sort([3, 1, 4, 1, 5, 9, 2, 6]) == [1, 1, 2, 3, 4, 5, 6, 9]
 expect sort(["pear", "fig", "apple"]) == ["apple", "fig", "pear"]
 ```
 
+## Why not use Faun (yet)
+
+Faun is a work in progress. Today, though this may change, it has:
+
+- **No FFI**: a program cannot call code written in C or any other language.
+- **No ABI**: there is no stable binary interface, so compiled Faun cannot be linked as a library or called from other languages.
+- **No concurrency model**: a program runs on one thread. A model is in progress.
+
 ## Open design questions
 
 - How to do FFI
