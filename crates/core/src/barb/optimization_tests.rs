@@ -58,6 +58,7 @@ fn schedules() -> Vec<(&'static str, Stages)> {
             }
         }),
         ("simplifying", super::normalize::simplify),
+        ("unread parameters", super::unread::unread),
         ("cleanup", super::cleanup::cleanup),
         ("everything", optimize),
     ]
@@ -2105,4 +2106,94 @@ fn short_reversal_preserves_shared_values_and_effect_order() {
         assert_eq!(after, before);
         assert_eq!(after, vec![first, second, observe]);
     }
+}
+
+/// `count(i, n, acc)`, walking `n` down to nought and adding each step to
+/// `acc` while it counts `i` up, and an entry calling it with `i` nought.
+/// Where `observed`, each step also hands `i` to an external routine.
+fn counted(observed: bool) -> (Program, FnId) {
+    let mut p = library();
+    let add = named(&p, "add");
+    let nat = p.params(add)[0];
+    let (zero, succ) = (p.ctor_at(nat, 0), p.ctor_at(nat, 1));
+    let observe = p.declare("observe", &[nat], nat);
+    let count = p.declare("count", &[nat, nat, nat], nat);
+    p.define(count, |b, args| {
+        b.match_(args[1], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return args[2];
+            }
+            if observed {
+                b.call(observe, &[args[0]]);
+            }
+            let nought = b.con(zero, &[]);
+            let one = b.con(succ, &[nought]);
+            let next = b.call(add, &[args[0], one]);
+            let total = b.call(add, &[args[2], fields[0]]);
+            b.call(count, &[next, fields[0], total])
+        })
+    });
+    let entry = p.declare("entry", &[nat], nat);
+    p.define(entry, |b, args| {
+        let nought = b.con(zero, &[]);
+        b.call(count, &[nought, args[0], nought])
+    });
+    p.set_entry(entry);
+    (p, count)
+}
+
+/// The arguments `id` hands itself in `program`.
+fn handed_itself(program: &Program, id: FnId) -> Vec<Vec<super::Atom>> {
+    let body = program.function(id).body().unwrap();
+    super::walk::within(program, body)
+        .filter_map(|expr| match program.expr(expr) {
+            Expr::Call(callee, args) if callee == id => Some(program.atoms(args).to_vec()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_parameter_only_handed_round_is_handed_on_as_it_came() {
+    let (original, count) = counted(false);
+    let mut p = original.clone();
+    super::unread::unread(&mut p);
+    super::cleanup::cleanup(&mut p);
+    validate(&p).unwrap();
+    let handed = handed_itself(&p, count);
+    assert_eq!(handed.len(), 1, "{}", p.render());
+    assert_eq!(
+        handed[0][0],
+        super::Atom(super::Local::at(0)),
+        "{}",
+        p.render()
+    );
+    // Only the total is added to: the count is never worked out.
+    assert_eq!(calls_to(&p, count, named(&p, "add")), 1, "{}", p.render());
+    let nat = original.params(count)[0];
+    for n in 0..5 {
+        let args = vec![super::tests::nat(&original, nat, n)];
+        assert_eq!(
+            run(&p, p.entry(), args.clone(), &mut vec![]),
+            run(&original, original.entry(), args, &mut vec![]),
+        );
+    }
+}
+
+#[test]
+fn a_parameter_an_effect_reads_is_still_worked_out() {
+    let (original, count) = counted(true);
+    let mut p = original.clone();
+    super::unread::unread(&mut p);
+    super::cleanup::cleanup(&mut p);
+    validate(&p).unwrap();
+    assert_eq!(calls_to(&p, count, named(&p, "add")), 2, "{}", p.render());
+    let nat = original.params(count)[0];
+    let args = vec![super::tests::nat(&original, nat, 3)];
+    let (mut before, mut after) = (vec![], vec![]);
+    assert_eq!(
+        run(&p, p.entry(), args.clone(), &mut after),
+        run(&original, original.entry(), args, &mut before),
+    );
+    assert_eq!(after, before);
 }

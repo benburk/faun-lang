@@ -26,8 +26,10 @@ use super::{InlineLimits, Program};
 ///     them apart, then for known arguments, resimplifying changed
 ///     definitions.
 /// 11. Joining recursive rounds through helper inlining.
-/// 12. Reachability sweep.
-/// 13. Effect-safe cleanup.
+/// 12. Parameters nothing reads handed the caller's own in place of what
+///     was worked out for them.
+/// 13. Reachability sweep.
+/// 14. Effect-safe cleanup.
 ///
 /// Recognized induction equations are left intact. Cleanup removes aliases
 /// and unused pure bindings while preserving observable calls. Inlining and
@@ -50,6 +52,7 @@ pub fn optimize(program: &mut Program) {
     super::unbuilt::constructions(program);
     super::specialize::specialize(program);
     super::normalize::join_rounds(program);
+    super::unread::unread(program);
     super::sweep::sweep(program);
     super::cleanup::cleanup(program);
 }

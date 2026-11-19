@@ -76,6 +76,25 @@ fn a_range_folded_is_never_built() {
     );
 }
 
+/// A fold over a range whose step ignores the element counts its steps and
+/// nothing else: the index the range would have handed it is never worked
+/// out, so it costs what stepping `n.times` costs.
+#[test]
+fn a_range_folded_without_its_elements_costs_what_times_costs() {
+    as_cheap(
+        "unbuilt-range-unread",
+        0,
+        r"
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> List.range(48).fold(total, |sum, _| (sum * 3 + at) % 1000003)
+        ",
+        r"
+        step : (Nat, Nat) -> Nat
+        step(at, total) -> 48.times(total, |sum| (sum * 3 + at) % 1000003)
+        ",
+    );
+}
+
 #[test]
 fn a_repeat_summed_is_never_built() {
     as_cheap(
