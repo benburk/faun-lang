@@ -241,22 +241,69 @@ fn the_reference_float_table_is_the_standards_code() {
     );
 }
 
+/// What a failing recognition says: the table no longer matches the
+/// standard's code, and how to write it again.
+const STALE: &str = "Barb's table of the standard's float code (crates/core/src/barb/floats/known.rs) \
+     is stale, so this operation would run as the software routine on x86-64: \
+     run `just bless` (FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition \
+     the_reference_float_table) and read the diff";
+
+/// A program asking `float`'s `method` and no other float operation.
+fn asking(float: &str, method: &str) -> Package {
+    let asked = if method == "sqrt" {
+        "x.sqrt()".to_owned()
+    } else {
+        let symbol = match method {
+            "add" => "+",
+            "sub" => "-",
+            "mul" => "*",
+            _ => "/",
+        };
+        format!("x {symbol} x")
+    };
+    Package::new(
+        &format!("float-{float}-{method}"),
+        &format!(
+            r"
+        main!(host) -> (
+          x = {float}.of_nat(host.args.len())
+          host.print!(({asked}).to_str())
+          host.exit!(0)
+        )
+    "
+        ),
+    )
+}
+
+/// Each operation the table covers, at each format, asked alone by a
+/// program built for x86-64, whose float instructions answer it, is
+/// recognized as itself: a library edit that changes a routine's code
+/// without blessing the table would otherwise leave float code silently on
+/// the software routines.
 #[test]
 fn every_float_operation_is_recognized_by_its_code() {
-    let program = optimized(&every_float_operation());
-    let facts = with_floats(&program);
     for (float, format) in FLOATS {
         for (method, operation) in OPERATIONS {
             let name = format!("{float}.{method}");
-            let id = (0..program.functions().len())
+            let program = optimized(&asking(float, method));
+            let facts = with_floats(&program);
+            // A recognized definition is never inlined, so one swept from a
+            // program asking it was not recognized either.
+            let recognized = (0..program.functions().len())
                 .map(FnId::at)
                 .find(|&id| program.name(program.function(id).name) == name)
-                .unwrap_or_else(|| panic!("`{name}` was swept"));
-            let recognized = facts
-                .float(id)
-                .unwrap_or_else(|| panic!("`{name}` is not recognized"));
-            assert_eq!(format!("{:?}", recognized.operation), operation, "{name}");
-            assert_eq!(format!("{:?}", recognized.format), format, "{name}");
+                .and_then(|id| facts.float(id))
+                .unwrap_or_else(|| panic!("`{name}` is not recognized: {STALE}"));
+            assert_eq!(
+                format!("{:?}", recognized.operation),
+                operation,
+                "{name}: {STALE}"
+            );
+            assert_eq!(
+                format!("{:?}", recognized.format),
+                format,
+                "{name}: {STALE}"
+            );
         }
     }
 }
