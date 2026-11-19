@@ -230,3 +230,34 @@ than the memory a target addresses: 2^47 bytes on x86-64, 2^32 on wasm32,
 2^16 on the 6502. With that bound, a position compared with
 `input.len() * 8` is a word, and the `position` probe runs 19.5 million
 instructions where it ran 57.7, against 29.1 for its workaround.
+
+## A counted walk, asked for
+
+A walk taking a count down while it counts another number up, or counting
+a number up below one it keeps, holds what it counts up below where it
+started and its count together. Where the count comes from outside the
+program, as `n` parsed from an argument does, nothing bounds it, and
+neither is what is counted up nor anything worked out of it: `i * 7919 %
+251` is a natural product and remainder every step. Built as a list,
+`List.range(n).map(f)` had its length bound `i`; fused into one walk with
+what reads it, the list and its bound are gone.
+
+Lowering for a target whose word is 32 or 64 bits, `barb::counted` copies
+each innermost such walk, and every call from outside asks first whether
+the numbers it hands the walk to count with are at most half a word, and
+no more than a list's length: where they are, the copy runs, handed
+nothing larger, and analysis bounds all it counts; where not, the walk
+does. A known number asks nothing, and a question analysis answers yes
+everywhere takes only that arm, so a walk already that narrow is the copy
+alone. Half a word, so that two numbers counted up multiplied still fit a
+word: on x86-64 at most 2^32 - 1, on wasm32 2^16 - 1, where a wider bound
+leaves products past 32 bits that wasm32 works out in halves. A walk
+keeping a sequence it reads counts positions in it, which its length
+bounds already, and is not copied. The 6502 asks nothing: its narrow
+arithmetic is written out where a natural's is a call, so a copy costs a
+small program a tenth of its size, more than its room allows.
+
+The walk family's fold, sum and pattern, one fused walk each, ran 19.0
+million instructions on x86-64 at 100,000 and run 4.7; 6.85 million fuel
+on wasm32 at 30,000 and run 2.05. The tag family runs 3 to 15 times
+faster, count about 4 and state about 3.
