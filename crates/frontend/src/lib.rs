@@ -78,6 +78,7 @@ mod parse;
 mod pattern_compile;
 pub mod resolve;
 mod second_class;
+mod sorted;
 pub mod source;
 mod specialize;
 mod standard;
@@ -97,6 +98,25 @@ pub use symbol::{Symbol, Symbols};
 #[must_use]
 pub fn standard_path() -> &'static Path {
     standard::root_module()
+}
+
+/// The built-in standard package, checked alone, as a snapshot: what the
+/// command's build writes, to hand back with [`use_standard_snapshot`].
+/// It is the built-in text's, whatever `FAUN_STD` says.
+///
+/// # Errors
+/// Reports what loading or checking the standard package refuses.
+pub fn standard_snapshot() -> Result<Vec<u8>, Diagnostic> {
+    Ok(Library::check(Loader::standard(&standard::built_in_root())?)?.write())
+}
+
+/// Read the built-in standard package from `snapshot`, which
+/// [`standard_snapshot`] wrote, in place of checking it in each compile.
+///
+/// Where `FAUN_STD` names the library's text, the snapshot is not read. A
+/// compile never handed one checks the library from its text.
+pub fn use_standard_snapshot(snapshot: &'static [u8]) {
+    standard::set_snapshot(snapshot);
 }
 
 /// A checked package.
@@ -132,7 +152,18 @@ pub fn check_package_using(
     target: &dyn Target,
     packages: &Packages,
 ) -> Result<Package, Diagnostic> {
-    let (loaded, mut earlier) = load_after_library(source, target, packages)?;
+    check_package_from(source, target, packages, standard::snapshot())
+}
+
+/// [`check_package_using`], reading the standard library from `snapshot`
+/// where there is one, and otherwise checking it from its text.
+fn check_package_from(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+    snapshot: Option<&[u8]>,
+) -> Result<Package, Diagnostic> {
+    let (loaded, mut earlier) = load_after_library_from(source, target, packages, snapshot)?;
     let main = Main::find_in(&loaded)?;
     let facts = test_uses::Facts::of(&loaded);
     let (program, cx) = resolve_after(loaded, &mut earlier)?;
@@ -321,7 +352,25 @@ fn load_after_library(
     target: &dyn Target,
     packages: &Packages,
 ) -> Result<(LoadedProgram, Earlier), Diagnostic> {
+    load_after_library_from(source, target, packages, standard::snapshot())
+}
+
+/// [`load_after_library`], reading the library from `snapshot` where there
+/// is one, and otherwise checking it from its text.
+fn load_after_library_from(
+    source: &Path,
+    target: &dyn Target,
+    packages: &Packages,
+    snapshot: Option<&[u8]>,
+) -> Result<(LoadedProgram, Earlier), Diagnostic> {
     let host = host_path(target)?;
+    if let Some(snapshot) = snapshot {
+        let library = Library::read(snapshot)?;
+        // A package within the library is checked with it, from its text.
+        if !library.holds(source) {
+            return library.rest(source, &host, packages);
+        }
+    }
     let loader = Loader::standard(standard_path())?;
     if loader.holds(source) {
         return Ok((loader.rest(source, &host, packages)?, Earlier::default()));

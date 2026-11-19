@@ -5,9 +5,10 @@
 //! again at every occurrence.
 
 use rustc_hash::FxHashMap as HashMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// An interned spelling owned by one [`Symbols`] collection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Symbol(u32);
 
 impl Symbol {
@@ -18,6 +19,9 @@ impl Symbol {
 }
 
 /// Own interned spellings for one frontend invocation.
+///
+/// A snapshot writes the spellings alone, in order, since a symbol is its
+/// index, and reading them back interns each again.
 #[derive(Clone, Debug, Default)]
 pub struct Symbols {
     names: Vec<Box<str>>,
@@ -94,6 +98,29 @@ impl Symbols {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.names.is_empty()
+    }
+}
+
+impl Serialize for Symbols {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.names.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Symbols {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let names = Vec::<Box<str>>::deserialize(deserializer)?;
+        let mut symbols = Self {
+            names: Vec::with_capacity(names.len()),
+            buckets: HashMap::default(),
+        };
+        for name in &names {
+            symbols.intern(name);
+        }
+        if symbols.len() != names.len() {
+            return Err(serde::de::Error::custom("a spelling is written twice"));
+        }
+        Ok(symbols)
     }
 }
 

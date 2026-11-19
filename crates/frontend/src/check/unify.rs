@@ -8,6 +8,7 @@
 //! the other holds.
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -17,7 +18,11 @@ use crate::{Symbol, Symbols};
 /// A type as inference holds it. Its parts are shared, not owned: cloning
 /// one is a count, not a copy, and resolving one rebuilds only the parts a
 /// binding changed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// A snapshot writes one as the [`InferredType`] it is, owning its parts,
+/// once inference is over and it is resolved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "InferredType", from = "InferredType")]
 pub(super) enum Ty {
     Var(u32),
     Rigid(u32),
@@ -192,12 +197,16 @@ impl Mismatch {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Scheme {
     pub(super) variables: Vec<u32>,
     pub(super) ty: Ty,
 }
 
+/// What inference holds. A snapshot, taken once every type it holds
+/// elsewhere is resolved, needs none of its bindings: only how many
+/// variables there are and how many rigid ones, so the checking after it
+/// numbers its own as it would have.
 #[derive(Debug, Default)]
 pub(super) struct Infer {
     /// What each variable is bound to. Resolving one stores back what it
@@ -710,6 +719,66 @@ pub(super) fn public_type(ty: &Ty) -> InferredType {
             tail.as_deref().map(|tail| Box::new(public_type(tail))),
         ),
         Ty::Tuple(members) => InferredType::Tuple(members.iter().map(public_type).collect()),
+    }
+}
+
+impl From<Ty> for InferredType {
+    fn from(ty: Ty) -> Self {
+        public_type(&ty)
+    }
+}
+
+impl From<InferredType> for Ty {
+    fn from(ty: InferredType) -> Self {
+        let all = |types: Vec<InferredType>| types.into_iter().map(Self::from).collect();
+        let tail = |tail: Option<Box<InferredType>>| tail.map(|tail| Rc::new(Self::from(*tail)));
+        match ty {
+            InferredType::Variable(TypeVariable {
+                index,
+                rigid: false,
+            }) => Self::Var(index),
+            InferredType::Variable(TypeVariable { index, rigid: true }) => Self::Rigid(index),
+            InferredType::Named(name, arguments) => Self::Named(name, all(arguments)),
+            InferredType::Function(parameters, result) => {
+                Self::Function(all(parameters), Rc::new(Self::from(*result)))
+            }
+            InferredType::Variants(tags, rest) => Self::Variants(
+                tags.into_iter()
+                    .map(|(name, fields)| (name, all(fields)))
+                    .collect(),
+                tail(rest),
+            ),
+            InferredType::Record(fields, rest) => Self::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, ty)| (name, Self::from(ty)))
+                    .collect(),
+                tail(rest),
+            ),
+            InferredType::Tuple(members) => Self::Tuple(all(members)),
+        }
+    }
+}
+
+impl Serialize for Infer {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        debug_assert!(
+            self.trail.is_empty() && !self.probing,
+            "a snapshot is taken between probes"
+        );
+        (self.links.borrow().len(), self.next_rigid).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Infer {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (variables, next_rigid) = <(usize, u32)>::deserialize(deserializer)?;
+        Ok(Self {
+            links: RefCell::new(vec![None; variables]),
+            next_rigid,
+            trail: Vec::new(),
+            probing: false,
+        })
     }
 }
 

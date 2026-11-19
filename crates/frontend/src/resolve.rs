@@ -5,6 +5,7 @@
 #![allow(clippy::too_many_lines)]
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use serde::{Deserialize, Serialize};
 
 use super::ast as s;
 use super::blessed::PreludeIds;
@@ -55,11 +56,15 @@ pub fn resolve_names(
 /// What resolving some modules leaves for resolving the modules loaded
 /// after them: which globals are values, and every alias, as written and
 /// as expanded.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Resolution {
+    #[serde(serialize_with = "crate::sorted::set")]
     values: Values,
+    #[serde(serialize_with = "crate::sorted::map")]
     aliases: Aliases,
+    #[serde(serialize_with = "crate::sorted::map")]
     constraint_aliases: ConstraintAliases,
+    #[serde(serialize_with = "crate::sorted::map")]
     expanded: Aliases,
 }
 
@@ -175,7 +180,7 @@ fn values(
 
 /// An alias, `Name = type` or `Name(a) = type`: its parameters, and the
 /// type it names, resolved in the module that wrote it.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Alias {
     parameters: Vec<Symbol>,
     ty: h::Type,
@@ -187,7 +192,7 @@ type Aliases = HashMap<Symbol, Alias>;
 
 /// A constraint alias, `Name(a) = where ...`: its parameters, and what it
 /// requires of them, applications of other aliases included.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ConstraintAlias {
     parameters: Vec<Symbol>,
     constraints: Vec<h::Constraint>,

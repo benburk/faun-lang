@@ -54,7 +54,11 @@ const NATIVE: Option<&dyn Target> = if cfg!(all(target_arch = "x86_64", target_o
 /// what recursion never reaches is never used.
 const STACK: usize = 512 << 20;
 
+/// The built-in standard library, checked when this binary was built.
+static STANDARD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/standard.snapshot"));
+
 fn main() -> ExitCode {
+    faun_frontend::use_standard_snapshot(STANDARD);
     std::thread::Builder::new()
         .name("faun".to_owned())
         .stack_size(STACK)

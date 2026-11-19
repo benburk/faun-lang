@@ -3,12 +3,13 @@
 //! Syntax spans stay as two-word byte ranges. A parsed module carries the
 //! source identity once, rather than paying for it on every name and node.
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 
 use super::ast::Span;
 
 /// The identity of one source in a [`Sources`] collection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SourceId(u32);
 
 impl Default for SourceId {
@@ -57,6 +58,9 @@ impl Source {
 }
 
 /// Own all source text used by one frontend invocation.
+///
+/// A snapshot holds the built-in library's sources, and writes only their
+/// names: reading them back takes each text from the library built in.
 #[derive(Clone, Debug, Default)]
 pub struct Sources {
     files: Vec<Source>,
@@ -93,6 +97,26 @@ impl Sources {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.files.is_empty()
+    }
+}
+
+impl Serialize for Sources {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.files.iter().map(|file| &file.name))
+    }
+}
+
+impl<'de> Deserialize<'de> for Sources {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let names = Vec::<PathBuf>::deserialize(deserializer)?;
+        let mut sources = Self::default();
+        for name in names {
+            let text = crate::standard::shown(&name).ok_or_else(|| {
+                serde::de::Error::custom(format!("`{}` is not built in", name.display()))
+            })?;
+            sources.add(name, text);
+        }
+        Ok(sources)
     }
 }
 

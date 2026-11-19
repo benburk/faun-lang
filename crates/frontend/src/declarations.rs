@@ -5,6 +5,7 @@
 //! their methods are ordinary functions with an owner, not nested declarations.
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use serde::{Deserialize, Serialize};
 
 use crate::ast::Span;
 use crate::hir as h;
@@ -26,7 +27,7 @@ pub struct Function {
     pub clauses: Vec<h::Clause>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Data {
     pub module: ModuleId,
     pub span: Span,

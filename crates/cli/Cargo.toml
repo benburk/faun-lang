@@ -27,6 +27,11 @@ tar = { version = "0.4.46", default-features = false }
 ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
 zstd = "0.14.4"
 
+# The build checks the standard library once, and builds in what that
+# leaves.
+[build-dependencies]
+faun-frontend.workspace = true
+
 [dev-dependencies]
 libtest-mimic = "0.8"
 num-bigint = "0.4.8"

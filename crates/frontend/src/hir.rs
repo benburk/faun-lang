@@ -6,6 +6,7 @@
 //! generated occurrences independently of their diagnostic spans.
 
 use rustc_hash::FxHashSet as HashSet;
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 
 use num_bigint::BigUint;
@@ -47,13 +48,13 @@ pub struct DataDecl {
     pub methods: Vec<MethodItem>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WrapperDecl {
     pub constructor: Symbol,
     pub field: Type,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConstructorDecl {
     pub name: Symbol,
     pub fields: Vec<Type>,
@@ -65,7 +66,7 @@ pub enum MethodItem {
     Clause(Clause),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignatureDecl {
     pub span: Span,
     pub name: Symbol,
@@ -79,7 +80,7 @@ pub struct SignatureDecl {
 }
 
 /// One requirement in a `where` clause.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Constraint {
     /// A member every type `variable` stands for must have: a method whose
     /// first parameter is the receiver, or a value, a function of none.
@@ -98,7 +99,7 @@ pub enum Constraint {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Type {
     Named(Symbol, Vec<Self>),
     Variable(Symbol),
@@ -125,7 +126,7 @@ pub struct Clause {
     pub locals: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct LocalId(pub u32);
 
 impl LocalId {
@@ -140,19 +141,21 @@ impl LocalId {
 ///
 /// Spans locate diagnostics; they do not identify nodes.
 /// Cloning an occurrence preserves its identity; new occurrences need fresh IDs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SiteId(pub u32);
 
 /// Allocate identities for written and generated HIR in one program.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Sites {
     next: u32,
     /// The `to_str` calls splices were written as. Each is a splice's text:
     /// the value itself where specialization finds it a `Str`.
+    #[serde(serialize_with = "crate::sorted::set")]
     spliced: HashSet<SiteId>,
     /// The `to_str` calls a failed expectation shows its sides with. Where
     /// a side's type has no `to_str`, that type's name, after a nought
     /// byte, stands in its place rather than the program being refused.
+    #[serde(serialize_with = "crate::sorted::set")]
     shown: HashSet<SiteId>,
 }
 
@@ -207,7 +210,7 @@ pub struct Dual {
 }
 
 /// One end of a range pattern: a magnitude, negated or not.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bound {
     pub magnitude: BigUint,
     pub negative: bool,
@@ -215,7 +218,7 @@ pub struct Bound {
     pub character: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pattern<D = Dual> {
     Wild,
     Bind(LocalId),

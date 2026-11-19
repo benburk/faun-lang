@@ -6,6 +6,7 @@
 //! representation. Canonical identities are discovered once from the loaded
 //! standard package instead of compared by spelling throughout later passes.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use num_bigint::BigUint;
@@ -14,7 +15,7 @@ use super::diagnostic::{Advised, Diagnostic};
 use super::modules::{LoadedProgram, Modules, TypeBinding};
 use super::{Symbol, Symbols};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreludeIds {
     pub bool_: Symbol,
     pub nat: Symbol,
@@ -82,7 +83,7 @@ pub struct PreludeIds {
 
 /// A prelude float a decimal numeral may be: the type, how `digits /
 /// 10^scale` becomes one, and how it is negated.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Float {
     pub ty: Symbol,
     pub name: String,
@@ -93,7 +94,7 @@ pub struct Float {
 /// A prelude word a numeral may be: the type, how a natural becomes one,
 /// and the numerals it takes, which its module declares as
 /// `numerals_below`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Word {
     pub ty: Symbol,
     pub name: String,
@@ -207,7 +208,7 @@ pub enum NumeralType<'a> {
 /// Literal-focused core syntax. It is independent of the surface tree so type
 /// inference can decide a numeral first and Barb lowering can consume the
 /// result without knowing source spellings.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LiteralExpr {
     Natural(BigUint),
     /// A list of bytes known whole, held as its bytes rather than a
