@@ -36,6 +36,26 @@ counted like any value, borrowed by each definition passing it on, copied
 before a write while shared, and freed once nothing still running can read
 it.
 
+## How a cell and an element are laid out
+
+A cell's fields, and a sequence's elements, lie widest first, as Rust
+lays out a struct it may reorder: a word before a number of four bytes,
+before one of two, before a byte, and leaves as wide in the order the
+type names them, a record's fields by their names and a constructor's by
+their places. Every leaf is a power of two no wider than a word, so none
+waits for an offset and there are no bytes between them; only the end is
+rounded up to the widest. One routine lays out every shape, a cell, an
+element or a table in the image, and the list of claims the runtime
+walks when it frees or copies one is read from that layout. What the
+runtime or the system fixes, the headers of cells, buffers and naturals,
+that list itself, the arguments the system hands a program and what a
+target hands its host, is laid out word by word where it is read, and
+never reordered.
+
+An element of a sequence the program builds as it runs may instead pack
+its small numbers by their bits, where that takes fewer bytes; the groups
+of bits and the other leaves then lie widest first in the same way.
+
 ## Where counts are placed
 
 Lowering places every retain and release, after the program's
@@ -218,6 +238,12 @@ updated, which a loop that binds a name again does.
 
 ## History
 
+- **2026-11-18:** a cell's fields and a sequence's elements lie widest
+  first, leaves as wide in the order the type names them, so nothing is
+  padded between them; before, they lay in the order named, each waiting
+  for an offset its width divides, so a byte before a word took eight. The
+  fields of a record are named in the order of their names, not the order
+  the compiler first met them, so the layout is the type's alone.
 - **2026-11-18:** an element of a list built as the program runs lays
   its small numbers out packed by their bits where that takes fewer bytes
   than a byte or more each, so a block's symbols, `[Literal(U8),

@@ -5,18 +5,31 @@
 //! four or eight, and never more than a word: a number of eight bits is a
 //! byte, a pattern of sixty-four is eight, and a cell, a buffer, a natural
 //! or an address is a word. A number that can only be nought takes nothing,
-//! and reads back as nought. Each leaf lies at the next offset its own width
-//! divides, in the order the shape names them, and the whole is as long as
-//! a multiple of its widest leaf: the layout Rust gives a struct it may not
-//! reorder, so an element of a sequence is its size apart from the next.
+//! and reads back as nought. The leaves lie widest first, as Rust lays out a
+//! struct it may reorder, and leaves of one width in the order the shape
+//! names them: a record's fields by their names, as the frontend orders
+//! them, and a constructor's by their places. Every width is a power of two
+//! no wider than a word and lies where it divides, so nothing waits for an
+//! offset and there is no padding between leaves; the whole is as long as a
+//! multiple of its widest leaf, so an element of a sequence is its size apart
+//! from the next. `Packed::of` is the one way a shape is laid out: a cell's
+//! fields, a sequence's elements and a table laid out in the image all are,
+//! so what writes a shape and what reads it agree.
+//!
+//! What is laid out from outside is not a shape and is not laid out here:
+//! the header of a cell, a buffer or a natural, a descriptor below, the
+//! array of arguments the system hands the entry, and what a target hands
+//! its host, such as WASI's `iovec`. Each is a run of words, or bytes, in an
+//! order the runtime or the system fixes, read and written where it lies by
+//! the routines that know it.
 //!
 //! A leaf holding a claim -- a cell, a buffer or a natural -- is what the
 //! runtime gives up when the object holding it goes, and takes again when
 //! it is copied. Where a shape has any, a descriptor in the data says where
-//! they lie: a word counting them, then each one's offset and kind, a word
-//! each. An object points at its shape's descriptor, or holds nought where
-//! nothing in it holds a claim, so the runtime needs no per-shape code to
-//! walk what any object holds.
+//! they lie, read from the layout itself: a word counting them, then each
+//! one's offset and kind, a word each. An object points at its shape's
+//! descriptor, or holds nought where nothing in it holds a claim, so the
+//! runtime needs no per-shape code to walk what any object holds.
 
 use super::{Binary, Builder, Class, Direction, ValueId, Width};
 
@@ -136,14 +149,16 @@ impl Packed {
         }
     }
 
-    /// Each leaf in bytes of its own, in the order the shape names them.
+    /// Each leaf in bytes of its own, widest first, and in the order the
+    /// shape names them where they are as wide.
     pub(super) fn plain(classes: &[Class], word_bits: u16) -> Self {
-        let items = classes
+        let mut items: Vec<_> = classes
             .iter()
             .enumerate()
             .map(|(index, &class)| (bytes_of(class, word_bits), vec![(index, 0)]))
             .filter(|&(bytes, _)| bytes > 0)
             .collect();
+        widest_first(&mut items);
         Self::laid(classes, items, word_bits)
     }
 
@@ -175,13 +190,14 @@ impl Packed {
                 .map(|(index, &class)| (bytes_of(class, word_bits), vec![(index, 0)]))
                 .filter(|&(bytes, _)| bytes > 0),
         );
-        items.sort_by_key(|(bytes, members)| (std::cmp::Reverse(*bytes), members[0].0));
+        widest_first(&mut items);
         Self::laid(classes, items, word_bits)
     }
 
     /// `items` laid out one after another, in order, each at the next
     /// offset its bytes divide: each item's bytes, and the leaves sharing
-    /// them with where each lies among them.
+    /// them with where each lies among them. Laid widest first, each is
+    /// where the last ended.
     fn laid(classes: &[Class], items: Vec<(u64, Vec<(usize, u16)>)>, word_bits: u16) -> Self {
         let mut leaves = vec![Leaf::NOTHING; classes.len()];
         let mut units = Vec::with_capacity(items.len());
@@ -254,6 +270,12 @@ impl Packed {
         }
         laid
     }
+}
+
+/// `items`, each some bytes and the leaves sharing them, widest first, and
+/// where two are as wide, the one holding the leaf the shape names first.
+fn widest_first(items: &mut [(u64, Vec<(usize, u16)>)]) {
+    items.sort_by_key(|(bytes, members)| (std::cmp::Reverse(*bytes), members[0].0));
 }
 
 /// The numbers narrower than a word, widest first, each in the first group
@@ -361,15 +383,72 @@ const fn width(bytes: u64, word_bits: u16) -> Width {
 mod tests {
     use super::*;
 
-    /// A byte, a word and a byte, each in bytes of its own, as Rust lays
-    /// out a `repr(C)` struct: the word waits for the next multiple of
-    /// eight, and the whole rounds up.
+    /// A byte, a word and a bit, each in bytes of its own, as Rust lays
+    /// out a struct it may reorder: the word first, then the two bytes
+    /// after it, so nothing waits for an offset and the whole is sixteen
+    /// bytes, where in the order named it would be twenty-four.
     #[test]
-    fn each_leaf_lies_where_its_width_divides() {
+    fn the_widest_leaf_lies_first() {
         let packed = Packed::plain(&[Class::fixed(8), Class::Word, Class::fixed(1)], 64);
         let offsets: Vec<_> = packed.leaves.iter().map(|leaf| leaf.offset).collect();
-        assert_eq!(offsets, [0, 8, 16]);
-        assert_eq!((packed.size, packed.align), (24, 8));
+        assert_eq!(offsets, [8, 0, 9]);
+        assert_eq!((packed.size, packed.align), (16, 8));
+    }
+
+    /// Leaves of one width lie in the order the shape names them, so the
+    /// layout is the shape's alone.
+    #[test]
+    fn leaves_as_wide_lie_in_the_order_named() {
+        let packed = Packed::plain(
+            &[
+                Class::fixed(8),
+                Class::fixed(16),
+                Class::fixed(8),
+                Class::fixed(16),
+            ],
+            64,
+        );
+        let offsets: Vec<_> = packed.leaves.iter().map(|leaf| leaf.offset).collect();
+        assert_eq!(offsets, [4, 0, 5, 2]);
+        assert_eq!(packed.size, 6);
+    }
+
+    /// Whatever the shape, its leaves lie end to end with no bytes between
+    /// them, and only the end is rounded up, to its widest leaf.
+    #[test]
+    fn no_shape_is_padded_between_its_leaves() {
+        let classes = [
+            Class::fixed(0),
+            Class::fixed(1),
+            Class::fixed(8),
+            Class::fixed(12),
+            Class::fixed(32),
+            Class::Word,
+            Class::Cell,
+            Class::Natural,
+        ];
+        for word_bits in [16, 32, 64] {
+            for a in classes {
+                for b in classes {
+                    for c in classes {
+                        let shape = [a, b, c, Class::fixed(8)];
+                        let packed = Packed::plain(&shape, word_bits);
+                        let mut ends: Vec<_> = packed
+                            .units
+                            .iter()
+                            .map(|unit| (unit.offset, u64::from(unit.width.bytes(word_bits))))
+                            .collect();
+                        ends.sort_unstable();
+                        let mut at = 0;
+                        for (offset, bytes) in ends {
+                            assert_eq!(offset, at, "{shape:?} on {word_bits} bits");
+                            at += bytes;
+                        }
+                        assert_eq!(packed.size, at.next_multiple_of(packed.align));
+                    }
+                }
+            }
+        }
     }
 
     /// Bytes are bytes: a list of them is a run of them.
@@ -405,30 +484,35 @@ mod tests {
     #[test]
     fn a_descriptor_says_where_the_claims_are() {
         assert_eq!(Packed::of(&[Class::fixed(8)], 16).descriptor(16), None);
+        // The cell, a word, lies before the byte, and the descriptor says so.
         let packed = Packed::of(&[Class::fixed(8), Class::Cell], 16);
-        assert_eq!(packed.descriptor(16), Some(vec![1, 0, 2, 0, 2, 0]));
+        assert_eq!(packed.descriptor(16), Some(vec![1, 0, 0, 0, 2, 0]));
+        let packed = Packed::of(&[Class::Cell, Class::fixed(16), Class::Buffer], 64);
+        let mut expected = Vec::new();
+        for word in [2u64, 0, CELL, 8, BUFFER] {
+            expected.extend_from_slice(&word.to_le_bytes());
+        }
+        assert_eq!(packed.descriptor(64), Some(expected));
     }
 
-    /// The same packed by bits: the byte and the bit share two bytes after
-    /// the word, so the whole is sixteen bytes rather than twenty-four.
+    /// Two numbers of four bits each take a byte of their own laid out
+    /// whole, and share one packed by their bits. Where packing saves
+    /// nothing, as for a byte, a word and a bit, which lie in sixteen bytes
+    /// either way, the leaves keep bytes of their own.
     #[test]
     fn small_numbers_share_bytes_where_that_is_shorter() {
-        let packed = Packed::of(&[Class::fixed(8), Class::Word, Class::fixed(1)], 64);
-        assert_eq!((packed.size, packed.align), (16, 8));
-        assert_eq!(packed.leaves[1].offset, 0);
-        // The byte begins its two bytes, so it is read by itself.
-        let byte = packed.leaves[0];
-        assert_eq!(
-            (byte.offset, byte.width, byte.shift, byte.mask),
-            (8, Some(Width::Byte), 0, None)
-        );
-        // The bit begins the next byte, which nothing else shares, so it is
-        // read by itself too.
-        let bit = packed.leaves[2];
-        assert_eq!(
-            (bit.offset, bit.width, bit.shift, bit.mask),
-            (9, Some(Width::Byte), 0, None)
-        );
+        let nibbles = [Class::fixed(4), Class::fixed(4)];
+        assert_eq!(Packed::plain(&nibbles, 64).size, 2);
+        let packed = Packed::of(&nibbles, 64);
+        assert_eq!((packed.size, packed.units.len()), (1, 1));
+        let reads: Vec<_> = packed
+            .leaves
+            .iter()
+            .map(|leaf| (leaf.offset, leaf.shift, leaf.mask))
+            .collect();
+        assert_eq!(reads, [(0, 0, Some(4)), (0, 4, None)]);
+        let mixed = [Class::fixed(8), Class::Word, Class::fixed(1)];
+        assert_eq!(Packed::of(&mixed, 64), Packed::plain(&mixed, 64));
     }
 
     /// A tag, a length below 259 and a distance up to 32768, as a block's
