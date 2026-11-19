@@ -253,11 +253,15 @@ alone. Half a word, so that two numbers counted up multiplied still fit a
 word: on x86-64 at most 2^32 - 1, on wasm32 2^16 - 1, where a wider bound
 leaves products past 32 bits that wasm32 works out in halves. A walk
 keeping a sequence it reads counts positions in it, which its length
-bounds already, and is not copied. The 6502 asks nothing: its narrow
-arithmetic is written out where a natural's is a call, so a copy costs a
-small program a tenth of its size, more than its room allows.
+bounds already, and is not copied. On the 6502 half a word is 255, and
+narrow arithmetic is written out where a natural's is a call, so a copy
+costs a small program as much as a tenth of its size: there only a walk
+of numbers alone is copied, whose numbers are otherwise naturals of any
+size, not one holding a list, whose length bounds what it counts already.
 
 The walk family's fold, sum and pattern, one fused walk each, ran 19.0
 million instructions on x86-64 at 100,000 and run 4.7; 6.85 million fuel
-on wasm32 at 30,000 and run 2.05. The tag family runs 3 to 15 times
-faster, count about 4 and state about 3.
+on wasm32 at 30,000 and run 2.05; 9.05 million cycles on the 6502 at 200
+and run 2.86, where every product past 2^15 was a natural on the heap.
+The tag family runs 2 to 15 times faster, count about 4 and state about
+3.

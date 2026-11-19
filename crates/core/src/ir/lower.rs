@@ -111,28 +111,30 @@ fn lower_with(
     barb::validate(program)?;
     // A counted walk handed numbers the target holds in half a word runs
     // on a copy whose numbers analysis can then bound.
-    let split = counted_most(routines).and_then(|most| barb::counted(program, most));
+    let split =
+        counted_most(routines).and_then(|(most, lists)| barb::counted(program, most, lists));
     let program = split.as_ref().unwrap_or(program);
     let facts = &program.assuming(&assumed(program, routines));
     lowered(program, routines, facts, wanted)
 }
 
 /// The most a counted walk is handed for its copy to run with narrow
-/// numbers ([`barb::counted`]): a list's length, and no more than half a
-/// word holds, so that two numbers it counts up multiplied still fit a
-/// word. Where a target names no word, or its word is sixteen bits,
-/// nothing: a 16-bit target runs short of room before it runs short of
-/// time, and its narrow arithmetic is written out where a natural's is a
-/// call, so a copy of a walk costs it a tenth of a small program.
-fn counted_most(routines: &Routines) -> Option<u64> {
-    let word = routines.word().filter(|&word| word >= 32)?;
+/// numbers ([`barb::counted`]), and whether a walk holding a list is
+/// copied: a list's length, and no more than half a word holds, so that two
+/// numbers it counts up multiplied still fit a word. A 16-bit target runs
+/// short of room before it runs short of time, and its narrow arithmetic is
+/// written out where a natural's is a call, so a copy costs a small
+/// program there as much as a tenth of its size: it copies only a walk of
+/// numbers alone, whose numbers are otherwise naturals of any size, and not
+/// one holding a list, whose length bounds what it counts already.
+fn counted_most(routines: &Routines) -> Option<(u64, bool)> {
+    let word = routines.word()?;
     let half = (1u64 << (word / 2)) - 1;
-    Some(
-        routines
-            .length()
-            .high
-            .map_or(half, |length| length.min(half)),
-    )
+    let most = routines
+        .length()
+        .high
+        .map_or(half, |length| length.min(half));
+    Some((most, word >= 32))
 }
 
 /// [`lower_with`], given the program's facts.
