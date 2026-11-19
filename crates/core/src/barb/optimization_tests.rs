@@ -1470,6 +1470,115 @@ fn a_list_built_and_walked_once_is_never_built() {
     assert_eq!(p.name(p.function(chained).name), "bump+running+index_over");
 }
 
+/// `below`, named `small`: the elements below the bound, pushed in front and answered
+/// reversed, a filter built back to front, whose step that keeps nothing
+/// comes second; or, `appended`, the same appending and still answered
+/// reversed, which reverses what it keeps.
+fn below(p: &mut Program, w: &Walks, appended: bool) -> FnId {
+    let (less_than, bool_, true_) = (w.less_than, w.bool_, w.true_);
+    let (list, nil, cons, reverse) = (w.list, w.nil, w.cons, w.reverse);
+    let prepend = super::sequence::write_prepend(p, list, reverse);
+    let append = super::sequence::write_append(p, list, w.nat, prepend);
+    let name = if appended { "appended" } else { "small" };
+    let walk = p.declare(name, &[list, w.nat, list], list);
+    p.define(walk, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                let empty = b.con(nil, &[]);
+                b.call(reverse, &[args[2], empty])
+            } else {
+                let below = b.call(less_than, &[fields[0], args[1]]);
+                b.match_(below, bool_, |b, ctor, _| {
+                    if ctor == true_ {
+                        let more = if appended {
+                            b.call(append, &[args[2], fields[0]])
+                        } else {
+                            b.con(cons, &[fields[0], args[2]])
+                        };
+                        b.call(walk, &[fields[1], args[1], more])
+                    } else {
+                        b.call(walk, &[fields[1], args[1], args[2]])
+                    }
+                })
+            }
+        })
+    });
+    walk
+}
+
+/// A filter's walk, which goes on without pushing where it keeps nothing,
+/// is a producer as a map's is: a list bumped, filtered either way round,
+/// then summed or searched, is one walk; and a walk appending but answering
+/// reversed, which a consumer would read the other way round, is built
+/// before it is searched.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "four chains built, fused and compared on several lists"
+)]
+fn a_filtered_list_walked_once_is_never_built() {
+    let (mut p, w) = walks();
+    let kept = kept(&mut p, &w);
+    let small = below(&mut p, &w, false);
+    let appended = below(&mut p, &w, true);
+    let three = p.intern_number(w.nat, 3).unwrap();
+    let five = p.intern_number(w.nat, 5).unwrap();
+    let chain = |p: &mut Program, name: &str, filter: FnId, search: bool| {
+        let id = p.declare(name, &[w.list], w.nat);
+        p.define(id, |b, args| {
+            let empty = b.con(w.nil, &[]);
+            let bumped = b.call(w.bump, &[args[0], empty]);
+            let three = b.known(three);
+            let none = b.con(w.nil, &[]);
+            let filtered = b.call(filter, &[bumped, three, none]);
+            let zero = b.con(w.zero, &[]);
+            if search {
+                let five = b.known(five);
+                b.call(w.index_over, &[filtered, five, zero])
+            } else {
+                b.call(w.total, &[filtered, zero])
+            }
+        });
+        id
+    };
+    let summed = chain(&mut p, "summed", kept, false);
+    let found = chain(&mut p, "found", kept, true);
+    let backward = chain(&mut p, "backward", small, true);
+    let reversed = chain(&mut p, "reversed", appended, true);
+    super::fixture::enter(&mut p, &[summed, found, backward, reversed]);
+    validate(&p).unwrap();
+    let original = p.clone();
+    super::fuse::fuse(&mut p);
+    validate(&p).unwrap();
+    for (id, walk) in [
+        (summed, Some("bump+kept+total")),
+        (found, Some("bump+kept+index_over")),
+        (backward, Some("bump+small+index_over")),
+        (reversed, None),
+    ] {
+        let called = callees(&p, id);
+        let names: Vec<_> = called
+            .iter()
+            .map(|&f| p.name(p.function(f).name).to_owned())
+            .collect();
+        match walk {
+            Some(walk) => assert_eq!(names, [walk]),
+            None => assert!(called.contains(&w.index_over), "{names:?}"),
+        }
+        for values in [
+            &[][..],
+            &[0],
+            &[1, 2, 3],
+            &[4, 0, 9, 1],
+            &[2, 7, 1, 8, 2, 8, 6],
+        ] {
+            let args = vec![w.list_of(&original, values)];
+            let expected = run(&original, id, args.clone(), &mut vec![]);
+            assert_eq!(run(&p, id, args, &mut vec![]), expected, "{values:?}");
+        }
+    }
+}
+
 /// A list read twice is built once and read twice: fusing it into one
 /// reader would leave the other nothing to read.
 #[test]
