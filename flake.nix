@@ -29,6 +29,10 @@
             version = workspace.workspace.package.version;
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
+            # Each test in a process of its own, as `just test` and CI run
+            # them: several tests build into a directory named by the
+            # process, which side by side in one would remove each other's.
+            useNextest = true;
             meta = {
               mainProgram = "faun";
             };
