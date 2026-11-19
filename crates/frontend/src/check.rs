@@ -44,6 +44,7 @@
 #![allow(clippy::too_many_lines)]
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
 use super::blessed::{self, LiteralExpr, PreludeIds};
@@ -53,13 +54,13 @@ use super::hir as h;
 use super::{ModuleId, Symbol, Symbols};
 use crate::declarations as n;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TypeVariable {
     index: u32,
     rigid: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InferredType {
     Variable(TypeVariable),
     Named(Symbol, Vec<Self>),
@@ -73,7 +74,7 @@ pub enum InferredType {
     Tuple(Vec<Self>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InferredScheme {
     pub variables: Vec<TypeVariable>,
     pub ty: InferredType,
@@ -84,7 +85,7 @@ pub struct InferredScheme {
 /// A `where` bound, written or inferred: every type `owner` stands for has
 /// `member`, at `ty`. A method's type takes the owner first; a value's, as
 /// `a.zero : a` is, is a function of nothing.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InferredBound {
     pub owner: InferredType,
     pub member: Symbol,
@@ -179,17 +180,26 @@ pub fn type_check(
 /// its signature gives its variables, each constructor's and field's
 /// scheme, and the methods each spelling names. Inference's variables are
 /// numbered on from those its schemes hold.
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Environment {
     infer: Infer,
+    #[serde(serialize_with = "crate::sorted::map")]
     values: HashMap<Symbol, Scheme>,
+    #[serde(serialize_with = "crate::sorted::set")]
     open: HashSet<Symbol>,
+    #[serde(serialize_with = "crate::sorted::map")]
     constructors: HashMap<Symbol, Scheme>,
+    #[serde(serialize_with = "crate::sorted::map")]
     methods: HashMap<Symbol, Vec<MethodImpl>>,
+    #[serde(serialize_with = "crate::sorted::map")]
     fields: HashMap<Symbol, Vec<FieldImpl>>,
+    #[serde(serialize_with = "crate::sorted::map")]
     bounds: HashMap<Symbol, Vec<Bound>>,
+    #[serde(serialize_with = "crate::sorted::maps")]
     variable_names: HashMap<Symbol, HashMap<Symbol, u32>>,
+    #[serde(serialize_with = "crate::sorted::map")]
     partial: HashMap<Symbol, h::SignatureDecl>,
+    #[serde(serialize_with = "crate::sorted::map")]
     defined: HashMap<Symbol, (ModuleId, super::ast::Span)>,
 }
 
@@ -202,6 +212,27 @@ impl std::fmt::Debug for Environment {
             .field("methods", &self.methods.len())
             .field("fields", &self.fields.len())
             .finish_non_exhaustive()
+    }
+}
+
+impl Environment {
+    /// Every type it holds resolved, as a snapshot writes it: what
+    /// inference has bound is then written into the types themselves.
+    pub(crate) fn close(&mut self) {
+        let infer = &self.infer;
+        let close = |scheme: &mut Scheme| scheme.ty = infer.resolve(&scheme.ty);
+        self.values.values_mut().for_each(close);
+        self.constructors.values_mut().for_each(close);
+        for method in self.methods.values_mut().flatten() {
+            close(&mut method.scheme);
+        }
+        for field in self.fields.values_mut().flatten() {
+            close(&mut field.scheme);
+        }
+        for bound in self.bounds.values_mut().flatten() {
+            bound.owner = infer.resolve(&bound.owner);
+            bound.ty = infer.resolve(&bound.ty);
+        }
     }
 }
 
@@ -258,7 +289,7 @@ struct UnsignedMethod {
     owner: Symbol,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct MethodImpl {
     owner: Symbol,
     target: Symbol,
@@ -270,7 +301,7 @@ struct MethodImpl {
 
 /// A `where` bound over a definition's type variables; see
 /// [`InferredBound`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Bound {
     owner: Ty,
     member: Symbol,
@@ -293,7 +324,7 @@ struct Bound {
 /// from a decimal, or to be negated. A numeral is syntax blessed to call
 /// those methods, so what a call is for is recorded where it is made,
 /// never read back off its name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Asked {
     Natural,
     Decimal,
@@ -326,7 +357,7 @@ enum Finish<'t> {
     Unsigned(&'t [Ty], &'t HashSet<Symbol>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct FieldImpl {
     owner: Symbol,
     scheme: Scheme,

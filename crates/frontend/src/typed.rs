@@ -5,7 +5,7 @@
 //! to interpret an expression. Patterns cannot contain an ambiguous constructor.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::convert::Infallible;
+use serde::{Deserialize, Serialize};
 
 use crate::ast::Span;
 use crate::blessed::LiteralExpr;
@@ -13,14 +13,16 @@ use crate::check::{InferredBound, InferredScheme, InferredType};
 use crate::hir::{self as h, LocalId, SiteId};
 use crate::{ModuleId, Symbol};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Program {
     pub functions: Vec<Function>,
+    #[serde(serialize_with = "crate::sorted::map")]
     pub data: HashMap<Symbol, crate::declarations::Data>,
+    #[serde(serialize_with = "crate::sorted::map")]
     pub members: HashMap<(Symbol, Symbol), Symbol>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Function {
     pub module: ModuleId,
     pub span: Span,
@@ -29,13 +31,13 @@ pub struct Function {
     pub definition: Definition,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Definition {
     External(Symbol),
     Body(Vec<Clause>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Clause {
     pub span: Span,
     pub signature: Signature,
@@ -53,23 +55,28 @@ impl Clause {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signature {
     pub parameters: Vec<InferredType>,
     pub result: InferredType,
 }
 
-pub type Pattern = h::Pattern<Infallible>;
+pub type Pattern = h::Pattern<Decided>;
+
+/// What a typed pattern holds of a word a declaration claims: nothing,
+/// since checking decides each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Decided {}
 
 /// One arm; see [`crate::hir::Arm`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Arm {
     pub pattern: Pattern,
     pub guard: Option<Expr>,
     pub body: Expr,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Body {
     pub bindings: Vec<Binding>,
     pub result: Expr,
@@ -83,13 +90,13 @@ impl Body {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Binding {
     pub pattern: Pattern,
     pub value: Expr,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Expr {
     pub site: SiteId,
     pub span: Span,
@@ -163,7 +170,7 @@ impl Expr {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Target {
     Direct(Symbol),
     /// Through a `where` bound, met at each specialization by `owner`'s
@@ -176,7 +183,7 @@ pub enum Target {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Numeral {
     pub magnitude: num_bigint::BigUint,
     pub negative: bool,
@@ -185,7 +192,7 @@ pub struct Numeral {
     pub character: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ExprKind {
     Local(LocalId),
     Function(Symbol),

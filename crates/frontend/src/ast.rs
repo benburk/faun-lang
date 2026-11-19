@@ -5,9 +5,12 @@
 //! interned symbols; the parser does not allocate a string for every name.
 
 use super::source::SourceId;
+use serde::{Deserialize, Serialize};
 
 /// A half-open byte range in one source file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct Span {
     pub start: u32,
     pub end: u32,
@@ -58,9 +61,12 @@ impl Name {
 }
 
 /// A parsed source file, before name resolution or type checking.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Module {
     pub source: SourceId,
+    /// Not written into a snapshot, which holds checked modules, whose
+    /// syntax is dropped.
+    #[serde(skip)]
     pub items: Vec<Item>,
 }
 

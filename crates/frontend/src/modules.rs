@@ -9,6 +9,7 @@
 #![allow(clippy::too_many_lines, clippy::useless_let_if_seq)]
 
 use rustc_hash::FxHashMap as HashMap;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ use super::diagnostic::Diagnostic;
 use super::packages::{PackageUrl, Packages};
 use super::{ParseError, Source, SourceId, Sources, Symbol, Symbols, parse_in};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ModuleId(u32);
 
 impl ModuleId {
@@ -30,28 +31,33 @@ impl ModuleId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeBinding {
     pub canonical: Symbol,
+    #[serde(serialize_with = "crate::sorted::map")]
     pub constructors: HashMap<Symbol, Symbol>,
     /// A sum's constructors in the order declared, each with how many
     /// fields it carries: what its name stands for as a constructor of its
     /// own. Empty for anything but a sum, and wherever its constructors are
     /// not visible.
     pub variants: Vec<(Symbol, usize)>,
+    #[serde(serialize_with = "crate::sorted::map")]
     pub methods: HashMap<Symbol, Symbol>,
     /// Whether the name is a transparent alias, which owns nothing.
     pub alias: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Interface {
+    #[serde(serialize_with = "crate::sorted::map")]
     pub values: HashMap<Symbol, Symbol>,
+    #[serde(serialize_with = "crate::sorted::map")]
     pub types: HashMap<Symbol, TypeBinding>,
     /// Each visible constructor word and every declared constructor it may
     /// name. Types are each their own constructor namespace, so a word may
     /// have several claimants; which one a use means is its position's to
     /// decide, when it is checked.
+    #[serde(serialize_with = "crate::sorted::map")]
     pub constructors: HashMap<Symbol, Vec<Symbol>>,
 }
 
@@ -88,7 +94,7 @@ pub(crate) struct Clash {
     pub name: Symbol,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedModule {
     pub id: ModuleId,
     pub path: PathBuf,
@@ -226,7 +232,7 @@ enum Loading<'a> {
 
 /// Loading under way: the standard package first, alone, and then the
 /// host and the entry's package, on from where it stopped.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Loader {
     pub(crate) sources: Sources,
     pub(crate) symbols: Symbols,
@@ -234,6 +240,7 @@ pub(crate) struct Loader {
     pending: Vec<LoadedModule>,
     /// Which package each module belongs to; see [`Root`].
     packages_of: Vec<usize>,
+    #[serde(serialize_with = "crate::sorted::map")]
     loaded: HashMap<PathBuf, ModuleId>,
     visiting: Vec<PathBuf>,
     /// The prelude's exports, once it has loaded; its own modules see none.
@@ -243,7 +250,9 @@ pub(crate) struct Loader {
     standard_root: Option<PathBuf>,
     /// How many packages have been given a root.
     packages: usize,
-    /// Which package each URL dependency is read from.
+    /// Which package each URL dependency is read from: given when the
+    /// rest is loaded, so never in a snapshot.
+    #[serde(skip)]
     fetched: Packages,
     /// The standard package's root module, once it has loaded, and the
     /// path it was loaded by, which the host's package is rooted beside.
