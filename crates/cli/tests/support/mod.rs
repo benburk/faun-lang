@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use faun_core::ir::evaluate::{self, Error, Host, HostResult, Memory};
 use faun_core::targets::Target;
@@ -34,10 +35,15 @@ pub(crate) struct Package(PathBuf);
 
 impl Package {
     pub(crate) fn new(name: &str, source: &str) -> Self {
+        // Numbered, since tests run side by side in one process, as
+        // `cargo test` runs them, may each write a package of one name, and
+        // the first done would remove the other's.
+        static MADE: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "faun-{}-{}",
+            "faun-{}-{}-{}",
             name.replace(|c: char| !c.is_ascii_alphanumeric(), "-"),
-            std::process::id()
+            std::process::id(),
+            MADE.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&directory).unwrap();
         // The first line starts after the quote; the rest are indented as
