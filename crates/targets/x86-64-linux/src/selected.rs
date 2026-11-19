@@ -22,6 +22,19 @@ pub(crate) use faun_core::codegen::registers::{BlockId, InstId, Role, Timing, VR
 pub(crate) type Constraint = faun_core::codegen::registers::Constraint<Reg>;
 pub(crate) type OperandSpec = faun_core::codegen::registers::OperandSpec<Reg>;
 
+/// The width a comparison or a monus of `left` and `right` works at: the
+/// wider of the two. The IR compares two numbers held at different classes
+/// as numbers, so the narrower one, zero above its width in its register,
+/// is read at the wider one's; read at the narrower one's instead, only the
+/// low bits of the wider would be compared, and a value nought or below
+/// 2^32 would be equal to one whose low bits are those.
+fn compared_bits(source: &Program, left: ValueId, right: ValueId) -> u16 {
+    source
+        .class(left)
+        .bits(WORD_BITS)
+        .max(source.class(right).bits(WORD_BITS))
+}
+
 /// A value's virtual register is its number.
 fn vreg(value: ValueId) -> VReg {
     VReg::at(value.index())
@@ -913,11 +926,15 @@ impl Selected {
         }
         let represented = match inst.opcode {
             // A monus works at its operands' width, where the borrow is.
-            Opcode::Equal | Opcode::Below | Opcode::Monus => self
-                .operands
-                .get(inst.operands.range().start)
-                .map(|&value| self.width(value))
-                .transpose()?,
+            // A comparison and a monus work at the wider operand's width.
+            Opcode::Equal | Opcode::Below | Opcode::Monus => {
+                let mut widest = None;
+                for &value in &self.operands[inst.operands.range()] {
+                    let width = self.width(value)?;
+                    widest = Some(widest.map_or(width, |w: u16| w.max(width)));
+                }
+                widest
+            }
             op if op.in_place()
                 || matches!(op, Opcode::Multiply | Opcode::Divide | Opcode::Modulo) =>
             {
@@ -1649,19 +1666,22 @@ impl Selector<'_> {
                         Binary::ShiftUp => Opcode::ShiftUp,
                         Binary::ShiftDown => Opcode::ShiftDown,
                     };
-                    // A monus answers no more than its left operand, and is
-                    // worked out as wide as that is.
-                    let width = if opcode == Opcode::Monus {
-                        left
+                    // A monus answers no more than its left operand, but
+                    // borrows where its right is the greater, so it is
+                    // worked out as wide as the wider of the two: at the
+                    // left's width alone it would take away only the low
+                    // bits of a wider right.
+                    let bits = if opcode == Opcode::Monus {
+                        compared_bits(source, left, right)
                     } else {
-                        results[0]
+                        source.class(results[0]).bits(WORD_BITS)
                     };
                     self.emit(
                         block,
                         opcode,
                         results.first().copied(),
                         &[left, right],
-                        Immediate::Bits(source.class(width).bits(WORD_BITS)),
+                        Immediate::Bits(bits),
                     );
                 }
                 SourceOp::Compare {
@@ -1678,7 +1698,7 @@ impl Selector<'_> {
                         opcode,
                         results.first().copied(),
                         &[left, right],
-                        Immediate::Bits(source.class(left).bits(WORD_BITS)),
+                        Immediate::Bits(compared_bits(source, left, right)),
                     );
                 }
                 SourceOp::Load {

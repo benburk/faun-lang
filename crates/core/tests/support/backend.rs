@@ -1036,6 +1036,46 @@ fn a_shift_down_read_narrow_keeps_what_it_moves_down() {
     assert_eq!(status(&prepared), 2);
 }
 
+/// A match on a mantissa a float routine took apart compares it with
+/// nought, which the tier above holds in no bits, and the mantissa in
+/// fifty-three: the comparison reads both at the wider width. Read at the
+/// narrower one's, `2^52 + 2^51` was nought, whose low thirty-two bits it
+/// shares, and the sum took the arm a zero takes: the x86 backends
+/// compiled mandelbrot's software floats wrong this way.
+#[test]
+fn a_wide_number_is_not_nought_where_its_low_bits_are() {
+    let program = read(
+        "import std.host {Host}
+
+         Unpacked : [Inf, Finite(Nat, Nat)]
+
+         classify : (Nat, Nat) -> Unpacked
+         classify(0, fraction) -> Finite(fraction, 1)
+         classify(field, fraction) -> Finite(fraction + 0x10000000000000, field)
+
+         add : Unpacked -> Nat
+         add(Finite(mantissa, _)) -> aligned(mantissa)
+         add(_) -> 3
+
+         aligned : Nat -> Nat
+         aligned(m) if 0 > m -> 1
+         aligned(m) if m > 0 -> m + 2
+         aligned(_) -> 0
+
+         main! : Host -> []
+         main!(host) -> (
+           bits = 0x4008000000000000 + host.args.len() - 1
+           field = bits / 0x10000000000000 % 2048
+           host.exit!(U8.of_nat(add(classify(field, bits % 0x10000000000000)) % 251))
+         )",
+    )
+    .expect("a program");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(status(&prepared), 8);
+}
+
 /// A list is written where it lies where nothing else holds it, and copied
 /// first where something does, which then reads what it held: numbers and
 /// strings, each replaced in a list threaded through a fold and in one held
