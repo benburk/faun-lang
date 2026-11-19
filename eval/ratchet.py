@@ -1237,18 +1237,28 @@ def evaluate(args):
         for metric in METRICS
     }
     print(json.dumps(summary, indent=1))
-    row = log_row(summary, args.log or "IDEA")
+    row = log_row(summary, idea_of(candidate, args.idea))
     if args.log:
         with (REPO / "ratchet/log.tsv").open("a") as file:
             file.write(row + "\n")
         print("logged to ratchet/log.tsv", file=sys.stderr)
     else:
-        print("log row, for --log or to paste:", row, sep="\n", file=sys.stderr)
+        print("log row, for --log:", row, sep="\n", file=sys.stderr)
     return verdict == "quiet" or (verdict == "accept" and not caveats)
 
 
 # The columns of ratchet/log.tsv, as RATCHET.md states them.
 LOG = ("series", "idea", "score", *METRICS, "worst", "verdict", "report")
+
+
+def idea_of(side, given=None):
+    """A row's idea: the one given, or the subject of the commit measured,
+    which describes the change. Uncommitted changes on top of it are marked,
+    since the subject does not describe them."""
+    if given:
+        return given
+    subject = git("log", "-1", "--format=%s", side.commit)
+    return f"{subject} (with uncommitted changes)" if side.dirty else subject
 
 
 def log_row(summary, idea):
@@ -1267,7 +1277,7 @@ def log_row(summary, idea):
     fields["report"] = Path(summary["report"]).name
     for column in ("score", *METRICS, "worst"):
         fields[column] = f"{summary[column]:.5f}"
-    return "\t".join(fields[column].replace("\t", " ") for column in LOG)
+    return "\t".join(" ".join(fields[column].split()) for column in LOG)
 
 
 def parser():
@@ -1294,8 +1304,12 @@ def parser():
         )
         s.add_argument(
             "--log",
-            metavar="IDEA",
-            help="append the run's row to ratchet/log.tsv with this idea",
+            action="store_true",
+            help="append the run's row to ratchet/log.tsv",
+        )
+        s.add_argument(
+            "--idea",
+            help="the row's idea; default the measured commit's subject",
         )
         s.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
         s.add_argument("--seed", type=int, help="default a fresh one")
@@ -1316,7 +1330,30 @@ def parser():
     return p
 
 
-def pin(unpinned):
+def positionals(p, argv):
+    """Where argv's positional arguments are, the subcommand first: every
+    argument that is neither an option nor an option's value."""
+    takes = {
+        option
+        for command in p._subparsers._group_actions[0].choices.values()
+        for action in command._actions
+        if action.nargs != 0
+        for option in action.option_strings
+    }
+    places, value, ended = [], False, False
+    for at, arg in enumerate(argv):
+        if value:
+            value = False
+        elif ended or not arg.startswith("-"):
+            places.append(at)
+        elif arg == "--":
+            ended = True
+        else:
+            value = "=" not in arg and arg in takes
+    return places
+
+
+def pin(args):
     """Re-run from a clean export of the approved evaluator, the trunk's.
 
     The working tree may be a candidate, and a candidate must not run its own
@@ -1324,7 +1361,7 @@ def pin(unpinned):
     scoring is a pull request of its own, and starts a new series in
     ratchet/log.tsv once it is merged.
     """
-    if os.environ.get("RATCHET_PINNED") or unpinned:
+    if os.environ.get("RATCHET_PINNED") or args.unpinned:
         return
     held = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", f"{TRUNK}:eval/ratchet.py"],
@@ -1340,9 +1377,15 @@ def pin(unpinned):
     tree = CACHE / "trees" / commit
     if not tree.exists():
         export(commit, tree)
-    # Keep the subcommand: `eval` is also the name of this script's directory.
-    command, *rest = sys.argv[1:]
-    argv = [command, *(str(Path(a).resolve()) if Path(a).is_dir() else a for a in rest)]
+    # Only the candidate and the incumbent may name checkouts; any other
+    # argument, such as an idea of any length, is passed on as it is. Skip the
+    # subcommand: `eval` is also the name of this script's directory.
+    argv = sys.argv[1:]
+    sides = [getattr(args, "candidate", None), args.incumbent]
+    places = positionals(parser(), argv)
+    for at in places[1:]:
+        if argv[at] in sides and Path(argv[at]).is_dir():
+            argv[at] = str(Path(argv[at]).resolve())
     env = os.environ | {
         "RATCHET_PINNED": "1",
         "RATCHET_REPO": str(REPO.resolve()),
@@ -1383,5 +1426,5 @@ if __name__ == "__main__":
         sys.exit("the evaluator measures on x86-64 Linux")
     if "WASI_CC" not in os.environ or "SIM65" not in os.environ:
         sys.exit("run in the evaluator's shell: nix develop .#eval, or just eval")
-    pin(args.unpinned)
+    pin(args)
     sys.exit(0 if evaluate(args) else 1)

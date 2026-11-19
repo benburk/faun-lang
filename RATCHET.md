@@ -59,9 +59,9 @@ Every run writes a new JSON report to `ratchet/reports/` in the main checkout (g
 
 1. **Start.** Work on a branch `ratchet/<goal>` from `origin/main`, committing each candidate there. Push or merge only when I ask. Read `ratchet/log.tsv` and `ratchet/FINDINGS.md` first, and don't retry a rejected idea without a new reason.
 2. **Change one thing** and commit it. Debug with quick runs: `just eval --only fasta`, `faun emit`, a profiler on a `--symbols` build. Only a full `just eval`, with no `--only`, decides. It says which incumbent it scores the checkout against, and prints the path of its report.
-3. **Record every evaluation** as a row in `ratchet/log.tsv`. Every run prints its row; `just eval --log "<idea>"` appends it. The columns are tab-separated, all but the first two from the run's summary:
-   - `series`: the evaluator's series, `SERIES` in `eval/ratchet.py`, which each protected change bumps;
-   - `idea`: a one-line description;
+3. **Record every evaluation** as a row in `ratchet/log.tsv`. Every run prints its row; `just eval --log` appends it. The row's idea is the subject of the commit measured, which already says what the change is, marked `(with uncommitted changes)` where the checkout held more; `--idea "<text>"` gives another, as for a run that times the same change again. The columns are tab-separated, all but the first two from the run's summary:
+   - `series`: the evaluator's series, `SERIES` in `eval/ratchet.py`, which each protected change to what is measured or how it is scored bumps;
+   - `idea`: a one-line description, the commit's subject unless `--idea` gives one;
    - `score`: the overall score, below one being better;
    - `speed`, `memory`, `size`, `small` and `compile`: each metric's change across the targets;
    - `worst`: the worst cell's ratio;
@@ -75,7 +75,7 @@ Every run writes a new JSON report to `ratchet/reports/` in the main checkout (g
 
 ## Protected paths
 
-The evaluator runs from an export of `origin/main`, never from the working tree: what is merged there is what I approved. So a candidate cannot run its own judge, and the programs, twins, probes and sizes it measures are the trunk's as of the last fetch. It exports other revisions, such as the incumbent, into `~/.cache/faun-ratchet`, so it creates no git worktrees, and builds each one's compiler once, from nothing, in a target directory of its own, keeping only the compiler. A shared target directory would let cargo, which judges freshness by time, take one export's build for another's, since `git archive` dates every file to its commit. `eval/protected.txt` lists the evaluator, the suite, the tools' versions and these rules. `just eval` rejects a candidate whose branch changes them. Changing one needs my approval, is a pull request of its own, and starts a new series in the log once it is merged: it bumps `SERIES`. The probes are not protected, since a branch's own are never the ones measured.
+The evaluator runs from an export of `origin/main`, never from the working tree: what is merged there is what I approved. So a candidate cannot run its own judge, and the programs, twins, probes and sizes it measures are the trunk's as of the last fetch. It exports other revisions, such as the incumbent, into `~/.cache/faun-ratchet`, so it creates no git worktrees, and builds each one's compiler once, from nothing, in a target directory of its own, keeping only the compiler. A shared target directory would let cargo, which judges freshness by time, take one export's build for another's, since `git archive` dates every file to its commit. `eval/protected.txt` lists the evaluator, the suite, the tools' versions and these rules. `just eval` rejects a candidate whose branch changes them. Changing one needs my approval, is a pull request of its own, and, where it changes what is measured or how it is scored, starts a new series in the log once it is merged: it bumps `SERIES`. A change that leaves every measure and verdict as it was, such as how a row is written, keeps the series. The probes are not protected, since a branch's own are never the ones measured.
 
 `just eval --unpinned` runs the working tree's evaluator instead, for working on the evaluator itself. Its verdict is a measurement, never a promotion.
 
