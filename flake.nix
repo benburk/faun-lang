@@ -16,6 +16,17 @@
       # crate's.
       cargoToml = builtins.fromTOML (builtins.readFile ./crates/cli/Cargo.toml);
       workspace = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      # What the tests run beside the compiler: the backends' programs on
+      # wasmtime and cc65's sim65, and gzip, which the flate tests read
+      # their output back with. The dev shell has them for `just test`, and
+      # the package's check for `cargo test`; each shell brings its own
+      # Python, which the tests read back with too.
+      testTools =
+        pkgs: with pkgs; [
+          wasmtime
+          cc65
+          gzip
+        ];
     in
     {
       packages = forAllSystems (
@@ -29,6 +40,32 @@
             version = workspace.workspace.package.version;
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
+            # The tests as `just test` and CI run them: every crate's, each
+            # in a process of its own under nextest, then the doc tests
+            # nextest skips and the standard library's expectations. Under
+            # `cargo test` a test in one process could start a program while
+            # another thread still held a fresh image open to write it, and
+            # the program be refused as busy.
+            useNextest = true;
+            cargoTestFlags = [
+              "--workspace"
+              "--no-fail-fast"
+            ];
+            nativeCheckInputs = testTools pkgs ++ [ pkgs.python3 ];
+            # wasmtime keeps a cache under the home, which the sandbox has
+            # none of.
+            preCheck = ''
+              export HOME=$(mktemp -d)
+            '';
+            postCheck =
+              let
+                flags = "--offline --profile release --target ${pkgs.stdenv.hostPlatform.rust.rustcTargetSpec}";
+              in
+              ''
+                cargo test ${flags} --workspace --doc -j $NIX_BUILD_CORES
+                FAUN_STD=crates/frontend/standard cargo run ${flags} -q -- \
+                  test crates/frontend/standard/standard.fn
+              '';
             meta = {
               mainProgram = "faun";
             };
@@ -48,29 +85,29 @@
           pkgs = nixpkgs.legacyPackages.${system};
           # Every tool but Python, which the evaluator's shell takes with a
           # library the default one has no use for.
-          tools = with pkgs; [
-            just
-            dprint
-            fd
-            ripgrep
-            nixfmt
-            cargo
-            rustc
-            clippy
-            rustfmt
-            rust-analyzer
-            # `just test` runs the tests with nextest, and the backends'
-            # programs on wasmtime and cc65's sim65.
-            cargo-nextest
-            wasmtime
-            cc65
-            # `just tree-sitter` generates the grammar from grammar.js,
-            # which tree-sitter evaluates with node.
-            tree-sitter
-            nodejs
-            # The benchmarks game's C pidigits does its arithmetic with GMP.
-            gmp
-          ];
+          tools =
+            with pkgs;
+            [
+              just
+              dprint
+              fd
+              ripgrep
+              nixfmt
+              cargo
+              rustc
+              clippy
+              rustfmt
+              rust-analyzer
+              # `just test` runs the tests with nextest.
+              cargo-nextest
+              # `just tree-sitter` generates the grammar from grammar.js,
+              # which tree-sitter evaluates with node.
+              tree-sitter
+              nodejs
+              # The benchmarks game's C pidigits does its arithmetic with GMP.
+              gmp
+            ]
+            ++ testTools pkgs;
           # cc65's sim65 saying, where `SIM65_METRICS` is set, how many cycles
           # a program took and how many bytes of memory it wrote. Only the
           # simulator is built, the rest of cc65 being the default shell's.
