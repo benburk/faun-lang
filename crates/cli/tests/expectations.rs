@@ -345,7 +345,7 @@ fn the_expectation_that_runs_out_of_steps_is_named() {
         "out-of-steps",
         "count : (Nat, Nat) -> Nat
          count(0, total) -> total
-         count(n, total) -> count(n - 1, total + 1)
+         count(n, total) -> count(n - 1, (total + 1) % 1000000007)
 
          expect count(10, 0) == 10
          expect count(1000, 0) == 1000

@@ -95,6 +95,60 @@ fn a_range_folded_without_its_elements_costs_what_times_costs() {
     );
 }
 
+/// A program printing `fib` of a number it reads from its input, its bytes
+/// as the digits of a number base 256 and their count added, so nothing
+/// bounds it: as many zero bytes, that many.
+fn reading(name: &str, source: &str) -> Package {
+    Package::new(
+        name,
+        &format!(
+            r#"
+            {source}
+
+            app : {{stdin: List(U8), *}} -> Str
+            app(input) -> (
+              read = input.stdin.fold(0, |n, byte| n * 256 + byte.to_nat())
+              "${{fib(read + input.stdin.len())}}"
+            )
+
+            main!(host) -> host.run_stdin!(app)
+            "#
+        ),
+    )
+}
+
+/// A count taken one from where a pattern has already found it a step
+/// costs what the step's own predecessor does, as `n.times` reads it.
+#[test]
+fn a_count_taken_one_from_costs_what_times_costs() {
+    let (natural_printed, natural_step) = per_step(&reading(
+        "unbuilt-count-down",
+        r"
+        down : (Nat, Nat, Nat) -> Nat
+        down(0, a, _) -> a
+        down(k, a, b) -> down(k - 1, b, (a + b) % 1000003)
+
+        fib : Nat -> Nat
+        fib(n) -> down(n, 0, 1)
+        ",
+    ));
+    let (times_printed, times_step) = per_step(&reading(
+        "unbuilt-count-times",
+        r"
+        fib : Nat -> Nat
+        fib(n) -> (
+          (a, _) = n.times((0, 1), |(a, b)| (b, (a + b) % 1000003))
+          a
+        )
+        ",
+    ));
+    assert_eq!(natural_printed, times_printed);
+    assert!(
+        natural_step <= times_step,
+        "a step cost {natural_step} fuel counted down and {times_step} with times"
+    );
+}
+
 #[test]
 fn a_repeat_summed_is_never_built() {
     as_cheap(
