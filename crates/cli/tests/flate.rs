@@ -7,6 +7,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn library() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/examples/libraries/flate")
@@ -18,7 +19,14 @@ struct Gzip(PathBuf);
 
 impl Gzip {
     fn build() -> Self {
-        let dir = std::env::temp_dir().join(format!("faun-flate-{}", std::process::id()));
+        // Numbered, since `cargo test` runs this file's tests side by side
+        // in one process, and each builds into, and then removes, its own.
+        static MADE: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "faun-flate-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let image = dir.join("gzip");
         let status = Command::new(env!("CARGO_BIN_EXE_faun"))
