@@ -725,7 +725,9 @@ impl Rewrite<'_> {
                     return held;
                 }
                 if self.rules.identities
-                    && let Some(held) = self.identity(called, &args, scope)
+                    && let Some(held) = self
+                        .one_less(called, &args)
+                        .or_else(|| self.identity(called, &args, scope))
                 {
                     return held;
                 }
@@ -1321,6 +1323,29 @@ impl Rewrite<'_> {
             Expr::Static(value) => self.program.constant(value).constructor() == nil,
             Expr::Atom(_) | Expr::Call(..) | Expr::Match(..) => false,
         }
+    }
+
+    /// One taken from a natural known to be a step, where the step is of
+    /// the type `called` answers: what an arm taking the natural apart into
+    /// its step took, nothing worked out, as where the arm's field is read
+    /// instead.
+    fn one_less(&self, called: FnId, args: &[Atom]) -> Option<Atom> {
+        let &[atom, by] = args else {
+            return None;
+        };
+        if self.recognised.operations[called.index()] != Some(Operation::Monus)
+            || self.small(by) != Some(1)
+        {
+            return None;
+        }
+        let wrote = (*self.written.get(atom.0.index())?)?;
+        let Expr::Con(ctor, fields) = self.program.expr(wrote) else {
+            return None;
+        };
+        let owner = self.program.ctor(ctor).owner;
+        let (_, step) = super::arithmetic::natural(self.program, owner)?;
+        (ctor == step && self.program.function(called).result == owner)
+            .then(|| self.program.atoms(fields)[0])
     }
 
     /// Whether a local is a natural known to be nought or one: written as

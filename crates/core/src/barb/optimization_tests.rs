@@ -2197,3 +2197,53 @@ fn a_parameter_an_effect_reads_is_still_worked_out() {
     );
     assert_eq!(after, before);
 }
+
+/// `less(n)`: `n - 1`, or `n - 2` where `two`, in the arm taking `n` apart
+/// into a step, and `n - 1` in the arm finding it nought.
+fn one_less(two: bool) -> (Program, FnId) {
+    let mut p = library();
+    let sub = named(&p, "sub");
+    let nat = p.params(sub)[0];
+    let zero = p.ctor_at(nat, 0);
+    let one = p.intern_number(nat, 1).unwrap();
+    let both = p.intern_number(nat, 2).unwrap();
+    let less = p.declare("less", &[nat], nat);
+    p.define(less, |b, args| {
+        b.match_(args[0], nat, |b, ctor, _| {
+            if ctor == zero {
+                let one = b.known(one);
+                return b.call(sub, &[args[0], one]);
+            }
+            let by = b.known(if two { both } else { one });
+            b.call(sub, &[args[0], by])
+        })
+    });
+    p.set_entry(less);
+    (p, less)
+}
+
+#[test]
+fn one_less_than_a_step_is_what_the_step_took() {
+    for two in [false, true] {
+        let (original, less) = one_less(two);
+        let mut p = original.clone();
+        super::normalize::identities(&mut p);
+        validate(&p).unwrap();
+        // One less than a step is what it took, and than nought is nought:
+        // only two less than a step is still worked out.
+        assert_eq!(
+            calls_to(&p, less, named(&p, "sub")),
+            usize::from(two),
+            "{}",
+            p.render()
+        );
+        let nat = original.params(less)[0];
+        for n in 0..5 {
+            let args = vec![super::tests::nat(&original, nat, n)];
+            assert_eq!(
+                run(&p, less, args.clone(), &mut vec![]),
+                run(&original, less, args, &mut vec![]),
+            );
+        }
+    }
+}
