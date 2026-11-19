@@ -937,7 +937,13 @@ impl Pass<'_> {
                     top(scopes).held.push(old);
                 }
             }
-            self.release_dead(b, scopes, &live, Some(at));
+            // A region with no terminator ends in a loop, if or call that
+            // does not come back, so nothing follows its last instruction:
+            // what it still holds is held until the program ends. Returns
+            // from its child scopes have already released their live roots.
+            if old.terminator.is_some() || at + 1 < self.source.ops(region).len() {
+                self.release_dead(b, scopes, &live, Some(at));
+            }
         }
         // Terminal child transfers already cleaned their scopes. A Never
         // call must not be followed by cleanup at this region's end.
