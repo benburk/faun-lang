@@ -13,14 +13,16 @@ use super::{
 };
 use crate::diagnostic::Refusal;
 use crate::hir as h;
-use crate::{ModuleId, Symbol, Symbols};
+use crate::{ModuleId, Symbol};
 
 /// Where the member was first asked for, which its parts are placed at.
 type At = (ModuleId, crate::ast::Span);
 
 /// One way a value of a structural type is built: a tag of a row, a tuple,
 /// or a record, and the types of its components in the order it is taken
-/// apart in.
+/// apart in, a record's fields in the order of their names, as its type
+/// keeps them: so a record is compared, hashed and shown field by field in
+/// that order, whatever order it was written in.
 struct Shape {
     kind: Kind,
     components: Vec<Type>,
@@ -54,17 +56,6 @@ impl Shape {
             }],
             _ => unreachable!("only records, tuples and rows have structural members"),
         }
-    }
-
-    /// The same, a record's fields in the order of their names, as Ori
-    /// renders a record, whatever order it was written or held in.
-    fn by_name(mut self, symbols: &Symbols) -> Self {
-        if let Kind::Record(names) = &mut self.kind {
-            let mut fields: Vec<_> = names.drain(..).zip(self.components.drain(..)).collect();
-            fields.sort_by(|a, b| symbols.text(a.0).cmp(symbols.text(b.0)));
-            (*names, self.components) = fields.into_iter().unzip();
-        }
-        self
     }
 
     /// The pattern taking it apart, its components bound to the locals
@@ -113,9 +104,8 @@ impl Specializer<'_> {
         let shapes = Shape::of(receiver);
         let mut clauses = Vec::with_capacity(shapes.len() + 1);
         if member == self.prelude.to_str {
-            for shape in shapes {
-                let shape = shape.by_name(self.symbols);
-                clauses.push(self.shown(key.name, at, &shape)?);
+            for shape in &shapes {
+                clauses.push(self.shown(key.name, at, shape)?);
             }
         } else if member == self.prelude.hash_into {
             for shape in &shapes {

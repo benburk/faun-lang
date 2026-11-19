@@ -1,0 +1,3 @@
+Pair : {zebra: Nat, aardvark: Nat}.(
+  cmp : (Pair, Pair) -> Order
+)

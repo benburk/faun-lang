@@ -49,7 +49,7 @@ pub(crate) fn check(program: &t::Program, cx: &Context) -> Result<(), Diagnostic
 }
 
 fn covered(program: &t::Program, symbols: &Symbols, prelude: &PreludeIds) -> Result<(), Refusal> {
-    let checker = Coverage::new(program, prelude);
+    let checker = Coverage::new(program, prelude, symbols);
     for function in &program.functions {
         let t::Definition::Body(clauses) = &function.definition else {
             continue;
@@ -203,6 +203,9 @@ enum Pattern {
 
 struct Coverage<'a> {
     prelude: &'a PreludeIds,
+    /// What orders a record's fields and a row's tags, as the program
+    /// would be told of them.
+    symbols: &'a Symbols,
     /// Each constructor's declared type.
     owners: HashMap<Symbol, Symbol>,
     /// Each declared type's constructors, and how many fields each takes.
@@ -213,7 +216,7 @@ struct Coverage<'a> {
 }
 
 impl<'a> Coverage<'a> {
-    fn new(program: &'a t::Program, prelude: &'a PreludeIds) -> Self {
+    fn new(program: &'a t::Program, prelude: &'a PreludeIds, symbols: &'a Symbols) -> Self {
         let mut owners = HashMap::default();
         let mut constructors = HashMap::default();
         let mut declared = HashMap::default();
@@ -243,6 +246,7 @@ impl<'a> Coverage<'a> {
         }
         Self {
             prelude,
+            symbols,
             owners,
             constructors,
             declarations: declared,
@@ -373,7 +377,14 @@ impl<'a> Coverage<'a> {
             // A row checking did not settle: nothing to enumerate.
             return None;
         };
-        for (label, field_types) in tags {
+        // Tried in the order of their names, so the first left unmatched
+        // is the same whatever order checking holds them in.
+        let mut tags: Vec<_> = tags
+            .iter()
+            .map(|(label, fields)| (*label, fields))
+            .collect();
+        self.symbols.sort_named(&mut tags);
+        for (label, field_types) in &tags {
             let arity = field_types.len();
             let specialized = rows
                 .iter()
@@ -407,10 +418,12 @@ impl<'a> Coverage<'a> {
     fn missing_record(&self, rows: Vec<Vec<Pattern>>, columns: &[Column]) -> Option<Vec<Pattern>> {
         let (names, field_types): (Vec<Symbol>, Vec<Column>) =
             if let Some(InferredType::Record(fields, _)) = &columns[0] {
-                fields
+                let mut fields: Vec<_> = fields
                     .iter()
                     .map(|(name, ty)| (*name, Some(ty.clone())))
-                    .unzip()
+                    .collect();
+                self.symbols.sort_named(&mut fields);
+                fields.into_iter().unzip()
             } else {
                 let mut names: Vec<Symbol> = rows
                     .iter()
@@ -420,7 +433,7 @@ impl<'a> Coverage<'a> {
                     })
                     .flatten()
                     .collect();
-                names.sort_unstable();
+                names.sort_by(|a, b| self.symbols.order(*a, *b));
                 names.dedup();
                 let unknown = vec![None; names.len()];
                 (names, unknown)

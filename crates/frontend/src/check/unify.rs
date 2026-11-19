@@ -159,6 +159,8 @@ impl Mismatch {
                 tags: fields,
                 row: row @ Ty::Record(..),
             } => {
+                let mut fields = fields.clone();
+                fields.sort_by(|a, b| symbols.order(*a, *b));
                 let fields: Vec<_> = fields
                     .iter()
                     .map(|field| format!("`{}`", symbols.text(*field)))
@@ -170,6 +172,8 @@ impl Mismatch {
                 )
             }
             Self::NotAmong { tags, row } => {
+                let mut tags = tags.clone();
+                tags.sort_by(|a, b| symbols.order(*a, *b));
                 let tags: Vec<_> = tags
                     .iter()
                     .map(|tag| format!("`{}`", symbols.spelling(*tag)))
@@ -886,15 +890,19 @@ pub(super) fn show(ty: &Ty, symbols: &Symbols) -> String {
             ),
         },
         // An open row shows its rest as `*`: the tags a caller may add.
+        // A row's tags and a record's fields show in the order of their
+        // names, whatever order checking holds them in.
         Ty::Variants(tags, tail) => {
+            let mut tags: Vec<_> = tags.iter().map(|(name, fields)| (*name, fields)).collect();
+            symbols.sort_named(&mut tags);
             let mut shown: Vec<_> = tags
-                .iter()
+                .into_iter()
                 .map(|(name, fields)| {
                     if fields.is_empty() {
-                        symbols.spelling(*name).to_owned()
+                        symbols.spelling(name).to_owned()
                     } else {
                         let fields: Vec<_> = fields.iter().map(|ty| show(ty, symbols)).collect();
-                        format!("{}({})", symbols.spelling(*name), fields.join(", "))
+                        format!("{}({})", symbols.spelling(name), fields.join(", "))
                     }
                 })
                 .collect();
@@ -906,9 +914,11 @@ pub(super) fn show(ty: &Ty, symbols: &Symbols) -> String {
             format!("[{}]", shown.join(", "))
         }
         Ty::Record(fields, tail) => {
+            let mut fields: Vec<_> = fields.iter().map(|(name, ty)| (*name, ty)).collect();
+            symbols.sort_named(&mut fields);
             let mut shown: Vec<_> = fields
-                .iter()
-                .map(|(name, ty)| format!("{}: {}", symbols.text(*name), show(ty, symbols)))
+                .into_iter()
+                .map(|(name, ty)| format!("{}: {}", symbols.text(name), show(ty, symbols)))
                 .collect();
             if matches!(tail.as_deref(), Some(Ty::Var(_))) {
                 shown.push("*".to_owned());

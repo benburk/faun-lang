@@ -183,7 +183,7 @@ impl<'a> Lowerer<'a> {
             let Type::Named(name, _) = &ty else {
                 continue;
             };
-            let constructors = ty.constructors(&self.program.data)?;
+            let constructors = ty.constructors(&self.program.data, &self.cx.symbols)?;
             for (_, fields) in &constructors {
                 for field in fields {
                     self.collect_type(field)?;
@@ -345,8 +345,8 @@ impl<'a> Lowerer<'a> {
         if let (Some(source), Some(target)) = (from.members(), to.members()) {
             return Ok(vec![(None, source.into_iter().zip(target).collect())]);
         }
-        let target = to.constructors(&self.program.data)?;
-        from.constructors(&self.program.data)?
+        let target = to.constructors(&self.program.data, &self.cx.symbols)?;
+        from.constructors(&self.program.data, &self.cx.symbols)?
             .into_iter()
             .map(|(constructor, fields)| {
                 let (_, widened) = target
@@ -422,7 +422,7 @@ impl<'a> Lowerer<'a> {
                     self.define_record_wrapper(&ty, id);
                 }
                 Type::Named(_, _) | Type::Variants(_) => {
-                    let constructors = ty.constructors(&self.program.data)?;
+                    let constructors = ty.constructors(&self.program.data, &self.cx.symbols)?;
                     let held: Vec<_> = constructors
                         .iter()
                         .map(|(name, fields)| {
@@ -1310,13 +1310,25 @@ fn emit_expr(
                 .collect::<Vec<_>>();
             context.construct(builder, *constructor, &expression.ty, &fields)
         }
+        // Worked out in the order written, then placed in the order the
+        // record's type keeps its fields.
         ExprKind::Record(fields) => {
-            let mut fields = fields
+            let made = fields
                 .iter()
                 .map(|(name, field)| (*name, emit_expr(context, builder, field, locals)))
                 .collect::<Vec<_>>();
-            fields.sort_by_key(|(name, _)| *name);
-            let fields: Vec<_> = fields.into_iter().map(|(_, field)| field).collect();
+            let Type::Record(layout) = &expression.ty else {
+                unreachable!("a record expression builds a record")
+            };
+            let fields: Vec<_> = layout
+                .iter()
+                .map(|(name, _)| {
+                    made.iter()
+                        .find(|(found, _)| found == name)
+                        .map(|(_, field)| *field)
+                        .expect("a record expression gives each field of its type")
+                })
+                .collect();
             builder.con(context.record_constructor_ids[&expression.ty], &fields)
         }
         ExprKind::Tuple(members) => {

@@ -27,7 +27,7 @@ use crate::context::Context;
 use crate::diagnostic::{Advised, Diagnostic, Refusal};
 use crate::hir as h;
 use crate::typed as t;
-use crate::{ModuleId, Symbol};
+use crate::{ModuleId, Symbol, Symbols};
 
 mod structural;
 
@@ -35,10 +35,13 @@ mod structural;
 pub(crate) enum Type {
     Named(Symbol, Vec<Self>),
     Function(Signature),
-    /// A closed tag row, its tags in one order so that two spellings of one
-    /// row are one type. The empty row is the type with no values.
+    /// A closed tag row, its tags in the order of their names
+    /// ([`Symbols::order`]), so that two spellings of one row are one type
+    /// and a tag's number is fixed by the row alone. The empty row is the
+    /// type with no values.
     Variants(Vec<(Symbol, Vec<Self>)>),
-    /// A closed record, its fields in one order.
+    /// A closed record, its fields in the order of their names, as it is
+    /// built, compared, hashed and shown.
     Record(Vec<(Symbol, Self)>),
     /// A positional product of two or more.
     Tuple(Vec<Self>),
@@ -51,9 +54,15 @@ impl Type {
     }
 
     /// The row holding `tags`, in the order every row keeps them.
-    fn row(mut tags: Vec<(Symbol, Vec<Self>)>) -> Self {
-        tags.sort_by_key(|(label, _)| *label);
+    pub(crate) fn row(mut tags: Vec<(Symbol, Vec<Self>)>, symbols: &Symbols) -> Self {
+        symbols.sort_named(&mut tags);
         Self::Variants(tags)
+    }
+
+    /// The record holding `fields`, in the order every record keeps them.
+    pub(crate) fn record(mut fields: Vec<(Symbol, Self)>, symbols: &Symbols) -> Self {
+        symbols.sort_named(&mut fields);
+        Self::Record(fields)
     }
 
     /// Take the signature at a checked function boundary.
@@ -68,6 +77,7 @@ impl Type {
     pub(crate) fn constructors(
         &self,
         data: &HashMap<Symbol, crate::declarations::Data>,
+        symbols: &Symbols,
     ) -> Result<Vec<(Symbol, Vec<Self>)>, Refusal> {
         if let Self::Variants(tags) = self {
             return Ok(tags.clone());
@@ -94,14 +104,14 @@ impl Type {
                 constructor
                     .fields
                     .iter()
-                    .map(|field| surface_type(field, &variables))
+                    .map(|field| surface_type(field, &variables, symbols))
                     .collect::<Result<_, Refusal>>()?,
             ));
         }
         if let Some(wrapper) = &data.wrapper {
             constructors.push((
                 wrapper.constructor,
-                vec![surface_type(&wrapper.field, &variables)?],
+                vec![surface_type(&wrapper.field, &variables, symbols)?],
             ));
         }
         Ok(constructors)
@@ -521,7 +531,7 @@ fn package_roots(program: &t::Program, cx: &Context) -> Result<Vec<FunctionKey>,
             .filter(|variable| ordinary.contains(variable))
             .map(|variable| (*variable, Type::empty()))
             .collect();
-        let signature = substitute_type(&scheme.ty, &placeholder)?.into_signature()?;
+        let signature = substitute_type(&scheme.ty, &placeholder, &cx.symbols)?.into_signature()?;
         if signature.parameters.iter().any(holds_function) {
             continue;
         }
@@ -559,7 +569,7 @@ struct Origin {
 
 struct Specializer<'a> {
     /// The spellings a refusal names.
-    symbols: &'a crate::Symbols,
+    symbols: &'a Symbols,
     prelude: &'a PreludeIds,
     members: &'a HashMap<(Symbol, Symbol), Symbol>,
     definitions: HashMap<Symbol, &'a t::Function>,
@@ -635,7 +645,7 @@ impl<'a> Specializer<'a> {
             .get(&entry)
             .map(|function| &function.scheme)
             .ok_or_else(|| error("entry has no inferred type"))?;
-        let signature = concrete_scheme(scheme)?.into_signature()?;
+        let signature = concrete_scheme(scheme, self.symbols)?.into_signature()?;
         let valid_parameters = match (application_host, signature.parameters.as_slice()) {
             (None, []) => true,
             (Some(host), [Type::Named(found, arguments)]) => *found == host && arguments.is_empty(),
@@ -1342,13 +1352,13 @@ impl<'a> Specializer<'a> {
         ordinary_variables(template, &mut free);
         free.retain(|variable| !substitution.contains_key(variable));
         if free.is_empty() {
-            return substitute_type(template, substitution);
+            return substitute_type(template, substitution, self.symbols);
         }
         let mut defaulted = substitution.clone();
         for variable in free {
             defaulted.insert(variable, Type::Named(self.prelude.nat, Vec::new()));
         }
-        substitute_type(template, &defaulted)
+        substitute_type(template, &defaulted, self.symbols)
     }
 
     /// The type of `owner`'s field `name`, where it is a record having it
@@ -1368,7 +1378,8 @@ impl<'a> Specializer<'a> {
                     .copied()
                     .zip(arguments.iter().cloned())
                     .collect();
-                let Type::Record(fields) = surface_type(&wrapper.field, &variables)? else {
+                let Type::Record(fields) = surface_type(&wrapper.field, &variables, self.symbols)?
+                else {
                     return Ok(None);
                 };
                 fields
@@ -1457,7 +1468,7 @@ impl<'a> Specializer<'a> {
             let before = substitution.len();
             let mut waiting = Vec::new();
             for bound in open {
-                let Ok(owner) = substitute_type(&bound.owner, substitution) else {
+                let Ok(owner) = substitute_type(&bound.owner, substitution, self.symbols) else {
                     waiting.push(bound);
                     continue;
                 };
@@ -1504,8 +1515,13 @@ impl<'a> Specializer<'a> {
                 if pinned.is_err() {
                     continue;
                 }
-                while meet(&bound.ty, &scheme.ty, (substitution, &mut fixed)) {}
-                if substitute_type(&bound.ty, substitution).is_err() {
+                while meet(
+                    &bound.ty,
+                    &scheme.ty,
+                    (substitution, &mut fixed),
+                    self.symbols,
+                ) {}
+                if substitute_type(&bound.ty, substitution, self.symbols).is_err() {
                     waiting.push(bound);
                 }
             }
@@ -1698,7 +1714,7 @@ impl<'a> Specializer<'a> {
                     .get(function)
                     .map(|function| &function.scheme)
                     .ok_or_else(|| error("literal helper has no inferred scheme"))?;
-                let signature = scheme_result(scheme, expected)?;
+                let signature = scheme_result(scheme, expected, self.symbols)?;
                 if arguments.len() != signature.parameters.len() {
                     return Err(error("literal helper arity does not match its declaration"));
                 }
@@ -1747,7 +1763,7 @@ impl<'a> Specializer<'a> {
             .collect();
         fields
             .iter()
-            .map(|field| surface_type(field, &variables))
+            .map(|field| surface_type(field, &variables, self.symbols))
             .collect()
     }
 }
@@ -1834,11 +1850,11 @@ fn ordinary_variables(ty: &InferredType, output: &mut Vec<TypeVariable>) {
     }
 }
 
-fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, Refusal> {
+fn concrete_scheme(scheme: &InferredScheme, symbols: &Symbols) -> Result<Type, Refusal> {
     if !scheme.variables.is_empty() {
         return Err(error("entry has an ambiguous polymorphic type"));
     }
-    substitute_type(&scheme.ty, &HashMap::default())
+    substitute_type(&scheme.ty, &HashMap::default(), symbols)
 }
 
 /// Meet a bound's shape with its implementation's signature, each side's
@@ -1855,6 +1871,7 @@ fn meet(
         &mut HashMap<TypeVariable, Type>,
         &mut HashMap<TypeVariable, Type>,
     ),
+    symbols: &Symbols,
 ) -> bool {
     /// Match `template` against `concrete` where it fits, learning nothing
     /// where it does not; answers whether it learnt anything.
@@ -1870,12 +1887,12 @@ fn meet(
         }
         false
     }
-    if let Ok(concrete) = substitute_type(implementation, fixed)
+    if let Ok(concrete) = substitute_type(implementation, fixed, symbols)
         && learn(bound, &concrete, known)
     {
         return true;
     }
-    if let Ok(concrete) = substitute_type(bound, known)
+    if let Ok(concrete) = substitute_type(bound, known, symbols)
         && learn(implementation, &concrete, fixed)
     {
         return true;
@@ -1883,7 +1900,7 @@ fn meet(
     let mut learnt = false;
     let mut each = |bounds: &[InferredType], implementations: &[InferredType]| {
         for (bound, implementation) in bounds.iter().zip(implementations) {
-            learnt |= meet(bound, implementation, (&mut *known, &mut *fixed));
+            learnt |= meet(bound, implementation, (&mut *known, &mut *fixed), symbols);
         }
     };
     match (bound, implementation) {
@@ -1902,7 +1919,7 @@ fn meet(
             InferredType::Function(implementations, implementation_result),
         ) if bounds.len() == implementations.len() => {
             each(bounds, implementations);
-            learnt |= meet(bound_result, implementation_result, (known, fixed));
+            learnt |= meet(bound_result, implementation_result, (known, fixed), symbols);
         }
         _ => {}
     }
@@ -1912,6 +1929,7 @@ fn meet(
 fn substitute_type(
     ty: &InferredType,
     substitution: &HashMap<TypeVariable, Type>,
+    symbols: &Symbols,
 ) -> Result<Type, Refusal> {
     match ty {
         InferredType::Variable(variable) => substitution
@@ -1922,15 +1940,15 @@ fn substitute_type(
             *name,
             arguments
                 .iter()
-                .map(|argument| substitute_type(argument, substitution))
+                .map(|argument| substitute_type(argument, substitution, symbols))
                 .collect::<Result<_, _>>()?,
         )),
         InferredType::Function(parameters, result) => Ok(Type::Function(Signature {
             parameters: parameters
                 .iter()
-                .map(|parameter| substitute_type(parameter, substitution))
+                .map(|parameter| substitute_type(parameter, substitution, symbols))
                 .collect::<Result<_, _>>()?,
-            result: Box::new(substitute_type(result, substitution)?),
+            result: Box::new(substitute_type(result, substitution, symbols)?),
         })),
         // A rest nothing pinned holds no tags: no value the program builds
         // carries one it did not write.
@@ -1940,7 +1958,7 @@ fn substitute_type(
                 .map(|(label, fields)| {
                     let fields = fields
                         .iter()
-                        .map(|field| substitute_type(field, substitution))
+                        .map(|field| substitute_type(field, substitution, symbols))
                         .collect::<Result<_, _>>()?;
                     Ok((*label, fields))
                 })
@@ -1951,19 +1969,19 @@ fn substitute_type(
                     .get(variable)
                     .cloned()
                     .unwrap_or_else(Type::empty),
-                Some(other) => substitute_type(other, substitution)?,
+                Some(other) => substitute_type(other, substitution, symbols)?,
             };
             let Type::Variants(more) = rest else {
                 return Err(error("the rest of a tag row is not a row"));
             };
             row.extend(more);
-            Ok(Type::row(row))
+            Ok(Type::row(row, symbols))
         }
         // A record's rest nothing pinned holds no fields.
         InferredType::Record(fields, tail) => {
             let mut record = fields
                 .iter()
-                .map(|(name, ty)| Ok((*name, substitute_type(ty, substitution)?)))
+                .map(|(name, ty)| Ok((*name, substitute_type(ty, substitution, symbols)?)))
                 .collect::<Result<Vec<_>, Refusal>>()?;
             let rest = match tail.as_deref() {
                 None => Type::Record(Vec::new()),
@@ -1971,19 +1989,18 @@ fn substitute_type(
                     .get(variable)
                     .cloned()
                     .unwrap_or(Type::Record(Vec::new())),
-                Some(other) => substitute_type(other, substitution)?,
+                Some(other) => substitute_type(other, substitution, symbols)?,
             };
             let Type::Record(more) = rest else {
                 return Err(error("the rest of a record is not a record"));
             };
             record.extend(more);
-            record.sort_by_key(|(name, _)| *name);
-            Ok(Type::Record(record))
+            Ok(Type::record(record, symbols))
         }
         InferredType::Tuple(members) => Ok(Type::Tuple(
             members
                 .iter()
-                .map(|member| substitute_type(member, substitution))
+                .map(|member| substitute_type(member, substitution, symbols))
                 .collect::<Result<_, _>>()?,
         )),
     }
@@ -2094,25 +2111,30 @@ fn match_type(
     }
 }
 
-fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, Refusal> {
+fn scheme_result(
+    scheme: &InferredScheme,
+    result: &Type,
+    symbols: &Symbols,
+) -> Result<Signature, Refusal> {
     let InferredType::Function(_, template_result) = &scheme.ty else {
         return Err(error("literal helper is not a function"));
     };
     let mut substitution = HashMap::default();
     match_type(template_result, result, &mut substitution)?;
-    substitute_type(&scheme.ty, &substitution)?.into_signature()
+    substitute_type(&scheme.ty, &substitution, symbols)?.into_signature()
 }
 
 pub(crate) fn surface_type(
     ty: &h::Type,
     variables: &HashMap<Symbol, Type>,
+    symbols: &Symbols,
 ) -> Result<Type, Refusal> {
     match ty {
         h::Type::Named(name, arguments) => Ok(Type::Named(
             *name,
             arguments
                 .iter()
-                .map(|argument| surface_type(argument, variables))
+                .map(|argument| surface_type(argument, variables, symbols))
                 .collect::<Result<_, _>>()?,
         )),
         h::Type::Variable(variable) => variables
@@ -2125,9 +2147,9 @@ pub(crate) fn surface_type(
         h::Type::Function(parameters, result) => Ok(Type::Function(Signature {
             parameters: parameters
                 .iter()
-                .map(|parameter| surface_type(parameter, variables))
+                .map(|parameter| surface_type(parameter, variables, symbols))
                 .collect::<Result<_, _>>()?,
-            result: Box::new(surface_type(result, variables)?),
+            result: Box::new(surface_type(result, variables, symbols)?),
         })),
         h::Type::Variants(constructors) => Ok(Type::row(
             constructors
@@ -2136,22 +2158,24 @@ pub(crate) fn surface_type(
                     let fields = constructor
                         .fields
                         .iter()
-                        .map(|field| surface_type(field, variables))
+                        .map(|field| surface_type(field, variables, symbols))
                         .collect::<Result<_, _>>()?;
                     Ok((constructor.name, fields))
                 })
                 .collect::<Result<_, Refusal>>()?,
+            symbols,
         )),
-        h::Type::Record(fields, _) => Ok(Type::Record(
+        h::Type::Record(fields, _) => Ok(Type::record(
             fields
                 .iter()
-                .map(|(name, ty)| Ok((*name, surface_type(ty, variables)?)))
+                .map(|(name, ty)| Ok((*name, surface_type(ty, variables, symbols)?)))
                 .collect::<Result<_, Refusal>>()?,
+            symbols,
         )),
         h::Type::Tuple(members) => Ok(Type::Tuple(
             members
                 .iter()
-                .map(|member| surface_type(member, variables))
+                .map(|member| surface_type(member, variables, symbols))
                 .collect::<Result<_, _>>()?,
         )),
     }
