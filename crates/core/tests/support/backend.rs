@@ -1762,6 +1762,51 @@ fn a_walk_inside_another_goes_round_rather_than_down() {
     );
 }
 
+/// Counted walks, a count taken down and a position below a bound kept,
+/// each working out a product of what it counts up, handed counts on
+/// either side of where a 32-bit target's copy of them takes over: half a
+/// word, 65,535. Every count answers what the walk answers, the copy's or
+/// the walk's own.
+#[test]
+fn a_counted_walk_answers_the_same_either_side_of_its_copy() {
+    let base: u64 = if TARGET.word() == 16 { 254 } else { 65_534 };
+    let text = format!(
+        "import std.host {{Host}}
+
+         summed : (List(Nat), Nat) -> Nat
+         summed([], total) -> total
+         summed([x, *xs], total) -> summed(xs, total + x)
+
+         below : (Nat, Nat, Nat) -> Nat
+         below(i, n, total) -> (
+           if i >= n return total
+           below(i + 1, n, total + i * 7919 % 251)
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           n = {base} + host.args.len()
+           down = summed(List.range(n).map(|i| i * 7919 % 251), 0)
+           printed = host.println!(\"${{down}} ${{below(0, n, 0)}}\")
+           host.exit!(0)
+         )"
+    );
+    let program = read(&text).expect("the walks compile");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let counts = [1, 2, 3];
+    let expected: Vec<(i32, String)> = counts
+        .iter()
+        .map(|&count| {
+            let n = base + u64::from(count);
+            let total: u64 = (0..n).map(|i| i * 7919 % 251).sum();
+            (0, format!("{total} {total}\n"))
+        })
+        .collect();
+    assert_eq!(execute_counts(&program, &counts), expected);
+}
+
 /// Exercise day 18's row kernel with runtime cells on every target. The
 /// complete application exceeds sim65's 64 KiB code space; the larger
 /// targets also run its expectations and both hundred-step stdin solvers.

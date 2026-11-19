@@ -133,6 +133,7 @@ mod rotation;
 mod sequence;
 mod solve;
 mod specialize;
+mod split;
 mod sweep;
 mod terms;
 mod tree;
@@ -156,6 +157,7 @@ pub(crate) use constant::Shape;
 pub use facts::{Facts, Operation, SequenceOperation};
 pub use float_compare::FloatComparison;
 pub use rotation::Rotation;
+pub use split::counted;
 pub use tree::TreeRole;
 
 pub use fingerprint::fingerprint;
