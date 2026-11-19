@@ -220,7 +220,10 @@ A value cannot change, so any number of holders may share it, and a count
 decides when it is freed. Nothing a borrow would protect against can
 happen: there is no write through one name that another sees. Whether a
 parameter is borrowed or owned is a fact the compiler infers, for speed
-alone.
+alone. It infers one for each parameter of a definition, whatever its
+callers hold; making a definition into a version for each way its callers
+hold its arguments, as it is made into one for each type, is weighed in
+[specializing by ownership](../ownership-specialization.md).
 
 The cost is that how a program performs rests on facts it does not write:
 whether a buffer is shared, whether a parameter is borrowed. A program
@@ -240,6 +243,16 @@ The cost is that the difference shows only in time. Keeping an old value
 alive, as `snapshot` does, makes the next update of `order` a copy of the
 whole list. The recourse is to let a name die before its value is
 updated, which a loop that binds a name again does.
+
+## Open questions
+
+- Whether a definition should be made into versions by how its callers
+  hold its arguments, and whether an answer is new, so that a write needs
+  no count test where the caller knows the buffer is held once. Today the
+  analysis that spares a replacement its test stops at a function's edges:
+  no parameter and no call's answer is known to be held once. The design,
+  its costs and how to measure it first are in
+  [specializing by ownership](../ownership-specialization.md).
 
 ## History
 

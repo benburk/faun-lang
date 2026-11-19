@@ -88,6 +88,9 @@ syntax shown on purpose, marks its fence `` ```ruby ignore ``.
   a standard library checked once would save
 - [A checked standard library](std-snapshot.md): the design for checking
   the library when the compiler is built, and the steps there
+- [Specializing by ownership](ownership-specialization.md): the design
+  for making a definition into versions by how its callers hold its
+  arguments and its answer, as by type, and how to measure it first
 - [Compression](compression.md): what checksums, DEFLATE and PNG found,
   and the compiler bugs their natural spelling exposes
 - [Faun and AI](ai-future.md)
