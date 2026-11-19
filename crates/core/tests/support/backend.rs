@@ -1807,6 +1807,130 @@ fn a_counted_walk_answers_the_same_either_side_of_its_copy() {
     assert_eq!(execute_counts(&program, &counts), expected);
 }
 
+/// Lists of `List.range(n).map(f)` read by position: past their end, which
+/// finds nothing as it does in a list built, two positions a step, one
+/// position once without going round, and the same list also handed to
+/// something else, or read at a position not counted up, which keeps it
+/// built. Every one answers what the list built answers.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "five readers, each beside what the list built answers"
+)]
+fn a_list_read_by_position_answers_as_the_list_built() {
+    // Each reader, how it is handed its list, and what the list built
+    // answers for `n` elements. The 6502 holds two of them at a time.
+    type Answer = fn(u64) -> u64;
+    fn get(xs: &[u64], i: u64, or: u64) -> u64 {
+        usize::try_from(i)
+            .ok()
+            .and_then(|i| xs.get(i))
+            .copied()
+            .unwrap_or(or)
+    }
+    let readers: [(&str, &str, Answer); 5] = [
+        (
+            "past : (List(Nat), Nat, Nat) -> Nat
+             past(xs, i, sum) -> (
+               if i >= xs.len() + 3 return sum
+               past(xs, i + 1, sum + xs.get(i).ok_or(1000))
+             )",
+            "past(List.range(n).map(|i| i * i + 1), 0, 0)",
+            |n| {
+                let xs: Vec<u64> = (0..n).map(|i| i * i + 1).collect();
+                (0..n + 3).map(|i| get(&xs, i, 1000)).sum()
+            },
+        ),
+        (
+            "pairs : (List(Nat), Nat, Nat) -> Nat
+             pairs(xs, i, sum) -> (
+               if i > xs.len() return sum
+               pairs(xs, i + 2, sum * 3 + xs.get(i).ok_or(5))
+             )",
+            "pairs(List.range(n).map(|i| i * 11 % 7), 0, 0)",
+            |n| {
+                let xs: Vec<u64> = (0..n).map(|i| i * 11 % 7).collect();
+                (0..=n)
+                    .step_by(2)
+                    .fold(0, |sum, i| sum * 3 + get(&xs, i, 5))
+            },
+        ),
+        (
+            "fifth : List(Nat) -> Nat
+             fifth(xs) -> xs.get(5).ok_or(77)",
+            "fifth(List.range(n).map(|i| i + 40))",
+            |n| if n > 5 { 45 } else { 77 },
+        ),
+        (
+            "kept : (List(Nat), Nat, Nat) -> Nat
+             kept(xs, i, sum) -> (
+               if i >= xs.len() + 3 return sum
+               kept(xs, i + 1, sum + xs.get(i).ok_or(1000))
+             )
+
+             both : List(Nat) -> Nat
+             both(xs) -> kept(xs, 0, 0) + xs.sum()",
+            "both(List.range(n).map(|i| i * 3))",
+            |n| {
+                let xs: Vec<u64> = (0..n).map(|i| i * 3).collect();
+                (0..n + 3).map(|i| get(&xs, i, 1000)).sum::<u64>() + xs.iter().sum::<u64>()
+            },
+        ),
+        (
+            "back : (List(Nat), Nat, Nat) -> Nat
+             back(xs, i, sum) -> (
+               if i >= xs.len() return sum
+               back(xs, i + 1, sum * 7 % 1000003 + xs.get(xs.len() - 1 - i).ok_or(0))
+             )",
+            "back(List.range(n).map(|i| i + 2), 0, 0)",
+            |n| (0..n).fold(0, |sum, i| sum * 7 % 1_000_003 + (n - 1 - i) + 2),
+        ),
+    ];
+    let at_once = if TARGET.word() == 16 {
+        1
+    } else {
+        readers.len()
+    };
+    for some in readers.chunks(at_once) {
+        let definitions: Vec<&str> = some.iter().map(|(definition, _, _)| *definition).collect();
+        let calls: Vec<String> = some
+            .iter()
+            .map(|(_, call, _)| format!("${{{call}}}"))
+            .collect();
+        let text = format!(
+            "import std.host {{Host}}
+
+             {}
+
+             main! : Host -> []
+             main!(host) -> (
+               n = 3 + host.args.len()
+               printed = host.println!(\"{}\")
+               host.exit!(0)
+             )",
+            definitions.join("\n\n"),
+            calls.join(" ")
+        );
+        let program = read(&text).expect("the readers compile");
+        let program = TARGET
+            .prepare(&program)
+            .expect("a program this machine holds");
+        let counts = [1, 2, 3];
+        let expected: Vec<(i32, String)> = counts
+            .iter()
+            .map(|&count| {
+                let n = 3 + u64::from(count);
+                let answers: Vec<String> = some
+                    .iter()
+                    .map(|(_, _, answer)| answer(n).to_string())
+                    .collect();
+                (0, format!("{}\n", answers.join(" ")))
+            })
+            .collect();
+        assert_eq!(execute_counts(&program, &counts), expected, "{text}");
+    }
+}
+
 /// Exercise day 18's row kernel with runtime cells on every target. The
 /// complete application exceeds sim65's 64 KiB code space; the larger
 /// targets also run its expectations and both hundred-step stdin solvers.

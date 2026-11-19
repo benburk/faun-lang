@@ -130,6 +130,11 @@ Fold what is known:
 
 9. **Simplification.** Callee-first constant folding, identities, and
    sharing repeated calls, so a caller sees its callees' answers.
+   Then a list a counting walk builds, `List.range(n).map(f)`, handed to a
+   definition reading it only by its length and by what dropping a
+   position leaves, goes to a copy taking what the walk was handed: the
+   length is the count, and position `i` holds `f` worked out at `i` where
+   `i` is below it, and nothing where it is not, as the list built does.
 10. **Specialization.** A construction nothing but one call reads, handed
     to a definition that takes it apart, goes to a copy of the definition
     taking its fields, where simplifying the copy decides a match: so
@@ -168,6 +173,20 @@ cost a third more compiling for inflate's table of noughts; and a walk
 pushing the same value every round builds the same list from either end,
 so fusion takes it as it is.
 
+### Why work out an element where it is read?
+
+A list read by position, `xs.get(i)` walking `i` up to `xs.len()`, held
+every element at once to read each one once: on x86-64 nine times the
+memory of the same sum written as a fold, which fusion never builds. Its
+copy reads no list. An element is worked out where it would have been
+read, and never more often than building the list worked it out: the
+reader must read one position a step, a position it counts up by a known
+number each time it goes round, or one position at most without going
+round, and the list must be read by that one call alone. So a table built
+once and looked up many times, `crc32`'s, is built as it was; and a list
+read at a position not counted up, read from its end, or handed to
+anything else as well is built.
+
 ### Why copy a definition for a construction rather than inline it?
 
 `equals` calls itself, so inlining stops at it, and a recursion over a
@@ -191,6 +210,10 @@ while building front to back fuses as `range` does, and its own
 comparison of a list it builds is taken apart as `equals` is.
 
 ## History
+
+- **2026-11-19:** a list a counting walk builds, read only by position
+  and length, is never built. `walk-index` holds 32 KiB on x86-64 where
+  it held 300, and runs 4.6 million instructions where it ran 14.7.
 
 - **2026-11-17:** a range or a repeat read once by a fold, a `map` or a
   `filter` is never built, and neither is a list literal only compared.
