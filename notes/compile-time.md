@@ -59,6 +59,32 @@ Before mimalloc and FxHash the six compiles took 235.7, 334.2, 2,214.8,
 3,013.0, 380.5 and 411.4 million in all: hashing cost the resolver and the
 checker most, and the allocator every stage.
 
+## With the library checked once (2026-11-19)
+
+The standard library is now checked when the compiler is built, and a
+compile reads what that left back from a snapshot built into the compiler,
+as [the snapshot's note](std-snapshot.md) says. Once the library was
+checked alone, that was 155 million instructions of every compile; reading
+it back is 18 million, so each compile runs 137 million fewer:
+
+| Compiles                     |  Before |   After | Change |
+| ---------------------------- | ------: | ------: | -----: |
+| Empty program                |   171.6 |    34.6 |   -80% |
+| Suite programs, median       |   450.4 |   313.9 |   -30% |
+| Suite programs, all together |  11,206 |   9,021 |   -20% |
+| Probes, median               |   305.5 |   169.4 |   -45% |
+| k-nucleotide, the slowest    | 1,755.1 | 1,619.4 |    -8% |
+
+Millions of user-space instructions, the median of five x86-64 builds
+favouring speed with the stock backend, pinned to one CPU, the suite's
+sixteen programs each built once. The empty program takes 7 processor
+milliseconds where it took 26. What is left of it is mostly decoding the
+whole typed program, which specialization could instead decode a
+definition at a time as it reaches them; for the suite, the machine tier
+is most of what is left, as the table above shows.
+
+The table above, and the sections below, are from before the snapshot.
+
 ## What a checked standard library would save
 
 The work that depends only on the standard library is the same 172 million
