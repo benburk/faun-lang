@@ -294,6 +294,9 @@ fewer, every suite program in 8% to 56% fewer.
   prelude's identities under 500 together.
 - **The compiler** is 15,770,928 bytes where it was 15,307,936: 463 KB
   more, 3%, the snapshot and serde's code.
+- **The evaluator** accepts it, scoring 0.971: compiling is 0.605 of what
+  it was across the suite's and the probes' builds on every target, no
+  cell worse, and speed, memory and both sizes unchanged.
 - **Building the compiler** from nothing takes longer, by about five to
   nine seconds of 32 to 37 on a busy machine, and 50 to 60 seconds more
   processor time, about 15%: the frontend and serde are built a second time,
