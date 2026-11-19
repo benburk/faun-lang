@@ -202,24 +202,16 @@ taken from step one. The rest of the empty program's compile is the host's
 loading and checking, specialization, the tiers below, and dropping it all.
 
 Every image is byte for byte what it was, on every target with both
-backends, built favouring speed and size, but seven programs': n-body of the
-suite, its untyped twin among the examples, two Advent of Code solutions,
-the rock-paper-scissors arena and the JSON and LRU libraries' examples. In
-each, a record's fields are laid out in another order, and so are the
-values built and read with it, and nothing else differs. One refusal says
-`{y: Nat, x: Nat}` where it said `{x: Nat, y: Nat}`.
+backends, built favouring speed and size, and so is every refusal.
 
-The cause is that a record's fields, and a tag row's tags, are kept in the
-order of their names' symbols, which is the order the names were first
-interned. Before, the program's declarations were loaded before the
-library's bodies were resolved, so a field name the program declared came
-before a name only the library's bodies use; now the library is resolved
-and checked first, so its names come first. `Vec3 : {x: F64, y: F64, z: F64}`
-in n-body is laid out `y, x, z`, since a library body binds a `y` and none
-binds an `x`. No numbering that checks the library first can keep the old
-order, since it put names the program declares between the library's. A
-snapshot has the same order as this separation, so the images it makes will
-be these.
+Before record fields and tag rows were kept in the order of their names'
+spelling, they were kept in the order the names were first interned, and
+checking the library first moved seven programs' layouts: a name the
+library's bodies use came before one only the program declares, so n-body's
+`Vec3 : {x: F64, y: F64, z: F64}` was laid out `y, x, z`. Ordering by
+spelling, and laying a shape's leaves out widest first with ties in that
+order, makes layout depend on a record's own names alone, so the separation
+and a snapshot leave every image as it was.
 
 ## Equivalence
 
