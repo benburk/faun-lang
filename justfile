@@ -82,7 +82,7 @@ bench cpu *args:
     cargo build --release -q -p faun
     python3 crates/frontend/examples/bench/run.py --cpu {{ cpu }} {{ args }}
 
-# Score this checkout (or a revision) against origin/main, or a named incumbent; `--log IDEA` appends the row; see RATCHET.md
+# Score this checkout (or a revision) against origin/main, or a named incumbent; `--log` appends the row, its idea the commit's subject or `--idea TEXT`; see RATCHET.md
 [positional-arguments]
 eval *args:
     nix develop .#eval --command python3 eval/ratchet.py eval "$@"

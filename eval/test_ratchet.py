@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -18,6 +19,7 @@ from ratchet import (
     X86,
     again_size,
     decide,
+    idea_of,
     log_row,
     noted,
     parser,
@@ -344,6 +346,68 @@ class Ratchet(unittest.TestCase):
         summary |= {"verdict": "reject", "reasons": ["worse"]}
         noting = dict(zip(LOG, log_row(summary, "x").split("\t")))
         self.assertEqual(noting["verdict"], "reject: worse; noted: one; two")
+
+    def test_a_row_records_the_measured_commits_subject(self):
+        args = parser().parse_args(["eval", "--log"])
+        self.assertTrue(args.log)
+        self.assertIsNone(args.idea)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / "main.fn").write_text("one\n")
+            commit_all(repo, "Loops count down to zero\n\nThe body says why.")
+            with mock.patch.object(ratchet, "REPO", repo):
+                side = ratchet.Side(str(repo))
+                self.assertEqual(idea_of(side, args.idea), "Loops count down to zero")
+                (repo / "main.fn").write_text("two\n")
+                side = ratchet.Side(str(repo))
+                self.assertEqual(
+                    idea_of(side),
+                    "Loops count down to zero (with uncommitted changes)",
+                )
+                timed = parser().parse_args(
+                    ["eval", "--log", "--idea", "the same, timed"]
+                )
+                self.assertEqual(idea_of(side, timed.idea), "the same, timed")
+
+    def test_a_row_keeps_an_idea_on_one_line(self):
+        summary = dict(
+            verdict="accept",
+            reasons=[],
+            score=0.9,
+            worst=1.0,
+            report="/r/x.json",
+            speed=1.0,
+            memory=1.0,
+            size=0.9,
+            small=0.9,
+            compile=1.0,
+        )
+        fields = dict(zip(LOG, log_row(summary, "one\ttwo\nthree").split("\t")))
+        self.assertEqual(fields["idea"], "one two three")
+
+    def test_pinning_passes_a_long_idea_on_and_resolves_only_checkouts(self):
+        idea = "a change described at length " * 20
+        self.assertGreater(len(idea.encode()), 255)
+        argv = ["ratchet.py", "eval", ".", "--log", "--idea", idea, "--jobs", "2"]
+        with (
+            tempfile.TemporaryDirectory() as cache,
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.dict(os.environ, clear=False) as env,
+            mock.patch.object(ratchet, "CACHE", Path(cache)),
+            mock.patch.object(ratchet, "export"),
+            mock.patch.object(os, "execve") as execve,
+        ):
+            env.pop("RATCHET_PINNED", None)
+            ratchet.pin(parser().parse_args(argv[1:]))
+        passed = execve.call_args.args[1][2:]
+        self.assertEqual(
+            passed,
+            ["eval", str(Path(".").resolve()), "--log", "--idea", idea, "--jobs", "2"],
+        )
+        # An idea that names a directory is still an idea.
+        argv = ["ratchet.py", "eval", "--idea", ".", "."]
+        self.assertEqual(ratchet.positionals(parser(), argv[1:]), [0, 3])
 
 
 def probing(candidates, incumbents=None, target=X86):
