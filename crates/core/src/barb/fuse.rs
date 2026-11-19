@@ -1,10 +1,11 @@
 //! Fusing a walk that builds a list with the walk that takes it apart.
 //!
 //! A producer walks a list and pushes one element onto an accumulator for
-//! each it passes, then answers the accumulator reversed: the elements in
-//! the order it made them. `map` and `trail` are written this way, and so
-//! is `range`, whose walk is down a number rather than a list: a number is
-//! a list of nothing but its length. One pushing the same value every
+//! each it passes, or none, then answers the accumulator reversed: the
+//! elements in the order it made them. `map` and `trail` are written this
+//! way, `filter` pushing an element only where it keeps it, and so is
+//! `range`, whose walk is down a number rather than a list: a number is a
+//! list of nothing but its length. One pushing the same value every
 //! round, as `repeat` does, may answer the accumulator as it stands, since
 //! from either end it built the same list. A
 //! consumer walks a list from the front, reading each element once and
@@ -178,8 +179,10 @@ impl Fusion<'_> {
     /// same building front to back, as [`super::forward`] writes a walk,
     /// `append(acc, e)` for the push and `prepend(acc, <empty>)`, or `acc`
     /// itself, at the end. What it goes on walking is its own: the rest, or
-    /// whatever its step worked out. Its call may stand inside matches of
-    /// one arm ending the step. What it walks may be a number, `zero` and
+    /// whatever its step worked out. Its call may stand inside matches
+    /// ending the step, each way through them pushing and going on, or
+    /// going on with `acc` as it came, as a filter does, so long as one
+    /// pushes. What it walks may be a number, `zero` and
     /// `succ(rest)` for `empty` and `push(x, rest)`; and where it pushes a
     /// parameter it hands itself as it came, it may answer `acc` itself
     /// having pushed in front.
@@ -234,36 +237,75 @@ impl Fusion<'_> {
                 return None;
             }
         }
-        // The push arm pushes one element onto it, and goes on, maybe
-        // inside matches of one arm taking apart what it goes on with. What
-        // it goes on walking is its own affair: the consumer is handed
-        // what it pushed, wherever that came from.
+        // Each way through the push arm, down whatever matches it ends
+        // with, either pushes one element onto it and goes on, or goes on
+        // with it as it came, pushing nothing: a filter's step. What it
+        // goes on walking is its own affair: the consumer is handed what
+        // it pushed, wherever that came from.
         let push_body = push_arm.body;
         let fields = self.program.fields(push).len();
-        let (inner, base) = innermost(self.program, push_body, arity + fields);
-        let Expr::Call(again, args) = self.program.expr(inner.tail) else {
-            return None;
-        };
-        if again != id {
-            return None;
+        let mut ways = Vec::new();
+        self.ways(id, push_body, arity + fields, &mut ways)?;
+        let reversed =
+            ended.is_some_and(|(reverse, _)| super::sequence::reverses(self.program, reverse));
+        let mut pushing_ways = 0;
+        for &(inner, base, args) in &ways {
+            let args = self.program.atoms(args);
+            if args[acc].0.index() == acc {
+                continue;
+            }
+            pushing_ways += 1;
+            let pushed = walk::bound(self.program, inner, base, args[acc].0.index())?;
+            // Answered reversed, it must push in front; answered as it
+            // stands, it must have been built in order -- or pushed the one
+            // value every time, handed on as it came, so that whichever end
+            // it was built from is the same list: a repeat.
+            let element = self.pushed_element(pushed, acc, (built_push, built_recursive))?;
+            let same = element.0.index() < arity && args[element.0.index()] == element;
+            let in_order = if reversed {
+                !self.appends(pushed)
+            } else {
+                self.appends(pushed) || (same && ways.len() == 1)
+            };
+            // Nothing else reads the list it pushed onto.
+            if !in_order || self.reads_after(inner, base, args[acc].0.index()) != 1 {
+                return None;
+            }
         }
-        let args = self.program.atoms(args);
-        if args.len() != arity {
-            return None;
-        }
-        let pushed = walk::bound(self.program, inner, base, args[acc].0.index())?;
-        // Answered as it stands, it must have been built in order -- or
-        // pushed the one value every time, handed on as it came, so that
-        // whichever end it was built from is the same list: a repeat.
-        let element = self.pushed_element(pushed, acc, (built_push, built_recursive))?;
-        let same = element.0.index() < arity && args[element.0.index()] == element;
-        if ended.is_none() && !self.appends(pushed) && !same {
-            return None;
-        }
-        // Nothing else reads the accumulator, or the list it pushed onto.
-        let next = args[acc].0.index();
+        // Nothing else reads the accumulator: each way reads it once.
         let reads = self.reads(push_body, acc) + self.reads(nil_arm.body, acc);
-        (reads == 2 && self.reads_after(inner, base, next) == 1).then_some(Producer { list, acc })
+        (pushing_ways > 0 && reads == ways.len() + 1).then_some(Producer { list, acc })
+    }
+
+    /// Each way through a producer's step `body`, whose first binding is at
+    /// `base`, down the matches it ends with to a call of `id` itself: the
+    /// body ending in the call, its first binding's level, and the call's
+    /// arguments. Nothing where a way ends otherwise.
+    fn ways(
+        &self,
+        id: FnId,
+        body: Body,
+        base: usize,
+        ways: &mut Vec<(Body, usize, super::Range)>,
+    ) -> Option<()> {
+        let inner = base + self.program.bindings(body.bindings).len();
+        match self.program.expr(body.tail) {
+            Expr::Call(again, args)
+                if again == id
+                    && self.program.atoms(args).len() == self.program.params(id).len() =>
+            {
+                ways.push((body, base, args));
+                Some(())
+            }
+            Expr::Match(_, arms) => {
+                for arm in self.program.arms(arms).to_vec() {
+                    let fields = self.program.fields(arm.ctor).len();
+                    self.ways(id, arm.body, inner + fields, ways)?;
+                }
+                Some(())
+            }
+            _ => None,
+        }
     }
 
     /// The element `expr` puts onto the accumulator at level `acc`: a push
@@ -509,8 +551,9 @@ impl Fusion<'_> {
 
     /// The producer's step `body`, whose locals so far `locals` maps, its
     /// first binding at `level` in the fused walk: down through each match
-    /// of one arm it ends with, to where it pushes and goes on, which goes
-    /// on as the consumer's step instead.
+    /// it ends with, to each way that pushes and goes on, which goes on as
+    /// the consumer's step instead, and each that goes on pushing nothing,
+    /// which goes on as the fused walk with the consumer's state as it was.
     fn step_body(
         &mut self,
         pair: &Pair,
@@ -520,30 +563,70 @@ impl Fusion<'_> {
         (rest, c_step): (Atom, Arm),
     ) -> Body {
         let mut scope = Scope::at(level);
-        let Expr::Match(on, arms) = self.program.expr(body.tail) else {
-            return self.pushing(pair, body, locals, scope, (rest, c_step));
-        };
-        let &[arm] = self.program.arms(arms) else {
-            unreachable!("a producer's step ends in matches of one arm, then its call");
-        };
+        let tail = self.program.expr(body.tail);
+        if let Expr::Call(_, again) = tail {
+            let again = self.program.atoms(again);
+            if again[pair.acc].0.index() != pair.acc {
+                return self.pushing(pair, body, locals, scope, (rest, c_step));
+            }
+        }
         for binding in self.program.bindings(body.bindings).to_vec() {
             let value = copy::expr(self.program, binding, &locals, &mut scope, None);
             locals.push(value);
         }
-        let fields = self.program.fields(arm.ctor).len();
-        let mut inner = locals.clone();
-        inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
-        let taken = self.step_body(pair, arm.body, inner, scope.level + fields, (rest, c_step));
-        let arms = self.program.terms.hold_arms(&[Arm {
-            ctor: arm.ctor,
-            body: taken,
-        }]);
-        let answer = copy::push(
-            self.program,
-            &mut scope,
-            Expr::Match(locals[on.0.index()], arms),
-        );
+        let answer = match tail {
+            Expr::Call(_, again) => {
+                let again = self.program.atoms(again).to_vec();
+                self.skipping(pair, &again, &locals, &mut scope)
+            }
+            Expr::Match(on, arms) => {
+                let mut rebuilt = Vec::new();
+                for arm in self.program.arms(arms).to_vec() {
+                    let fields = self.program.fields(arm.ctor).len();
+                    let mut inner = locals.clone();
+                    inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
+                    let taken =
+                        self.step_body(pair, arm.body, inner, scope.level + fields, (rest, c_step));
+                    rebuilt.push(Arm {
+                        ctor: arm.ctor,
+                        body: taken,
+                    });
+                }
+                let arms = self.program.terms.hold_arms(&rebuilt);
+                copy::push(
+                    self.program,
+                    &mut scope,
+                    Expr::Match(locals[on.0.index()], arms),
+                )
+            }
+            _ => unreachable!("a producer's step ends in matches, then its call"),
+        };
         copy::close(self.program, scope, answer)
+    }
+
+    /// The call going on where the producer pushed nothing, as it called
+    /// itself with `again`: the fused walk, on what the producer goes on
+    /// with and the consumer's state as it was.
+    fn skipping(
+        &mut self,
+        pair: &Pair,
+        again: &[Atom],
+        locals: &[Atom],
+        scope: &mut Scope,
+    ) -> Atom {
+        let mut going = Vec::with_capacity(pair.arity);
+        for (at, atom) in again.iter().enumerate() {
+            if at != pair.acc {
+                going.push(locals[atom.0.index()]);
+            }
+        }
+        for (at, &atom) in pair.c_locals.iter().enumerate() {
+            if at != pair.taken {
+                going.push(atom);
+            }
+        }
+        let args = self.program.terms.hold_atoms(going.into_iter());
+        copy::push(self.program, scope, Expr::Call(pair.id, args))
     }
 
     /// The body where the producer pushes and goes on, copied into `scope`
@@ -859,17 +942,4 @@ fn walked(program: &Program, ty: TypeId) -> Option<(super::CtorId, super::CtorId
         } => Some((empty, push, recursive)),
         _ => None,
     }
-}
-
-/// The body a step ends in, down through each match of one arm it ends
-/// with, and the level of that body's first binding, where `body`'s is at
-/// `base`.
-fn innermost(program: &Program, mut body: Body, mut base: usize) -> (Body, usize) {
-    while let Expr::Match(_, arms) = program.expr(body.tail)
-        && let &[arm] = program.arms(arms)
-    {
-        base += program.bindings(body.bindings).len() + program.fields(arm.ctor).len();
-        body = arm.body;
-    }
-    (body, base)
 }
