@@ -152,6 +152,96 @@ fn low_word_multiplication_preserves_unsigned_high_bits() {
     }
 }
 
+/// A comparison or a monus of numbers held at different widths reads both
+/// at the wider one, for every pair of widths: each pair is handed, through
+/// a call so that nothing folds them, a number at the top of the narrower
+/// width and one at the wider whose low thirty-two bits are the same, and
+/// answers, a bit each, whether they are equal, which is below the other,
+/// and whether the narrower less the wider is what it is. Read at the
+/// left's width only the wide one's low bits were compared: nought, held in
+/// no bits, was equal to `2^52 + 2^51`, which miscompiled the software float
+/// routines' `0 == mantissa` and so mandelbrot without hardware floats.
+#[test]
+fn numbers_of_different_widths_are_compared_at_the_wider() {
+    let top = |bits: u16| {
+        if bits == 64 {
+            u64::MAX
+        } else {
+            (1u64 << bits) - 1
+        }
+    };
+    let widths = [0u16, 1, 8, 31, 32, 33, 52, 53, 64];
+    for &narrow in &widths {
+        for &wide in widths.iter().filter(|&&wide| wide >= narrow) {
+            let small = top(narrow);
+            // The wide number's low thirty-two bits are the small one's.
+            let big = (top(wide) & !u64::from(u32::MAX)) | (small & u64::from(u32::MAX));
+            for (left, right) in [
+                ((small, narrow), (big, wide)),
+                ((big, wide), (small, narrow)),
+            ] {
+                let answer = i32::from(left.0 == right.0)
+                    | i32::from(left.0 < right.0) << 1
+                    | i32::from(left.0 > right.0) << 2
+                    | 1 << 3;
+                assert_eq!(
+                    compared(left, right),
+                    answer,
+                    "{} at {} bits and {} at {}",
+                    left.0,
+                    left.1,
+                    right.0,
+                    right.1
+                );
+            }
+        }
+    }
+}
+
+/// What a program answers comparing `left` and `right`, each a number and
+/// the bits it is held in, handed through a call so that nothing folds
+/// them: a bit each for whether they are equal, whether the left is below,
+/// whether it is above, and whether the left less the right is what it is.
+fn compared((left, left_bits): (u64, u16), (right, right_bits): (u64, u16)) -> i32 {
+    use faun_core::ir::{Binary, Class, Direction, Program, Relation};
+    let class = |bits: u16| {
+        if bits == 64 {
+            Class::Word
+        } else {
+            Class::fixed(bits)
+        }
+    };
+    let (mut p, main) = Program::new("main");
+    let probe = p.declare(
+        "probe",
+        &[class(left_bits), class(right_bits)],
+        &[Class::Word],
+    );
+    p.define(probe, |b, params| {
+        let (x, y) = (params[0], params[1]);
+        let equal = b.compare(Relation::Equal, x, y);
+        let below = b.compare(Relation::Less, x, y);
+        let above = b.compare(Relation::Less, y, x);
+        let less = b.binary_at(class(left_bits), Binary::Monus, x, y);
+        let expected = b.constant(class(left_bits), left.saturating_sub(right));
+        let monus = b.compare(Relation::Equal, less, expected);
+        let below = b.shift(Class::Word, Direction::Up, below, 1);
+        let above = b.shift(Class::Word, Direction::Up, above, 2);
+        let monus = b.shift(Class::Word, Direction::Up, monus, 3);
+        let answer = b.binary(Binary::Or, equal, below);
+        let answer = b.binary(Binary::Or, answer, above);
+        let answer = b.binary(Binary::Or, answer, monus);
+        b.ret(&[answer]);
+    });
+    p.define(main, |b, _| {
+        let x = b.constant(class(left_bits), left);
+        let y = b.constant(class(right_bits), right);
+        let answered = b.call(probe, &[x, y]);
+        b.ret(&answered);
+    });
+    shared::status(&p)
+}
+
 /// A recursion's way out, which touches nothing it keeps for its caller,
 /// returns without saving it, favouring speed; favouring size, the frame
 /// opens where the function starts.

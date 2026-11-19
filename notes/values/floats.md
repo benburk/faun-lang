@@ -110,6 +110,16 @@ A hardware NaN may be any NaN's pattern, which no program can tell. The
 expectations in `examples/floats/` are asked twice, once compiled for the
 machine and once of the definitions alone, and must agree.
 
+A table gone stale recognizes nothing, and a program is only slower for it:
+every routine then compiles as the natural-number code it is. The suite's
+programs, the probes and the float examples are built that way too, with
+every float operation walked, on x86-64, its lab backend and wasm32, and
+must write what they write recognized (`crates/cli/tests/walked_floats.rs`).
+That is the code x86-64 otherwise never runs, and it once found the x86
+backends comparing a number held in fewer bits with a wider one at the
+narrower width, which made mandelbrot draw wrong pixels when the table went
+stale after record fields were put in name order.
+
 `of_nat` below `2^52` (`2^23` for `F32`) is a recognized subtraction too: the
 pattern of `2^52 + n` less `2^52`, both exact. What is left in software,
 `fma`, `of_decimal`, the other conversions and the text, costs thousands of
