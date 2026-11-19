@@ -1521,6 +1521,12 @@ impl Lowering<'_> {
     /// value narrower than a pair is widened on the way in. Nothing else
     /// widens one: a place that holds a narrow value keeps one byte.
     fn read(&mut self, pair: u8, value: ValueId) {
+        // A value of no bits is nought, and nothing keeps a place for it:
+        // what its place holds by the time it is read is anything.
+        if bits(self.program.class(value)) == 0 {
+            self.set_pair(pair, 0);
+            return;
+        }
         match self.source[value.index()] {
             Source::Const(word) => {
                 let word = u16::try_from(word).expect("a word this target can hold");
@@ -1621,6 +1627,9 @@ impl Lowering<'_> {
     /// `value` where an instruction can read it, copied into `scratch` only
     /// when it lives in the frame.
     fn operand(&mut self, value: ValueId, scratch: u8) -> Operand {
+        if bits(self.program.class(value)) == 0 {
+            return Operand::Imm(0);
+        }
         match self.source[value.index()] {
             Source::Const(word) => {
                 Operand::Imm(u16::try_from(word).expect("a word this target can hold"))
@@ -2158,6 +2167,7 @@ impl Lowering<'_> {
         // Nothing to take off, nothing wanted that is not there, and
         // already where it is going.
         if kept >= self.stored(value)
+            && bits(self.program.class(value)) > 0
             && (!self.wide(result) || self.wide(value))
             && self.same_place(value, result)
         {
