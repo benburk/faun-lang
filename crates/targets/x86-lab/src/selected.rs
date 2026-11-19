@@ -24,16 +24,31 @@ pub(crate) type Constraint = faun_core::codegen::registers::Constraint<Reg>;
 pub(crate) type OperandSpec = faun_core::codegen::registers::OperandSpec<Reg>;
 
 /// The width a comparison or a monus of `left` and `right` works at: the
-/// wider of the two. The IR compares two numbers held at different classes
-/// as numbers, so the narrower one, zero above its width in its register,
+/// wider of the two. The IR compares two numbers held at different widths
+/// as numbers, so the narrower one, nought above its width in its register,
 /// is read at the wider one's; read at the narrower one's instead, only the
-/// low bits of the wider would be compared, and a value nought or below
-/// 2^32 would be equal to one whose low bits are those.
-fn compared_bits(source: &Program, left: ValueId, right: ValueId) -> u16 {
-    source
-        .class(left)
-        .bits(WORD_BITS)
-        .max(source.class(right).bits(WORD_BITS))
+/// low bits of the wider would be compared, and nought, or anything below
+/// 2^32, would be equal to a number whose low bits it shares.
+fn compared_bits(widths: &[u16], left: ValueId, right: ValueId) -> u16 {
+    widths[left.index()].max(widths[right.index()])
+}
+
+/// Each constant as wide as its value, however wide its class: it takes no
+/// more bits than that, so a comparison of a narrow value with a constant
+/// word that fits it is read at the narrow width.
+fn narrow_constants(source: &Program, widths: &mut [u16]) {
+    for function in source.functions() {
+        let Some(body) = function.body() else {
+            continue;
+        };
+        for (op, results) in source.walk_within(body) {
+            if let (SourceOp::Constant { value }, [result]) = (op, results) {
+                let bits = u16::try_from(u64::BITS - value.leading_zeros())
+                    .expect("a word's bits fit sixteen");
+                widths[result.index()] = widths[result.index()].min(bits);
+            }
+        }
+    }
 }
 
 /// A value's virtual register is its number.
@@ -1457,6 +1472,7 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
         }
         widths.push(class.bits(WORD_BITS));
     }
+    narrow_constants(source, &mut widths);
     let mut selector = Selector {
         source,
         widths,
@@ -1734,7 +1750,7 @@ impl Selector<'_> {
                     // left's width alone it would take away only the low
                     // bits of a wider right.
                     let bits = if opcode == Opcode::Monus {
-                        compared_bits(source, left, right)
+                        compared_bits(&self.widths, left, right)
                     } else {
                         source.class(results[0]).bits(WORD_BITS)
                     };
@@ -1753,8 +1769,10 @@ impl Selector<'_> {
                 } => {
                     let (opcode, bits) = match relation {
                         Relation::FloatNotAbove(format) => (Opcode::FloatNotAbove, format.bits()),
-                        Relation::Equal => (Opcode::Equal, compared_bits(source, left, right)),
-                        Relation::Less => (Opcode::Below, compared_bits(source, left, right)),
+                        Relation::Equal => {
+                            (Opcode::Equal, compared_bits(&self.widths, left, right))
+                        }
+                        Relation::Less => (Opcode::Below, compared_bits(&self.widths, left, right)),
                     };
                     self.emit(
                         block,
