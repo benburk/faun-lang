@@ -558,6 +558,7 @@ impl<'a> Lowering<'a> {
         };
         let definition = self.selected.instructions[definition];
         match definition.immediate {
+            Immediate::Rotate { bits, .. } => bits,
             Immediate::Shift { up: false, by, .. } => {
                 let moved = self.selected.operands[definition.operands.range()][0];
                 width.min(self.selected.widths[moved.index()].saturating_sub(u16::from(by)))
@@ -595,6 +596,35 @@ impl<'a> Lowering<'a> {
             .count()
             == 1
             && self.uses.operands[value.index()] == 1
+    }
+
+    fn compare(
+        &mut self,
+        op: Opcode,
+        left: Reg,
+        right: VReg,
+        right_reg: Reg,
+        bits: u16,
+    ) -> Condition {
+        let unique = self.is_unique_constant(right);
+        if unique && op == Opcode::Below && self.asm.fold_below_sign_bit(left, right_reg, bits) {
+            self.forget(right_reg);
+            return Condition::NotSign;
+        }
+        if (unique || self.is_only_nought(right))
+            && self
+                .asm
+                .fold_alu_immediate(Alu::Compare, left, right_reg, bits)
+        {
+            self.forget(right_reg);
+        } else {
+            self.asm.alu(Alu::Compare, left, right_reg, bits);
+        }
+        if op == Opcode::Equal {
+            Condition::Equal
+        } else {
+            Condition::Below
+        }
     }
 
     fn is_branch_only_result(&self, points: &InstPoints, result: VReg) -> bool {
@@ -987,6 +1017,9 @@ impl<'a> Lowering<'a> {
                 };
                 self.asm.shift_by_count(direction, result()?);
             }
+            (Opcode::RotateLeft, Immediate::Rotate { bits, by }) => {
+                self.asm.rotate_left(result()?, bits, by);
+            }
             (Opcode::Multiply, Immediate::Bits(bits)) => {
                 let source = self.selected.operands[inst.operands.range()][1];
                 let source_reg = reg(1)?;
@@ -1009,26 +1042,16 @@ impl<'a> Lowering<'a> {
                 self.asm.float(float, result()?, reg(0)?, right);
             }
             (Opcode::Divide | Opcode::Modulo, Immediate::Bits(_)) => {
-                self.emit_division(inst.opcode == Opcode::Modulo);
+                let operands = &self.selected.operands[inst.operands.range()];
+                self.emit_division(inst.opcode == Opcode::Modulo, operands[0], operands[1]);
             }
-            (Opcode::Equal | Opcode::Below, Immediate::Bits(bits)) => {
-                let source = self.selected.operands[inst.operands.range()][1];
-                let source_reg = reg(1)?;
-                // Nought read here alone was just written, or the fold
-                // finds nothing to take back; the fold forgets the register.
-                if (self.is_unique_constant(source) || self.is_only_nought(source))
-                    && self
-                        .asm
-                        .fold_alu_immediate(Alu::Compare, reg(0)?, source_reg, bits)
-                {
-                    self.forget(source_reg);
+            (Opcode::Equal | Opcode::Below | Opcode::FloatNotAbove, Immediate::Bits(bits)) => {
+                let condition = if inst.opcode == Opcode::FloatNotAbove {
+                    self.asm.float_compare(reg(0)?, reg(1)?, bits);
+                    Condition::NotAbove
                 } else {
-                    self.asm.alu(Alu::Compare, reg(0)?, source_reg, bits);
-                }
-                let condition = if inst.opcode == Opcode::Equal {
-                    Condition::Equal
-                } else {
-                    Condition::Below
+                    let source = self.selected.operands[inst.operands.range()][1];
+                    self.compare(inst.opcode, reg(0)?, source, reg(1)?, bits)
                 };
                 let result = result()?;
                 if self.is_branch_only_result(points, inst.result.expect("a compared result")) {
@@ -1276,22 +1299,39 @@ impl<'a> Lowering<'a> {
         self.known.fill(None);
     }
 
-    fn emit_division(&mut self, modulo: bool) {
-        let zero = self.asm.label();
-        let end = self.asm.label();
-        self.asm.alu(Alu::Test, Reg::Rcx, Reg::Rcx, 64);
-        self.asm.jump_if(Condition::Equal, zero);
+    fn emit_division(&mut self, modulo: bool, dividend: VReg, divisor: VReg) {
+        // DIV must see the full operands even if only a narrow result is used.
+        let bits = self.held_width(dividend).max(self.held_width(divisor));
+        let width = if bits <= 32 {
+            RegisterWidth::Low32
+        } else {
+            RegisterWidth::Word
+        };
+        let nonzero = self.uses.definitions[divisor.index()].is_some_and(|id| {
+            matches!(self.selected.instructions[id].immediate, Immediate::Integer(n) if n != 0)
+        });
+        let guard = if nonzero {
+            None
+        } else {
+            let zero = self.asm.label();
+            let end = self.asm.label();
+            self.asm.alu(Alu::Test, Reg::Rcx, Reg::Rcx, bits);
+            self.asm.jump_if(Condition::Equal, zero);
+            Some((zero, end))
+        };
         self.asm.xor_self(Reg::Rdx);
-        self.asm.divide();
+        self.asm.divide(width);
         if modulo {
-            self.asm.mov_reg(Reg::Rax, Reg::Rdx, RegisterWidth::Word);
+            self.asm.mov_reg(Reg::Rax, Reg::Rdx, width);
         }
-        self.asm.jump(end);
-        self.asm.bind(zero);
-        if !modulo {
-            self.asm.xor_self(Reg::Rax);
+        if let Some((zero, end)) = guard {
+            self.asm.jump(end);
+            self.asm.bind(zero);
+            if !modulo {
+                self.asm.xor_self(Reg::Rax);
+            }
+            self.asm.bind(end);
         }
-        self.asm.bind(end);
         self.forget(Reg::Rax);
         self.forget(Reg::Rdx);
     }
@@ -1324,7 +1364,7 @@ impl<'a> Lowering<'a> {
                     self.pending_condition.take()
                     && pending == condition
                 {
-                    (condition_code, inverse(condition_code))
+                    (condition_code, condition_code.inverse())
                 } else {
                     let condition = match self.location(layout.terminator, condition)? {
                         Location::Register(reg) => reg,
@@ -1478,15 +1518,6 @@ const fn successors(terminator: Terminator) -> [Option<BlockId>; 2] {
             ..
         } => [Some(then_target), Some(else_target)],
         Terminator::Return { .. } | Terminator::Halt => [None, None],
-    }
-}
-
-const fn inverse(condition: Condition) -> Condition {
-    match condition {
-        Condition::Equal => Condition::NotEqual,
-        Condition::NotEqual => Condition::Equal,
-        Condition::Below => Condition::NotBelow,
-        Condition::NotBelow => Condition::Below,
     }
 }
 

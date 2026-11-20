@@ -205,11 +205,14 @@ fn uses() -> impl Parser<Command> {
 
 fn compiler() -> impl Parser<Compiler> {
     let target = target();
+    // Every target has one backend; `--backend lab` names it still, for
+    // scripts written when there were two, as `--backend x86-lab` does.
     let backend = long("backend")
-        .help("Code generator: stock or lab (x86-lab selects lab on x86-64 Linux)")
         .argument::<String>("BACKEND")
-        .fallback(String::from("stock"));
-    construct!(target, backend).parse(|(target, backend)| Compiler::choose(target, &backend))
+        .optional()
+        .hide();
+    construct!(target, backend)
+        .parse(|(target, backend)| Compiler::choose(target, backend.as_deref()))
 }
 
 /// `--target`, defaulting to [`NATIVE`] and required where there is none.

@@ -2,7 +2,7 @@
 //! numbers packed by their bits in the list's own buffer: a block's
 //! symbols, a literal byte or a match's length and distance, take four
 //! bytes each, as the same numbers packed into a `U32` by hand do. Every
-//! backend reads back what was written, through matching, equality, joins,
+//! target reads back what was written, through matching, equality, joins,
 //! replacing, reversing and sorting.
 mod support;
 
@@ -41,28 +41,26 @@ const SYMBOLS: &str = r#"
 "#;
 
 #[test]
-fn a_list_of_small_tags_reads_back_what_was_written_on_every_backend() {
+fn a_list_of_small_tags_reads_back_what_was_written_on_every_target() {
     let package = Package::new("element-layout-symbols", SYMBOLS);
     let (status, expected) = run_file(&package.entry(), &[]);
     assert_eq!(status, 0);
     for target in ["x86_64-linux", "wasm32-wasi"] {
-        for backend in ["stock", "lab"] {
-            let result = Command::new(env!("CARGO_BIN_EXE_faun"))
-                .args(["run", "--backend", backend, "--target", target])
-                .arg(package.entry())
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "{target}/{backend}: {}",
-                String::from_utf8_lossy(&result.stderr)
-            );
-            assert_eq!(
-                String::from_utf8_lossy(&result.stdout),
-                expected,
-                "{target}/{backend}"
-            );
-        }
+        let result = Command::new(env!("CARGO_BIN_EXE_faun"))
+            .args(["run", "--target", target])
+            .arg(package.entry())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            expected,
+            "{target}"
+        );
     }
 }
 
@@ -87,12 +85,12 @@ fn gathering(symbol: &str, appended: (&str, &str), weighed: &str) -> String {
     )
 }
 
-/// The most memory the program at `entry`, built for x86-64 with
-/// `backend`, held, in kilobytes, and what it printed.
-fn peak(entry: &std::path::Path, backend: &str) -> (u64, String) {
-    let image = entry.with_file_name(format!("image-{backend}"));
+/// The most memory the program at `entry`, built for x86-64, held, in
+/// kilobytes, and what it printed.
+fn peak(entry: &std::path::Path) -> (u64, String) {
+    let image = entry.with_file_name("image");
     let built = Command::new(env!("CARGO_BIN_EXE_faun"))
-        .args(["build", "--backend", backend, "-o"])
+        .args(["build", "-o"])
         .arg(&image)
         .arg(entry)
         .output()
@@ -151,15 +149,13 @@ fn a_list_of_small_tags_holds_as_little_as_the_numbers_packed_by_hand() {
             "if symbol < 65536 then total + symbol.to_nat() else total + symbol.shift_right(16).to_nat() + (symbol & 0xffff).to_nat()",
         ),
     );
-    for backend in ["stock", "lab"] {
-        let (tags, said) = peak(&natural.entry(), backend);
-        let (words, answer) = peak(&packed.entry(), backend);
-        assert_eq!(said, answer, "{backend}");
-        // Six bytes a symbol, each number in bytes of its own, would hold
-        // half as much again.
-        assert!(
-            tags * 10 < words * 11,
-            "{backend}: the symbols held {tags} kB, the words {words} kB"
-        );
-    }
+    let (tags, said) = peak(&natural.entry());
+    let (words, answer) = peak(&packed.entry());
+    assert_eq!(said, answer);
+    // Six bytes a symbol, each number in bytes of its own, would hold half
+    // as much again.
+    assert!(
+        tags * 10 < words * 11,
+        "the symbols held {tags} kB, the words {words} kB"
+    );
 }
