@@ -77,6 +77,10 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
 
 /// Lay out the managed shapes and build the ownership and region plans
 /// before rewriting any function bodies.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one constructor for every table the pass reads"
+)]
 fn prepare_pass<'a>(
     source: &'a Program,
     output: &mut Program,
@@ -122,8 +126,24 @@ fn prepare_pass<'a>(
         values: vec![Cell::new(None); source.values_count()],
         unique,
         borrowed_cells: ownership::borrowed_cells(source, &owned),
+        immortal: immortal(source),
         owned,
     })
+}
+
+/// Which values are buffers laid out before the program runs: immortal, so a
+/// claim to one counts nothing, and a use taking one need neither retain nor
+/// later release it. A table read in a loop is not counted every time round.
+fn immortal(source: &Program) -> Vec<bool> {
+    let mut immortal = vec![false; source.values_count()];
+    for body in source.functions().iter().filter_map(super::Function::body) {
+        for (op, results) in source.walk_within(body) {
+            if matches!(op, Op::BufferKnown { .. } | Op::BufferEmpty { .. }) {
+                immortal[results[0].index()] = true;
+            }
+        }
+    }
+    immortal
 }
 
 /// Counts whose reservations fit the shared buffer. Keep the data last so
@@ -693,6 +713,8 @@ struct Pass<'a> {
     /// A field borrowed from a caller-owned root needs a claim only when
     /// an operation takes it or it leaves the activation.
     borrowed_cells: Vec<bool>,
+    /// Which values are immortal buffers, whose claims count nothing.
+    immortal: Vec<bool>,
     /// Which replacements write a buffer nothing else holds, and which
     /// loops make theirs one on entry.
     unique: super::uniqueness::Unique,
@@ -762,7 +784,7 @@ impl Pass<'_> {
     }
 
     fn claim(&self, b: &mut Builder, old: ValueId) -> ValueId {
-        if self.region_cell(old) {
+        if self.region_cell(old) || self.immortal[old.index()] {
             self.value(old)
         } else {
             self.retained(b, self.source.class(old), self.value(old))
@@ -1059,6 +1081,7 @@ impl Pass<'_> {
                 self.mapped(old, new);
                 if managed(self.source.class(old))
                     && !self.borrowed_cells[old.index()]
+                    && !self.immortal[old.index()]
                     && !self.region_cell(old)
                 {
                     top(scopes).held.push(old);

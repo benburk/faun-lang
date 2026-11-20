@@ -119,6 +119,49 @@ fn a_cell_with_no_fields_is_never_allocated() {
     }
 }
 
+/// A buffer laid out before the program runs is immortal, so a table of
+/// views into it counts no claims to it however many rows it pushes: no row
+/// retains it, and the rows read back what was laid out.
+#[test]
+fn rows_of_an_immortal_buffer_count_no_claims_to_it() {
+    let (mut source, main) = Program::new("main");
+    source.define(main, |b, _| {
+        let bytes = b.shape(&[Class::fixed(8)]);
+        let data = b.data(b"table");
+        let table = b.buffer_known(data, bytes, 1);
+        let rows = b.shape(&[Class::Buffer, Class::Word, Class::Word]);
+        let mut outer = b.buffer_empty(rows);
+        let mut start = b.constant(Class::Word, 0);
+        for (at, (first, len)) in [(0, 2), (2, 3)].into_iter().enumerate() {
+            let held = b.constant(Class::Word, u64::try_from(at).unwrap());
+            let first = b.constant(Class::Word, first);
+            let len = b.constant(Class::Word, len);
+            [outer, start] = b.buffer_push((outer, start, held), rows, &[table, first, len]);
+        }
+        let len = b.buffer_field((Class::Word, rows), (outer, start), 2);
+        b.ret(&[len]);
+    });
+    let config = Config {
+        word_bits: 64,
+        heap_bytes: 512,
+        grows: false,
+        inline_small: true,
+        inline_counts: false,
+        join_routines: false,
+    };
+    let legalized = legalize(&source, config).unwrap();
+    let evaluation = run(&legalized, main, &[], 64);
+    assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(3u8)]);
+    let retain = legalized
+        .functions()
+        .iter()
+        .position(|function| legalized.name(function.name) == "nat.retain");
+    if let Some(retain) = retain {
+        assert_eq!(evaluation.counts.calls[retain], 0, "{}", legalized.render());
+    }
+    no_live_objects(&legalized, &evaluation, config);
+}
+
 /// How many times the bodies of `functions` call the allocator: what the
 /// program itself does, past the runtime it is given.
 fn allocations_in(program: &Program, functions: &[FunctionId]) -> usize {
