@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use faun_core::ir::evaluate::{self, Error, Host, HostResult, Memory};
-use faun_core::targets::Target;
+use faun_core::targets::{Favour, Pipeline, Target};
 use faun_x86_64_linux::X86_64Linux;
 use num_bigint::BigUint;
 
@@ -108,13 +108,23 @@ pub(crate) fn run_failing(
 /// As [`run_file`], answering also the fuel the interpreter spent: a count
 /// of the work the program did, the same from run to run.
 pub(crate) fn run_counted(entry: &std::path::Path, input: &[u8]) -> (u32, String, u64) {
+    run_counted_through(entry, input, Pipeline::Stock)
+}
+
+/// As [`run_counted`], lowered and legalized by `pipeline`.
+pub(crate) fn run_counted_through(
+    entry: &std::path::Path,
+    input: &[u8],
+    pipeline: Pipeline,
+) -> (u32, String, u64) {
     let mut barb = faun_frontend::lower_to_barb(entry, &faun_driver::platform(&X86_64Linux))
         .unwrap_or_else(|error| panic!("{}", error.message));
     let mut streams = Streams {
         input: input.iter().copied().collect(),
         ..Streams::default()
     };
-    let (status, spent) = run_spending(&mut barb, &mut streams, 100_000_000);
+    let (status, spent) = try_run_through(&mut barb, &mut streams, 100_000_000, pipeline)
+        .unwrap_or_else(|error| panic!("{error:?}"));
     (
         status,
         String::from_utf8(streams.output).expect("text written"),
@@ -343,11 +353,21 @@ fn try_run_spending(
     streams: &mut Streams,
     fuel: u64,
 ) -> Result<(u32, u64), Error> {
+    try_run_through(barb, streams, fuel, Pipeline::Stock)
+}
+
+/// [`try_run_spending`], lowered and legalized by `pipeline`.
+fn try_run_through(
+    barb: &mut barb::Program,
+    streams: &mut Streams,
+    fuel: u64,
+    pipeline: Pipeline,
+) -> Result<(u32, u64), Error> {
     barb::optimize(barb);
-    let machine = faun_core::lower_to_machine_ir(barb, &X86_64Linux.routines())
+    let machine = faun_core::lower_with_pipeline(barb, &X86_64Linux.routines(), pipeline)
         .unwrap_or_else(|error| panic!("{error}"));
     let prepared = X86_64Linux
-        .prepare(&machine)
+        .prepare_with_pipeline(&machine, Favour::Speed, pipeline)
         .unwrap_or_else(|error| panic!("{error}"));
     let main = prepared.entry();
     // `argc` is handed only where the program reads it.
