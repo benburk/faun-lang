@@ -17,7 +17,7 @@
 
 use faun_core::ir;
 use faun_core::platform::Routines;
-use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
+use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_frontend::Diagnostic;
 use faun_frontend::platform::{Platform, Routine};
 
@@ -41,22 +41,16 @@ fn platform_for(name: &str, routines: &Routines) -> Platform {
     )
 }
 
-/// Lower optimized Barb to the machine IR `target` compiles, by
-/// `pipeline`'s passes.
+/// Lower optimized Barb to the machine IR `target` compiles.
 ///
 /// # Errors
 /// Names what the machine tier cannot represent.
-pub fn machine_ir(
-    barb: &barb::Program,
-    target: &dyn Target,
-    pipeline: Pipeline,
-) -> Result<ir::Program, String> {
-    faun_core::lower_with_pipeline(barb, &target.routines(), pipeline)
+pub fn machine_ir(barb: &barb::Program, target: &dyn Target) -> Result<ir::Program, String> {
+    faun_core::lower_to_machine_ir(barb, &target.routines())
 }
 
 /// Compile an application's Barb to `target`'s image: optimize it, lower
-/// it to machine IR by `pipeline`'s passes, and let the target compile
-/// that.
+/// it to machine IR, and let the target compile that.
 ///
 /// The image favours speed or size where they pull apart, as `favour`
 /// says, with symbols naming each function where `symbols` asks and the
@@ -67,15 +61,14 @@ pub fn machine_ir(
 pub fn compile_barb(
     barb: barb::Program,
     target: &dyn Target,
-    pipeline: Pipeline,
     favour: Favour,
     symbols: SymbolTable,
 ) -> Result<Vec<u8>, Diagnostic> {
     let mut barb = barb;
     barb::optimize(&mut barb);
-    let machine = machine_ir(&barb, target, pipeline).map_err(Diagnostic::new)?;
+    let machine = machine_ir(&barb, target).map_err(Diagnostic::new)?;
     target
-        .compile_with_pipeline(&machine, favour, symbols, pipeline)
+        .compile_machine_ir_with(&machine, favour, symbols)
         .map_err(Diagnostic::new)
 }
 

@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
+use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
 
@@ -112,14 +112,11 @@ fn image(source: &Path, backend: Backend, walked: bool) -> Vec<u8> {
     barb::optimize(&mut program);
     let built = match backend {
         Backend::Lab => faun_x86_lab::compile(&program, Favour::Speed, SymbolTable::Omitted),
-        Backend::Stock | Backend::Wasm => faun_core::lower_with_pipeline(
-            &program,
-            &target.routines(),
-            Pipeline::Stock,
-        )
-        .and_then(|ir| {
-            target.compile_with_pipeline(&ir, Favour::Speed, SymbolTable::Omitted, Pipeline::Stock)
-        }),
+        Backend::Stock | Backend::Wasm => {
+            faun_core::lower_to_machine_ir(&program, &target.routines()).and_then(|ir| {
+                target.compile_machine_ir_with(&ir, Favour::Speed, SymbolTable::Omitted)
+            })
+        }
     };
     built.unwrap_or_else(|error| panic!("{} on {backend:?}: {error}", source.display()))
 }

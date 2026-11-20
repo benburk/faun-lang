@@ -18,7 +18,7 @@
 //!   values its fields are held as, end to end, with no object of its own.
 //!   Constructing one allocates nothing and taking it apart reads nothing.
 //!   Whether it fits a target's registers is the target's question, answered
-//!   by [`super::fit`]. A product on a cycle made only of products has no
+//!   by [`crate::ir::fit`]. A product on a cycle made only of products has no
 //!   values, and one with more than [`FLAT_LEAVES`] leaves is a cell: a
 //!   value that large is cheaper shared than copied.
 //! - a sequence -- a two-constructor sum whose step holds one element and
@@ -30,14 +30,10 @@
 //!   emitted; a call to one reads the length leaf. Nor is one recognized as
 //!   putting one sequence's elements before another's, reversed or in
 //!   order: a call to one is a single buffer operation.
-//! - a sum whose fields are all numbers is held flat too, as a tagged
-//!   union: its tag, then a run of slots each constructor lays its fields'
-//!   leaves in, numbers of a machine's width in the first slots and
-//!   arbitrary-precision ones after. A slot a constructor leaves empty holds
-//!   nought. Building one allocates nothing, and matching one tests the tag
-//!   it holds. A sum that reaches itself through its fields has no such
-//!   bound on its size, and one holding a list or a cell has nothing to put
-//!   in a slot left empty, so both are cells.
+//! - a bounded, nonrecursive sum of numbers and at most one sequence buffer
+//!   per arm is held flat: a tag, scalar slots, natural slots, then an optional
+//!   buffer slot. An unused numeric slot holds zero. An unused buffer slot
+//!   holds an immortal empty buffer, safe to retain and release like any other.
 //! - everything else with fields is a managed cell.
 //! - a cell's fields are held at the class the cell says, which is the class
 //!   a projection reads them back at. A field held flat is its leaves, laid
@@ -59,7 +55,13 @@ use super::program::Program;
 use super::validate::validate;
 use crate::platform::{Built, Returns, Routine, Routines, Takes, reads, takes as takes_sentence};
 
+#[path = "lower/constant_calls.rs"]
+mod constant_calls;
+#[path = "lower/inline_bytes.rs"]
+mod inline_bytes;
+
 #[cfg(test)]
+#[path = "lower/tests.rs"]
 mod tests;
 
 /// Lower a whole program, or say what it holds that this tier cannot yet
@@ -154,6 +156,7 @@ fn lowered(
     let bytes = argument_bytes(program, facts, entry, &demand.carries);
 
     let lowering = Lowering {
+        native_inline_bytes: routines.word() == Some(64),
         barb: program,
         facts,
         carries: demand.carries,
@@ -177,7 +180,7 @@ fn lowered(
         }
     }
     validate(&machine)?;
-    Ok(machine)
+    Ok(constant_calls::answered_in_place(&machine))
 }
 
 /// Carry semantic summaries into machine IR; never remove its terminators.
@@ -780,8 +783,7 @@ enum Storage {
     /// as [`SEQUENCE_LEAVES`] says.
     Seq,
     /// A sum held as its tag and its slots: a run in the leaf pool, the tag
-    /// first, then the slots for numbers a machine holds, then those for
-    /// arbitrary-precision ones.
+    /// first, then machine numbers, arbitrary-precision numbers and an optional buffer.
     Tagged(barb::Range),
 }
 
@@ -1239,7 +1241,7 @@ impl<'a> Demand<'a> {
     }
 
     /// How a sum is held once its fields are demanded: as its tag and slots
-    /// where every leaf is a number and they fit, and `None` to keep it a
+    /// for numbers and up to one buffer per arm, and `None` to keep it a
     /// cell. A wrapper around a sum is held as that sum.
     #[expect(
         clippy::too_many_lines,
@@ -1264,8 +1266,9 @@ impl<'a> Demand<'a> {
         }
         let mut scalars: Vec<Class> = Vec::new();
         let mut naturals = 0;
+        let mut buffers = 0;
         for &ctor in &ctors {
-            let (mut scalar, mut natural) = (0, 0);
+            let (mut scalar, mut natural, mut buffer) = (0, 0, 0);
             for at in 0..self.program.fields(ctor).len() {
                 let Some(carried) =
                     field_carried(self.program, self.facts, &self.carries, ctor, at)
@@ -1282,15 +1285,16 @@ impl<'a> Demand<'a> {
                             }
                             scalar += 1;
                         }
-                        // Nothing stands in a slot a constructor leaves
-                        // empty where a list or a cell would go.
-                        Class::Cell | Class::Buffer | Class::Address => return Ok(None),
+                        Class::Buffer => buffer += 1,
+                        // Neither class has a safe inactive value.
+                        Class::Cell | Class::Address => return Ok(None),
                     }
                 }
             }
             naturals = usize::max(naturals, natural);
+            buffers = usize::max(buffers, buffer);
         }
-        if 1 + scalars.len() + naturals > FLAT_LEAVES {
+        if buffers > 1 || 1 + scalars.len() + naturals + buffers > FLAT_LEAVES {
             return Ok(None);
         }
         let most = u64::try_from(ctors.len() - 1).expect("a sane constructor count");
@@ -1300,6 +1304,7 @@ impl<'a> Demand<'a> {
         })];
         leaves.extend(scalars);
         leaves.extend(std::iter::repeat_n(Class::Natural, naturals));
+        leaves.extend(std::iter::repeat_n(Class::Buffer, buffers));
         Ok(Some(Storage::Tagged(append_range(
             &mut self.leaves,
             &leaves,
@@ -2135,6 +2140,7 @@ fn returned(
 }
 
 struct Lowering<'a> {
+    native_inline_bytes: bool,
     barb: &'a barb::Program,
     facts: &'a barb::Facts,
     /// Whether a value of each barb type takes a place, by type.
@@ -2359,6 +2365,48 @@ impl Lowering<'_> {
         })[0]
     }
 
+    /// Materialize leading constant tables at loop entry. Their managed views
+    /// can be borrowed on every iteration and still escape through a result.
+    fn source_loop(
+        &self,
+        b: &mut super::Builder,
+        id: barb::FnId,
+        mut body: barb::Body,
+        args: &[ValueId],
+        returns: &[Class],
+        finish: impl FnOnce(&mut super::Builder, Answer<Held>),
+    ) -> Vec<ValueId> {
+        let mut prefix = Vec::new();
+        for &binding in self.barb.bindings(body.bindings) {
+            let barb::Expr::Static(literal) = self.barb.expr(binding) else {
+                break;
+            };
+            let value = self.barb.constant(literal);
+            let ty = value.owner();
+            if self.carries[ty.index()] != Storage::Seq {
+                break;
+            }
+            let barb::TypeShape::Sequence { element, .. } = barb::type_shape(self.barb, ty) else {
+                break;
+            };
+            if !self.holds_bytes(element) {
+                break;
+            }
+            let bounds = self.facts.held(binding);
+            let held = self.static_held(b, self.carried(ty, bounds), value);
+            prefix.push(counted(b, held, bounds));
+        }
+        let run = body.bindings.range();
+        body.bindings = barb::Range::of(run.start + prefix.len(), run.len() - prefix.len());
+        b.loop_(args, returns, |b, state| {
+            let mut locals = self.parameters(b, id, state);
+            locals.extend(prefix.into_iter().map(Some));
+            let mut statics = vec![None; locals.len()];
+            let answer = self.body(b, body, &mut locals, &mut statics);
+            finish(b, answer);
+        })
+    }
+
     /// A function calling itself in tail position, which goes round again
     /// instead: the body is a loop over the parameters, and it leaves by
     /// returning. However deep the recursion, the stack is one frame deep.
@@ -2380,10 +2428,7 @@ impl Lowering<'_> {
                 destination: destination.clone(),
             });
             let mut lowered = Ok(());
-            b.loop_(params, &[], |b, state| {
-                let mut locals = self.parameters(b, id, state);
-                let mut statics = vec![None; locals.len()];
-                let answer = self.body(b, body, &mut locals, &mut statics);
+            self.source_loop(b, id, body, params, &[], |b, answer| {
                 lowered = returned(b, answer, destination);
             });
             lowered
@@ -2451,10 +2496,7 @@ impl Lowering<'_> {
         });
         let looping = self.looping.replace(Some((id, tails)));
         let leaving = self.onward.replace(onward);
-        let next = b.loop_(args, &params, |b, state| {
-            let mut locals = self.parameters(b, id, state);
-            let mut statics = vec![None; locals.len()];
-            let answer = self.body(b, body, &mut locals, &mut statics);
+        let next = self.source_loop(b, id, body, args, &params, |b, answer| {
             if let Err(why) = returned(b, answer, &destination) {
                 self.refuse(why);
             }
@@ -2481,22 +2523,18 @@ impl Lowering<'_> {
         // The place calling it may be going round a loop of its own, which
         // it goes back to once this one is left.
         let outer = self.looping.replace(Some((id, tails)));
-        let left = b.loop_(args, returns, |b, state| {
-            let mut locals = self.parameters(b, id, state);
-            let mut statics = vec![None; locals.len()];
-            match self.body(b, body, &mut locals, &mut statics) {
-                Answer::Value(held) => {
-                    let values: Vec<_> = held
-                        .values()
-                        .iter()
-                        .zip(returns)
-                        .map(|(&value, &class)| met(b, value, class))
-                        .collect();
-                    b.break_(&values);
-                }
-                Answer::Nothing => b.break_(&[]),
-                Answer::Never => {}
+        let left = self.source_loop(b, id, body, args, returns, |b, answer| match answer {
+            Answer::Value(held) => {
+                let values: Vec<_> = held
+                    .values()
+                    .iter()
+                    .zip(returns)
+                    .map(|(&value, &class)| met(b, value, class))
+                    .collect();
+                b.break_(&values);
             }
+            Answer::Nothing => b.break_(&[]),
+            Answer::Never => {}
         });
         *self.looping.borrow_mut() = outer;
         left
@@ -2846,6 +2884,9 @@ impl Lowering<'_> {
             .elements(&mut budget)
             .expect("validated constants can be revisited");
         let shape = self.element_shape(b, push, usize::from(recursive == 0));
+        if let Some(sequence) = self.inline_rows(b, &elements, shape, push, recursive) {
+            return sequence;
+        }
         let built: Vec<Vec<ValueId>> = elements
             .iter()
             .map(|fields| self.static_element(b, fields, (push, recursive)))
@@ -2978,6 +3019,10 @@ impl Lowering<'_> {
     ) -> Answer<Held> {
         let (results, answers) = match &self.callees[function.index()] {
             Callee::Instruction(operation) => {
+                // An operand the enclosing branch bounds is read at the
+                // width it is proven to have. Left a natural, it would be
+                // read at the operation's width, which on a narrow word is
+                // several words and a division to take them apart.
                 let mut args = self.call_arguments(function, arguments, locals);
                 for (value, &bound) in args.iter_mut().zip(self.facts.arguments(expr)) {
                     if b.class(*value) == Class::Natural && width(bound) != Class::Natural {
@@ -3835,7 +3880,7 @@ impl Lowering<'_> {
     }
 
     /// A tagged union of `ctor`, whose fields' leaves are `fields`: its tag,
-    /// then each leaf in its slot, and nought in every slot it leaves empty.
+    /// then each leaf in its slot, with inactive slots safe to pass or discard.
     fn tagged(
         &self,
         b: &mut super::Builder,
@@ -3852,7 +3897,16 @@ impl Lowering<'_> {
         let values: Vec<_> = values
             .into_iter()
             .zip(classes)
-            .map(|(value, &class)| value.unwrap_or_else(|| b.constant(class, 0)))
+            .map(|(value, &class)| {
+                value.unwrap_or_else(|| {
+                    if class == Class::Buffer {
+                        let empty = b.shape(&[]);
+                        b.buffer_empty(empty)
+                    } else {
+                        b.constant(class, 0)
+                    }
+                })
+            })
             .collect();
         Held::Flat {
             leaves: run,
@@ -3862,18 +3916,20 @@ impl Lowering<'_> {
 
     /// Where in a tagged union's run each leaf of `ctor`'s fields is held,
     /// in order: numbers a machine holds in the slots after the tag, and
-    /// arbitrary-precision ones in the slots after those.
+    /// arbitrary-precision ones after those, and the optional buffer last.
     fn slots(&self, ctor: barb::CtorId, run: barb::Range) -> Vec<usize> {
         let classes = &self.leaves[run.range()];
         let scalars = classes[1..]
             .iter()
-            .take_while(|&&class| class != Class::Natural)
+            .take_while(|&&class| !matches!(class, Class::Natural | Class::Buffer))
             .count();
         let (mut scalar, mut natural) = (0, 0);
         let mut slots = Vec::new();
         for carried in self.fields_carried(ctor).flatten() {
             for &class in self.classes(&carried) {
-                if class == Class::Natural {
+                if class == Class::Buffer {
+                    slots.push(classes.len() - 1);
+                } else if class == Class::Natural {
                     slots.push(1 + scalars + natural);
                     natural += 1;
                 } else {

@@ -15,7 +15,10 @@
 //! is handed nothing else's once, on entry, so that each replacement in it
 //! is one of those.
 
-use std::{cell::Cell, collections::BTreeMap};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+};
 
 use num_bigint::BigUint;
 
@@ -23,7 +26,9 @@ use super::cell::{self, Library as CellLibrary};
 use super::natural::{self, Config, Helper, Inline, Library, Needs};
 use super::ownership::{self, Liveness, managed};
 use super::packing::Packed;
+use super::region::{self, Chunks, Plan};
 use super::sequence::{self, Growth, Library as SequenceLibrary};
+use super::word_comparisons::{Word, word_values};
 use super::{
     Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, ShapeId,
     Terminator, ValueId, Width, validate,
@@ -45,14 +50,14 @@ use super::{
 /// Rejects invalid IR, unsupported host/address conversions, fixed widths
 /// wider than the word, invalid runtime configuration, and constants
 /// exceeding the layout. A fixed width wider than the word is held as words,
-/// which [`super::split`] makes it before this runs.
+/// which [`crate::ir::split`] makes it before this runs.
 pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     validate(source)?;
     if !matches!(config.word_bits, 16 | 32 | 64) {
         return Err("natural representation needs a 16, 32, or 64 bit word".into());
     }
     source.check_layout(config.layout())?;
-    let divisors = word_divisors(source, config.word_bits);
+    let divisors = word_values(source, config.word_bits);
     let needs = inspect(source, config, &divisors)?;
     let has_naturals = holds(source, Class::Natural);
     let has_cells = holds(source, Class::Cell) || holds(source, Class::Buffer);
@@ -64,14 +69,52 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     output.runtime_cells |= has_cells;
     output.runtime_naturals |= has_naturals;
     let library = natural::append(&mut output, config, needs)?;
-    let shapes = Shapes::of(source, &mut output, config.word_bits)?;
-    let (cells, sequences) = managed_runtime(&mut output, source, &library, (config, &shapes));
-    let constants = constants(source, &mut output, config)?;
+    let pass = prepare_pass(source, &mut output, config, library, divisors)?;
+    pass.define_bodies(&mut output);
+    validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
+    Ok(output)
+}
+
+/// Lay out the managed shapes and build the ownership and region plans
+/// before rewriting any function bodies.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one constructor for every table the pass reads"
+)]
+fn prepare_pass<'a>(
+    source: &'a Program,
+    output: &mut Program,
+    config: Config,
+    library: Library,
+    divisors: BTreeMap<ValueId, Word>,
+) -> Result<Pass<'a>, String> {
+    let shapes = Shapes::of(source, output, config.word_bits)?;
+    let plan = if config.grows && config.word_bits == 64 {
+        Plan::of(source, &shapes.packed)
+    } else {
+        Plan::default()
+    };
+    let remaining = plan.remaining_claims(source, &shapes.packed);
+    let (cells, sequences) = managed_runtime(
+        output,
+        source,
+        &library,
+        (config, &shapes),
+        remaining.as_deref(),
+    );
+    let constants = constants(source, output, config)?;
     let owned = ownership::owned_parameters(source);
-    let unique = super::uniqueness::unique(source, &owned, &|shape| {
-        shapes.packed(shape).managed().next().is_none()
-    });
-    let pass = Pass {
+    let chunks = (!plan.constructors.is_empty()).then(|| Chunks::append(output, &library, &plan));
+    let unique = super::uniqueness::unique(source, &owned, &|shape| shapes.plain(shape));
+    Ok(Pass {
+        read_room: input_storage(source, output, config, &shapes),
+        fixed_claims: remaining.is_some(),
+        checked_words: super::bounds::CheckedWords::of(source, config.word_bits),
+        plan,
+        chunks,
+        constructing: Cell::new(false),
+        nullable_builder: Cell::new(false),
+        root_heads: RefCell::default(),
         source,
         library,
         cells,
@@ -82,11 +125,77 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         divisors,
         values: vec![Cell::new(None); source.values_count()],
         unique,
+        borrowed_cells: ownership::borrowed_cells(source, &owned),
+        immortal: immortal(source),
         owned,
-    };
-    pass.define_bodies(&mut output);
-    validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
-    Ok(output)
+    })
+}
+
+/// Which values are buffers laid out before the program runs: immortal, so a
+/// claim to one counts nothing, and a use taking one need neither retain nor
+/// later release it. A table read in a loop is not counted every time round.
+fn immortal(source: &Program) -> Vec<bool> {
+    let mut immortal = vec![false; source.values_count()];
+    for body in source.functions().iter().filter_map(super::Function::body) {
+        for (op, results) in source.walk_within(body) {
+            if matches!(op, Op::BufferKnown { .. } | Op::BufferEmpty { .. }) {
+                immortal[results[0].index()] = true;
+            }
+        }
+    }
+    immortal
+}
+
+/// Counts whose reservations fit the shared buffer. Keep the data last so
+/// its unused payload is supplied by the loader.
+struct InputStorage {
+    capacity: u64,
+    data: DataId,
+    bounds: BTreeMap<ValueId, u64>,
+}
+
+fn input_storage(
+    source: &Program,
+    output: &mut Program,
+    config: Config,
+    shapes: &Shapes,
+) -> Option<InputStorage> {
+    if !config.grows || config.word_bits != 64 {
+        return None;
+    }
+    let mut bounds = BTreeMap::new();
+    for op in &source.ops {
+        if let Op::BufferRoom { count, shape } = *op
+            && shapes.packed(shape).size == 1
+        {
+            // Machine IR can pass values between classes of the same width.
+            // Reserve for that entire width unless the producer is a literal.
+            let bits = source.class(count).width().unwrap_or(64);
+            bounds.insert(
+                count,
+                u64::MAX.checked_shr(u32::from(64 - bits)).unwrap_or(0),
+            );
+        }
+    }
+    if bounds.is_empty() {
+        return None;
+    }
+    for body in source.functions().iter().filter_map(super::Function::body) {
+        for (op, results) in source.walk_within(body) {
+            if let Op::Constant { value } = *op
+                && let Some(bound) = bounds.get_mut(&results[0])
+            {
+                *bound = value;
+            }
+        }
+    }
+    bounds.retain(|_, size| (1..=65536).contains(size));
+    let capacity = *bounds.values().max()?;
+    Some(InputStorage {
+        capacity,
+        data: sequence::input_storage(output, capacity),
+        bounds,
+    })
 }
 
 /// The cell and sequence routines a program needs, beside its naturals'.
@@ -96,11 +205,13 @@ fn managed_runtime(
     source: &Program,
     library: &Library,
     (config, shapes): (Config, &Shapes),
+    remaining: Option<&[(u64, u64)]>,
 ) -> (Option<CellLibrary>, Option<SequenceLibrary>) {
     let has_buffers = holds(source, Class::Buffer);
     let has_cells = holds(source, Class::Cell) || has_buffers;
     let buffers = has_buffers.then(|| sequence::declare(output));
-    let cells = has_cells.then(|| cell::append(output, library, buffers, config.word_bits));
+    let cells =
+        has_cells.then(|| cell::append(output, library, buffers, config.word_bits, remaining));
     let sequences = buffers.zip(cells).map(|(release, cells)| {
         sequence::append(
             output,
@@ -116,7 +227,7 @@ fn managed_runtime(
                         shapes.descriptors[shape.index()],
                     )
                 }),
-            config.word_bits,
+            config,
         )
     });
     (cells, sequences)
@@ -365,6 +476,10 @@ impl Shapes {
         b.address_of(data)
     }
 
+    fn plain(&self, shape: ShapeId) -> bool {
+        self.packed(shape).managed().next().is_none()
+    }
+
     fn packed(&self, shape: ShapeId) -> &Packed {
         &self.packed[shape.index()]
     }
@@ -421,45 +536,9 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
     Ok(())
 }
 
-/// A natural divisor known to fit a word, so that dividing by it is short
-/// division: as the scalar it was converted from, or as a constant.
-#[derive(Clone, Copy)]
-enum Divisor {
-    Scalar(ValueId),
-    Constant(u64),
-}
-
-/// Every natural a program makes from a scalar or knows as a word-sized
-/// constant, by the value that is it.
-fn word_divisors(source: &Program, word_bits: u16) -> BTreeMap<ValueId, Divisor> {
-    let mut divisors = BTreeMap::new();
-    for body in source.functions().iter().filter_map(super::Function::body) {
-        for (op, results) in source.walk_within(body) {
-            let [result] = results[..] else {
-                continue;
-            };
-            if source.class(result) != Class::Natural {
-                continue;
-            }
-            match *op {
-                Op::Convert { value }
-                    if matches!(source.class(value), Class::Word | Class::Held(_)) =>
-                {
-                    divisors.insert(result, Divisor::Scalar(value));
-                }
-                Op::Constant { value } if value >> (word_bits - 1) >> 1 == 0 => {
-                    divisors.insert(result, Divisor::Constant(value));
-                }
-                _ => {}
-            }
-        }
-    }
-    divisors
-}
-
 /// The helper a natural operation calls: one dividing by a word where the
 /// divisor is known to be one.
-fn helper_for(op: Binary, right: ValueId, divisors: &BTreeMap<ValueId, Divisor>) -> Helper {
+fn helper_for(op: Binary, right: ValueId, divisors: &BTreeMap<ValueId, Word>) -> Helper {
     match op {
         Binary::Div if divisors.contains_key(&right) => Helper::DivWord,
         Binary::Mod if divisors.contains_key(&right) => Helper::ModWord,
@@ -470,7 +549,7 @@ fn helper_for(op: Binary, right: ValueId, divisors: &BTreeMap<ValueId, Divisor>)
 fn inspect(
     source: &Program,
     config: Config,
-    divisors: &BTreeMap<ValueId, Divisor>,
+    divisors: &BTreeMap<ValueId, Word>,
 ) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
@@ -608,6 +687,14 @@ fn magnitude(source: &Program, op: Op, class: Class) -> Option<BigUint> {
 }
 
 struct Pass<'a> {
+    checked_words: super::bounds::CheckedWords,
+    read_room: Option<InputStorage>,
+    fixed_claims: bool,
+    plan: Plan,
+    chunks: Option<Chunks>,
+    constructing: Cell<bool>,
+    nullable_builder: Cell<bool>,
+    root_heads: RefCell<BTreeMap<ValueId, ValueId>>,
     source: &'a Program,
     library: Library,
     cells: Option<CellLibrary>,
@@ -615,7 +702,7 @@ struct Pass<'a> {
     sequences: Option<SequenceLibrary>,
     word_bytes: u64,
     constants: BTreeMap<ValueId, Known>,
-    divisors: BTreeMap<ValueId, Divisor>,
+    divisors: BTreeMap<ValueId, Word>,
     // Validation establishes globally unique SSA definitions and lexical use.
     // Mapping is monotonic across functions and sibling regions, not path-local.
     // Cells let the builder's two sequential branch callbacks share this table
@@ -623,6 +710,11 @@ struct Pass<'a> {
     values: Vec<Cell<Option<ValueId>>>,
     /// Which parameters of each function own a claim.
     owned: Vec<Vec<bool>>,
+    /// A field borrowed from a caller-owned root needs a claim only when
+    /// an operation takes it or it leaves the activation.
+    borrowed_cells: Vec<bool>,
+    /// Which values are immortal buffers, whose claims count nothing.
+    immortal: Vec<bool>,
     /// Which replacements write a buffer nothing else holds, and which
     /// loops make theirs one on entry.
     unique: super::uniqueness::Unique,
@@ -653,6 +745,9 @@ impl Pass<'_> {
             let Some(body) = function.body() else {
                 continue;
             };
+            self.nullable_builder
+                .set(self.plan.nullable.builders.contains(&id));
+            self.constructing.set(self.plan.constructors.contains(&id));
             let held = self.owned_parameters(id, body);
             output.define(id, |b, params| {
                 self.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params, held);
@@ -682,6 +777,26 @@ impl Pass<'_> {
             self.values[old.index()].replace(Some(new)).is_none(),
             "each SSA definition is rebuilt once"
         );
+    }
+
+    fn region_cell(&self, old: ValueId) -> bool {
+        self.constructing.get() && self.source.class(old) == Class::Cell
+    }
+
+    fn claim(&self, b: &mut Builder, old: ValueId) -> ValueId {
+        if self.region_cell(old) || self.immortal[old.index()] {
+            self.value(old)
+        } else {
+            self.retained(b, self.source.class(old), self.value(old))
+        }
+    }
+
+    fn release_held(&self, b: &mut Builder, old: ValueId) {
+        if let Some(&head) = self.root_heads.borrow().get(&old) {
+            b.call(self.chunks.expect("region root").release, &[head]);
+        } else {
+            self.release(b, self.source.class(old), self.value(old));
+        }
     }
 
     fn retained(&self, b: &mut Builder, class: Class, value: ValueId) -> ValueId {
@@ -715,26 +830,49 @@ impl Pass<'_> {
         shape: ShapeId,
         claimed: &[ValueId],
     ) -> ValueId {
+        if self.nullable_builder.get() {
+            return self.nullable_cell(b, shape, claimed);
+        }
         // Without fields every one is the same, and none is allocated.
         if claimed.is_empty() {
             return b.address_of(self.shapes.bare[&tag]);
         }
         let packed = self.shapes.packed(shape);
-        let library = self.cells.expect("cell helpers were requested");
-        // The descriptor's word, then the fields.
-        let bytes = b.constant(Class::Word, self.word_bytes + packed.size);
-        let object = b.call_one(library.allocate, &[bytes]);
+        let object = if self.constructing.get() {
+            let bytes = b.constant(Class::Word, region::node_bytes(packed));
+            b.call_one(self.chunks.expect("region constructor").allocate, &[bytes])
+        } else {
+            let bytes = b.constant(Class::Word, self.word_bytes + packed.size);
+            let library = self.cells.expect("cell helpers were requested");
+            b.call_one(library.allocate, &[bytes])
+        };
         let tag = b.constant(Class::Word, u64::from(tag));
         b.store(Width::Word, object, Offset::Words(cell::TAG), tag);
-        let descriptor = self.shapes.descriptor(b, shape);
-        b.store(
-            Width::Word,
-            object,
-            Offset::Words(cell::DESCRIPTOR),
-            descriptor,
-        );
+        if !self.constructing.get() && !self.fixed_claims {
+            let descriptor = self.shapes.descriptor(b, shape);
+            b.store(
+                Width::Word,
+                object,
+                Offset::Words(cell::DESCRIPTOR),
+                descriptor,
+            );
+        }
         let fields = self.fields_at();
         Self::store_leaves(b, (object, fields), packed, claimed);
+        object
+    }
+
+    fn nullable_cell(&self, b: &mut Builder, shape: ShapeId, fields: &[ValueId]) -> ValueId {
+        if fields.is_empty() {
+            return b.constant(Class::Address, 0);
+        }
+        let packed = self.shapes.packed(shape);
+        // Even fields requiring zero bits must yield a non-null pointer.
+        let size = packed.size.max(1).next_multiple_of(self.word_bytes);
+        let bytes = b.constant(Class::Word, size);
+        let chunks = self.chunks.expect("region constructor");
+        let object = b.call_one(chunks.allocate, &[bytes]);
+        Self::store_leaves(b, (object, chunks.payload_offset), packed, fields);
         object
     }
 
@@ -759,7 +897,7 @@ impl Pass<'_> {
     }
 
     /// Load leaf `index` of `packed`, the first `at` bytes past `object`,
-    /// as `old_result` is read, holding a claim to it.
+    /// as `old_result` is read. A caller-rooted cell field may be borrowed.
     fn load_leaf(
         &self,
         b: &mut Builder,
@@ -782,7 +920,11 @@ impl Pass<'_> {
         } else {
             b.convert(represented, value)
         };
-        self.retained(b, class, value)
+        if self.borrowed_cells[old_result.index()] {
+            value
+        } else {
+            self.retained(b, class, value)
+        }
     }
 
     /// Push one element, whose leaves' claims it takes, onto a sequence
@@ -907,7 +1049,11 @@ impl Pass<'_> {
         (shape, index): (ShapeId, u32),
     ) -> ValueId {
         let packed = self.shapes.packed(shape);
-        let fields = self.fields_at();
+        let fields = if self.plan.nullable.cells.contains_key(&cell) {
+            self.chunks.expect("region reader").payload_offset
+        } else {
+            self.fields_at()
+        };
         self.load_leaf(b, old_result, (self.value(cell), fields), (packed, index))
     }
 
@@ -933,13 +1079,15 @@ impl Pass<'_> {
             let fresh = self.op(b, *op, results, scopes, &live, at);
             for (&old, new) in results.iter().zip(fresh) {
                 self.mapped(old, new);
-                if managed(self.source.class(old)) {
+                if managed(self.source.class(old))
+                    && !self.borrowed_cells[old.index()]
+                    && !self.immortal[old.index()]
+                    && !self.region_cell(old)
+                {
                     top(scopes).held.push(old);
                 }
             }
-            // A region with no terminator ends in a loop, if or call that
-            // does not come back, so nothing follows its last instruction:
-            // what it still holds is held until the program ends. Returns
+            // A terminal loop, if or call has no continuation. Returns
             // from its child scopes have already released their live roots.
             if old.terminator.is_some() || at + 1 < self.source.ops(region).len() {
                 self.release_dead(b, scopes, &live, Some(at));
@@ -966,7 +1114,7 @@ impl Pass<'_> {
             scope.held.iter().partition(|&&value| live.dead(value, at));
         scope.held = kept;
         for &value in dead.iter().rev() {
-            self.release(b, self.source.class(value), self.value(value));
+            self.release_held(b, value);
         }
     }
 
@@ -1004,8 +1152,7 @@ impl Pass<'_> {
                 if olds.iter().position(|&other| other == old) == Some(place) {
                     self.take_times(b, scopes, live, (at, times), old)
                 } else {
-                    let class = self.source.class(old);
-                    self.retained(b, class, self.value(old))
+                    self.claim(b, old)
                 }
             })
             .collect()
@@ -1029,7 +1176,7 @@ impl Pass<'_> {
             scope.held.remove(held);
             return self.value(old);
         }
-        self.retained(b, class, self.value(old))
+        self.claim(b, old)
     }
 
     fn exit(&self, b: &mut Builder, scopes: &mut [Scope], terminator: Terminator) {
@@ -1057,13 +1204,13 @@ impl Pass<'_> {
                         scope.held.remove(at);
                         self.value(old)
                     }
-                    _ => self.retained(b, self.source.class(old), self.value(old)),
+                    _ => self.claim(b, old),
                 }
             })
             .collect();
         for scope in scopes[start..].iter().rev() {
             for &value in scope.held.iter().rev() {
-                self.release(b, self.source.class(value), self.value(value));
+                self.release_held(b, value);
             }
         }
         match terminator.exit {
@@ -1115,7 +1262,10 @@ impl Pass<'_> {
                     .collect();
                 self.construct_cell(b, tag, shape, &claimed)
             }
-            Op::CellTag { cell } => b.load(Width::Word, v(cell), Offset::Words(cell::TAG)),
+            Op::CellTag { cell } => match self.plan.nullable.cells.get(&cell) {
+                Some(tags) => tags.read(b, v(cell)),
+                None => b.load(Width::Word, v(cell), Offset::Words(cell::TAG)),
+            },
             Op::CellField { cell, index, shape } => {
                 self.cell_field(b, results[0], cell, (shape, index))
             }
@@ -1124,11 +1274,23 @@ impl Pass<'_> {
                 elements, shape, ..
             } => self.shapes.known(b, elements, shape),
             Op::BufferRoom { count, shape } => {
-                let library = self.cells.expect("cell helpers were requested");
-                let stride = b.constant(Class::Word, self.shapes.packed(shape).size);
-                let none = b.constant(Class::Word, 0);
+                let allocate = self.cells.expect("cell helpers were requested").allocate;
+                let size = self.shapes.packed(shape).size;
+                let storage = self
+                    .read_room
+                    .as_ref()
+                    .filter(|room| size == 1 && room.bounds.contains_key(&count));
                 let count = word(b, v(count));
-                sequence::allocate(b, library.allocate, (stride, none), count, self.word_bytes)
+                let stride = b.constant(Class::Word, size);
+                let none = b.constant(Class::Word, 0);
+                let fresh = |b: &mut Builder| {
+                    sequence::allocate(b, allocate, (stride, none), count, self.word_bytes)
+                };
+                if let Some(storage) = storage {
+                    sequence::acquire_input(b, storage.data, storage.capacity, fresh)
+                } else {
+                    fresh(b)
+                }
             }
             Op::BufferAt {
                 buffer,
@@ -1236,14 +1398,10 @@ impl Pass<'_> {
                 _ => {
                     let function = self.library.require(helper_for(op, right, &self.divisors));
                     let divisor = match self.divisors.get(&right) {
-                        Some(&Divisor::Scalar(value))
-                            if matches!(op, Binary::Div | Binary::Mod) =>
-                        {
+                        Some(&Word::Scalar(value)) if matches!(op, Binary::Div | Binary::Mod) => {
                             word(b, v(value))
                         }
-                        Some(&Divisor::Constant(value))
-                            if matches!(op, Binary::Div | Binary::Mod) =>
-                        {
+                        Some(&Word::Constant(value)) if matches!(op, Binary::Div | Binary::Mod) => {
                             b.constant(Class::Word, value)
                         }
                         _ => v(right),
@@ -1254,8 +1412,8 @@ impl Pass<'_> {
                         // nought: where every divisor is no more than half
                         // a word, it is an immediate.
                         let most = match self.divisors[&right] {
-                            Divisor::Constant(value) => value.checked_sub(1),
-                            Divisor::Scalar(value) => self
+                            Word::Constant(value) => value.checked_sub(1),
+                            Word::Scalar(value) => self
                                 .source
                                 .class(value)
                                 .facts()
@@ -1302,7 +1460,11 @@ impl Pass<'_> {
                 left,
                 right,
             } if self.source.class(left) == Class::Natural => {
-                self.library.compare(b, relation, v(left), v(right))
+                if let Some(&limit) = self.checked_words.limits.get(&results[0]) {
+                    natural::below_power_of_two(b, v(left), limit, self.word_bits())
+                } else {
+                    self.library.compare(b, relation, v(left), v(right))
+                }
             }
             Op::Compare {
                 relation,
@@ -1322,6 +1484,10 @@ impl Pass<'_> {
                     }
                     (_, Class::Natural) => {
                         b.call_one(self.library.require(Helper::FromWord), &[v(value)])
+                    }
+                    (Class::Natural, _) if self.checked_words.unbox.contains(&results[0]) => {
+                        let number = natural::unwrapped(b, v(value));
+                        b.convert(class, number)
                     }
                     (Class::Natural, _) => {
                         let helper = self.library.require(Helper::ToWord);
@@ -1367,7 +1533,14 @@ impl Pass<'_> {
                         }
                     })
                     .collect();
-                return b.call(function, &args);
+                let fresh = b.call(function, &args);
+                if let [root] = results
+                    && self.plan.roots.contains(root)
+                {
+                    let chunks = self.chunks.expect("region root").detach(b);
+                    self.root_heads.borrow_mut().insert(*root, chunks);
+                }
+                return fresh;
             }
             Op::If {
                 condition,

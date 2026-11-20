@@ -5,11 +5,9 @@ This crate starts with the x86 emitter and machine IR from Faun commit
 `run`, `test` and `emit`. The default backend remains `stock`.
 
 The frontend produces the same optimized Barb program for both backends.
-The shared `core/src/ir/lab` implementation lowers Barb to machine IR,
-analyzes ownership and storage, and legalizes representations for the
-selected target. Wasm and 6502 can use this lowering with the `x86-lab`
-selector too; Apple Silicon support is experimental. This crate retains
-its x86 machine optimization and emission pipeline.
+The shared lowering in `core/src/ir` lowers Barb to machine IR, analyzes
+ownership and storage, and legalizes representations for every target.
+This crate retains its own x86 machine optimization and emission.
 `src/selected.rs`, `src/encode.rs` and `src/elf.rs` select instructions,
 encode them and write the executable. The crate shares Barb, the register
 allocator and general utilities with the stock compiler.

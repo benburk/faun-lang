@@ -1,10 +1,10 @@
 //! Select the backend independently of the source program's target host.
 //!
-//! The stock and lab pipelines are `faun_driver`'s line; the x86-lab
-//! backend has a machine tier of its own, and takes optimized Barb from
-//! here.
+//! Every target but the x86-lab backend compiles by `faun_driver`'s line,
+//! the stock x86 emitter among them; the x86-lab backend has a machine
+//! tier of its own, and takes optimized Barb from here.
 
-use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
+use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_frontend::diagnostic::Diagnostic;
 use faun_x86_64_linux::X86_64Linux;
 
@@ -12,16 +12,15 @@ use crate::args::Stage;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Compiler {
-    Target(&'static dyn Target, Pipeline),
+    Target(&'static dyn Target),
     X86Lab,
 }
 
 impl Compiler {
     pub(crate) fn choose(target: &'static dyn Target, backend: &str) -> Result<Self, String> {
         match backend {
-            "stock" => Ok(Self::Target(target, Pipeline::Stock)),
             "lab" | "x86-lab" if target.name() == X86_64Linux.name() => Ok(Self::X86Lab),
-            "lab" => Ok(Self::Target(target, Pipeline::Lab)),
+            "stock" | "lab" => Ok(Self::Target(target)),
             "x86-lab" => Err(format!(
                 "the x86-lab backend cannot compile for {}",
                 target.name()
@@ -34,7 +33,7 @@ impl Compiler {
 
     pub(crate) const fn host(self) -> &'static dyn Target {
         match self {
-            Self::Target(target, _) => target,
+            Self::Target(target) => target,
             Self::X86Lab => &X86_64Linux,
         }
     }
@@ -52,9 +51,7 @@ impl Compiler {
         symbols: SymbolTable,
     ) -> Result<Vec<u8>, Diagnostic> {
         match self {
-            Self::Target(target, pipeline) => {
-                faun_driver::compile_barb(program, target, pipeline, favour, symbols)
-            }
+            Self::Target(target) => faun_driver::compile_barb(program, target, favour, symbols),
             Self::X86Lab => {
                 let mut program = program;
                 barb::optimize(&mut program);
@@ -68,14 +65,10 @@ impl Compiler {
             return Ok(program.render_analyzed(&program.analyze()));
         }
         match self {
-            Self::Target(target, pipeline) => {
-                let machine = faun_driver::machine_ir(program, target, pipeline)?;
+            Self::Target(target) => {
+                let machine = faun_driver::machine_ir(program, target)?;
                 match stage {
-                    Stage::Target => Ok(target.render(&target.prepare_with_pipeline(
-                        &machine,
-                        Favour::Speed,
-                        pipeline,
-                    )?)),
+                    Stage::Target => Ok(target.render(&target.prepare(&machine)?)),
                     _ => Ok(machine.render()),
                 }
             }
