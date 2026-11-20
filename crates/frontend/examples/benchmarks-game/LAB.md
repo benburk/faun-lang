@@ -125,7 +125,7 @@ The original `just benchmarks-game` still reports the game's lowest time.
 ## Implementation order (future work)
 
 1. **Make parity boring.** Add the opt-in crate and CLI route at the Barb
-   boundary in `faun::compile_barb_to_image_with`, before
+   boundary in `faun_driver::compile_barb`, before
    `faun_core::lower_to_machine_ir`. Use the stock x86 host to lower
    source; offer a dump and validator for the new machine IR. Establish
    stock/candidate equivalence on examples, effects, exits and the eight
