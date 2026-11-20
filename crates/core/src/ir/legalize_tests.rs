@@ -119,6 +119,49 @@ fn a_cell_with_no_fields_is_never_allocated() {
     }
 }
 
+/// A buffer laid out before the program runs is immortal, so a table of
+/// views into it counts no claims to it however many rows it pushes: no row
+/// retains it, and the rows read back what was laid out.
+#[test]
+fn rows_of_an_immortal_buffer_count_no_claims_to_it() {
+    let (mut source, main) = Program::new("main");
+    source.define(main, |b, _| {
+        let bytes = b.shape(&[Class::fixed(8)]);
+        let data = b.data(b"table");
+        let table = b.buffer_known(data, bytes, 1);
+        let rows = b.shape(&[Class::Buffer, Class::Word, Class::Word]);
+        let mut outer = b.buffer_empty(rows);
+        let mut start = b.constant(Class::Word, 0);
+        for (at, (first, len)) in [(0, 2), (2, 3)].into_iter().enumerate() {
+            let held = b.constant(Class::Word, u64::try_from(at).unwrap());
+            let first = b.constant(Class::Word, first);
+            let len = b.constant(Class::Word, len);
+            [outer, start] = b.buffer_push((outer, start, held), rows, &[table, first, len]);
+        }
+        let len = b.buffer_field((Class::Word, rows), (outer, start), 2);
+        b.ret(&[len]);
+    });
+    let config = Config {
+        word_bits: 64,
+        heap_bytes: 512,
+        grows: false,
+        inline_small: true,
+        inline_counts: false,
+        join_routines: false,
+    };
+    let legalized = lab::legalize(&source, config).unwrap();
+    let evaluation = run(&legalized, main, &[], 64);
+    assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(3u8)]);
+    let retain = legalized
+        .functions()
+        .iter()
+        .position(|function| legalized.name(function.name) == "nat.retain");
+    if let Some(retain) = retain {
+        assert_eq!(evaluation.counts.calls[retain], 0, "{}", legalized.render());
+    }
+    no_live_objects(&legalized, &evaluation, config);
+}
+
 /// How many times the bodies of `functions` call the allocator: what the
 /// program itself does, past the runtime it is given.
 fn allocations_in(program: &Program, functions: &[FunctionId]) -> usize {
@@ -708,6 +751,51 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
                 assert_eq!(actual.outcome, expected.outcome);
                 no_live_objects(&scalar, &actual, config);
             }
+        }
+    }
+}
+
+/// The last immediate and the first boxed word meet at the same boundary
+/// for every layout. Only the guarded arm may decode by shifting the handle.
+#[test]
+fn guarded_naturals_decode_only_within_the_immediate_range() {
+    for (bits, limit) in [16u16, 32, 64]
+        .into_iter()
+        .flat_map(|bits| [1, 256, 1u64 << (bits - 1)].map(|limit| (bits, limit)))
+    {
+        let (mut p, main) = Program::new_with_params("main", &[("n", Class::Word)]);
+        p.define(main, |b, args| {
+            let n = b.convert(Class::Natural, args[0]);
+            let bound = b.constant(Class::fixed(bits), limit);
+            let bound = b.convert(Class::Natural, bound);
+            let below = b.compare(Relation::Less, n, bound);
+            let result = b.if_(
+                below,
+                &[Class::Word],
+                |b| {
+                    let word = b.convert(Class::Word, n);
+                    b.yield_(&[word]);
+                },
+                |b| {
+                    let word = b.convert(Class::Word, n);
+                    b.yield_(&[word]);
+                },
+            );
+            b.ret(&result);
+        });
+        let config = fixed_heap(bits, 512);
+        let scalar = lab::legalize(&p, config).unwrap();
+        for n in [0, limit - 1, limit, limit + 1, u64::MAX >> (64 - bits)] {
+            let args = [BigUint::from(n)];
+            let actual = run(&scalar, main, &args, bits);
+            assert_eq!(actual.outcome, run(&p, main, &args, bits).outcome);
+            // Past the guard an immediate is still read where it is; only
+            // an object asks the helper.
+            assert_eq!(
+                actual.counts.calls_to(&scalar, "nat.to_word"),
+                u64::from(n >= natural::half(bits))
+            );
+            no_live_objects(&scalar, &actual, config);
         }
     }
 }
