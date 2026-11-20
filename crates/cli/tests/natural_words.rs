@@ -195,3 +195,43 @@ fn a_natural_guarded_by_no_length_crosses_every_word_exactly() {
         .collect();
     prints_everywhere(&package, &expected.join(" | "));
 }
+
+#[test]
+fn a_natural_a_branch_bounds_is_narrowed_where_it_is_operated_on() {
+    // Below ten the branch proves `n` a digit, and the operation writing it
+    // out reads it as one, on every backend, rather than as the widest
+    // number a word pair holds, which a 32-bit target splits in two and the
+    // 6502 in four.
+    let package = Package::new(
+        "branch-narrowed",
+        r#"
+        digits : (Nat, Nat) -> Nat
+        digits(n, total) -> (
+          if n < 10 return total + n % 10
+          digits(n / 10, total + n % 10)
+        )
+
+        main!(host) -> (
+          printed = host.println!("${digits(12345 + host.args.len(), 0)}")
+          host.exit!(0)
+        )
+        "#,
+    );
+    prints_everywhere(&package, "16");
+    for (target, backend) in MACHINES {
+        let result = Command::new(env!("CARGO_BIN_EXE_faun"))
+            .args(["emit", "--backend", backend, "--target", target, "machine"])
+            .arg(package.entry())
+            .output()
+            .unwrap();
+        let machine = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            machine.contains("to 0..9\n"),
+            "{target} {backend}: {machine}"
+        );
+        assert!(
+            !machine.contains(&format!("to 0..{}\n", u64::MAX)),
+            "{target} {backend}: {machine}"
+        );
+    }
+}
