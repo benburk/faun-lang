@@ -55,6 +55,8 @@ use super::program::Program;
 use super::validate::validate;
 use crate::platform::{Built, Returns, Routine, Routines, Takes, reads, takes as takes_sentence};
 
+#[path = "lower/constant_calls.rs"]
+mod constant_calls;
 #[path = "lower/inline_bytes.rs"]
 mod inline_bytes;
 
@@ -178,7 +180,7 @@ fn lowered(
         }
     }
     validate(&machine)?;
-    Ok(machine)
+    Ok(constant_calls::answered_in_place(&machine))
 }
 
 /// Carry semantic summaries into machine IR; never remove its terminators.
