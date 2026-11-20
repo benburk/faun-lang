@@ -248,6 +248,7 @@ dependencies = [
  "faun-aarch64-macos",
  "faun-barb",
  "faun-core",
+ "faun-driver",
  "faun-frontend",
  "faun-mos6502-sim65",
  "faun-wasm32-wasi",
@@ -289,12 +290,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "faun-frontend"
+name = "faun-driver"
 version = "0.1.0"
 dependencies = [
  "faun-barb",
  "faun-core",
- "faun-x86-64-linux",
+ "faun-frontend",
+]
+
+[[package]]
+name = "faun-frontend"
+version = "0.1.0"
+dependencies = [
+ "faun-barb",
  "num-bigint",
  "num-traits",
  "postcard",
@@ -308,6 +316,7 @@ version = "0.1.0"
 dependencies = [
  "faun-barb",
  "faun-core",
+ "faun-driver",
  "faun-frontend",
  "rustc-hash",
 ]
@@ -318,6 +327,7 @@ version = "0.1.0"
 dependencies = [
  "faun-barb",
  "faun-core",
+ "faun-driver",
  "faun-frontend",
 ]
 
@@ -327,6 +337,7 @@ version = "0.1.0"
 dependencies = [
  "faun-barb",
  "faun-core",
+ "faun-driver",
  "faun-frontend",
  "rustc-hash",
 ]
@@ -337,6 +348,7 @@ version = "0.1.0"
 dependencies = [
  "faun-barb",
  "faun-core",
+ "faun-driver",
  "faun-frontend",
  "faun-x86-64-linux",
  "num-bigint",

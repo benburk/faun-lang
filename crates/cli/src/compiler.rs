@@ -1,4 +1,8 @@
 //! Select the backend independently of the source program's target host.
+//!
+//! The stock and lab pipelines are `faun_driver`'s line; the x86-lab
+//! backend has a machine tier of its own, and takes optimized Barb from
+//! here.
 
 use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
 use faun_frontend::diagnostic::Diagnostic;
@@ -35,23 +39,25 @@ impl Compiler {
         }
     }
 
+    /// The target whose host the program is checked against, as the
+    /// frontend reads it.
+    pub(crate) fn platform(self) -> faun_frontend::Platform {
+        faun_driver::platform(self.host())
+    }
+
     pub(crate) fn compile(
         self,
         program: barb::Program,
         favour: Favour,
         symbols: SymbolTable,
     ) -> Result<Vec<u8>, Diagnostic> {
-        let mut program = program;
-        barb::optimize(&mut program);
         match self {
             Self::Target(target, pipeline) => {
-                let ir = faun_core::lower_with_pipeline(&program, &target.routines(), pipeline)
-                    .map_err(Diagnostic::new)?;
-                target
-                    .compile_with_pipeline(&ir, favour, symbols, pipeline)
-                    .map_err(Diagnostic::new)
+                faun_driver::compile_barb(program, target, pipeline, favour, symbols)
             }
             Self::X86Lab => {
+                let mut program = program;
+                barb::optimize(&mut program);
                 faun_x86_lab::compile(&program, favour, symbols).map_err(Diagnostic::new)
             }
         }
@@ -63,8 +69,7 @@ impl Compiler {
         }
         match self {
             Self::Target(target, pipeline) => {
-                let machine =
-                    faun_core::lower_with_pipeline(program, &target.routines(), pipeline)?;
+                let machine = faun_driver::machine_ir(program, target, pipeline)?;
                 match stage {
                     Stage::Target => Ok(target.render(&target.prepare_with_pipeline(
                         &machine,

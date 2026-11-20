@@ -47,7 +47,9 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 fn optimized(package: &Package) -> barb::Program {
-    let mut program = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let mut program =
+        faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap();
     barb::optimize(&mut program);
     barb::validate(&program).unwrap();
     program

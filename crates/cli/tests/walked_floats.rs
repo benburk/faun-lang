@@ -104,7 +104,7 @@ fn image(source: &Path, backend: Backend, walked: bool) -> Vec<u8> {
         Backend::Stock | Backend::Lab => &X86_64Linux,
         Backend::Wasm => &Wasm32Wasi,
     };
-    let mut program = faun_frontend::lower_to_barb(source, target)
+    let mut program = faun_frontend::lower_to_barb(source, &faun_driver::platform(target))
         .unwrap_or_else(|error| panic!("{}: {}", source.display(), error.message));
     if walked {
         program.walk_floats();

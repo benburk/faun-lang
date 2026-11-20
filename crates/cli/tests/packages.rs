@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use faun_core::targets::Target;
+use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
 use faun_x86_64_linux::X86_64Linux;
 
 /// A package written to its own directory, removed when dropped.
@@ -36,16 +36,21 @@ impl Drop for Package {
 fn a_library_is_checked_by_the_frontend_alone_and_has_no_barb() {
     let package = Package::new("library", "double : Nat -> Nat\ndouble(n) -> n + n\n");
     assert!(matches!(
-        faun_frontend::check_package(&package.entry(), &X86_64Linux).unwrap(),
+        faun_frontend::check_package(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap(),
         faun_frontend::Package::Library
     ));
-    let refused = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
+    let refused =
+        faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap_err();
     assert!(refused.message.contains("no `main!` to build"));
     let wrong = Package::new(
         "wrong-library",
         "double : Nat -> Nat\ndouble(n) -> n + True\n",
     );
-    assert!(faun_frontend::check_package(&wrong.entry(), &X86_64Linux).is_err());
+    assert!(
+        faun_frontend::check_package(&wrong.entry(), &faun_driver::platform(&X86_64Linux)).is_err()
+    );
 }
 
 #[test]
@@ -55,13 +60,21 @@ fn an_application_builds_only_what_main_reaches() {
         "import std.host {Host}\n\nunused : Nat -> Nat\nunused(n) -> n * 3\n\n\
          main! : Host -> []\nmain!(host) -> host.exit!(7)\n",
     );
-    let barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let barb = faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+        .unwrap();
     assert!(barb.render().contains("unused(v0: Nat) -> Nat ="));
     let mut optimized = barb.clone();
     barb::optimize(&mut optimized);
     let machine = faun_core::lower_to_machine_ir(&optimized, &X86_64Linux.routines()).unwrap();
     assert!(!machine.render().contains("unused"));
-    faun_frontend::compile_barb_to_image(barb, &X86_64Linux).unwrap();
+    faun_driver::compile_barb(
+        barb,
+        &X86_64Linux,
+        Pipeline::Stock,
+        Favour::Speed,
+        SymbolTable::Omitted,
+    )
+    .unwrap();
 }
 
 /// A checked constructor's guard bounds its field, though the guard is a
@@ -91,7 +104,9 @@ fn a_guard_worked_out_into_a_bool_bounds_what_its_match_builds() {
          \x20 host.exit!(U8.of_nat(digits))\n\
          )\n",
     );
-    let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let mut barb =
+        faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap();
     barb::optimize(&mut barb);
     let machine = faun_core::lower_to_machine_ir(&barb, &X86_64Linux.routines()).unwrap();
     let rendered = machine.render();
@@ -112,7 +127,9 @@ fn what_a_loop_asks_of_a_value_every_caller_hands_it_is_folded() {
          main! : Host -> []\n\
          main!(host) -> host.exit!(U8.of_nat(seek(\"a.txt\".to_utf8(), host.args.len())))\n",
     );
-    let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let mut barb =
+        faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap();
     assert!(barb.render().contains("List.any"));
     barb::optimize(&mut barb);
     let rendered = barb.render();
@@ -143,7 +160,9 @@ fn a_loop_handed_different_strings_is_copied_for_each_where_that_decides_somethi
              )\n"
         ),
     );
-    let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let mut barb =
+        faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap();
     barb::optimize(&mut barb);
     let rendered = barb.render();
     assert!(!rendered.contains("List.any"), "{rendered}");
@@ -162,7 +181,8 @@ fn a_definition_taking_a_function_is_compiled_where_it_is_called() {
         "higher-order",
         "twice : (Nat -> Nat, Nat) -> Nat\ntwice(f, n) -> f(f(n))\n\nmain!(host) -> host.exit!(0)\n",
     );
-    let barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let barb = faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+        .unwrap();
     assert!(!barb.render().contains("twice"));
 }
 
@@ -174,7 +194,7 @@ fn clauses_that_cover_every_case_are_accepted() {
         "covered",
         "sign : Int -> Nat\nsign(0) -> 0\nsign(Pos(Succ(_))) -> 1\nsign(NegSucc(_)) -> 2\n",
     );
-    faun_frontend::check_package(&covered.entry(), &X86_64Linux).unwrap();
+    faun_frontend::check_package(&covered.entry(), &faun_driver::platform(&X86_64Linux)).unwrap();
 }
 
 #[test]
@@ -183,7 +203,8 @@ fn a_generic_definition_nothing_calls_is_judged_at_the_empty_type() {
         "length",
         "length : List(a) -> Nat\nlength([]) -> 0\nlength([_, *rest]) -> 1 + length(rest)\n\nmain!(host) -> host.exit!(0)\n",
     );
-    let barb = faun_frontend::lower_to_barb(&total.entry(), &X86_64Linux).unwrap();
+    let barb =
+        faun_frontend::lower_to_barb(&total.entry(), &faun_driver::platform(&X86_64Linux)).unwrap();
     assert!(barb.render().contains("length(v0: List<[]>) -> Nat ="));
 }
 
@@ -214,8 +235,10 @@ fn a_package_imports_the_root_of_one_it_depends_on() {
         "dependency",
         "package {\n  uses: {\n    shapes: \"vendor/shapes/shapes\",\n  },\n}\n\nimport shapes {double_square}\n\neight : Nat\neight = double_square(2)\n\nexpect eight == 8\n",
     );
-    faun_frontend::check_package(&package.entry(), &X86_64Linux).unwrap();
-    let tests = faun_frontend::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    faun_frontend::check_package(&package.entry(), &faun_driver::platform(&X86_64Linux)).unwrap();
+    let tests =
+        faun_frontend::lower_tests_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap();
     assert_eq!(tests.expectations.len(), 1);
 }
 
@@ -231,8 +254,10 @@ fn a_test_dependency_is_reached_by_expectations_and_their_helpers() {
          doubled : Nat -> Nat\ndoubled(n) -> double_square(n)\n\n\
          expect doubled(3) == area(3) * 2\n",
     );
-    faun_frontend::check_package(&package.entry(), &X86_64Linux).unwrap();
-    let tests = faun_frontend::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    faun_frontend::check_package(&package.entry(), &faun_driver::platform(&X86_64Linux)).unwrap();
+    let tests =
+        faun_frontend::lower_tests_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+            .unwrap();
     assert_eq!(tests.expectations.len(), 1);
 }
 
@@ -252,7 +277,8 @@ fn only_the_operators_on_bool_leave_their_right_side_unworked() {
          branching(a, n) -> a & (if n == 0 then spin(n) else spin(n + 1))\n\n\
          main!(host) -> host.exit!(0)\n",
     );
-    let barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let barb = faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(&X86_64Linux))
+        .unwrap();
     let rendered = barb.render();
     let body = |name: &str| {
         let header = format!("\n{name}(");

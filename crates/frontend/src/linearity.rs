@@ -39,12 +39,11 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 
-use faun_core::platform::Routines;
-
 use crate::context::Context;
 use crate::diagnostic::Diagnostic;
 use crate::first_order::{self as d, ExprKind};
 use crate::hir::LocalId;
+use crate::platform::Platform;
 use crate::specialize::{Connective, FunctionKey, Pattern, Type, surface_type};
 use crate::{ModuleId, Symbol, Symbols};
 
@@ -59,9 +58,9 @@ pub(crate) fn check(
     program: &d::Program,
     declared: &crate::typed::Program,
     cx: &Context,
-    routines: &Routines,
+    platform: &Platform,
 ) -> Result<(), Diagnostic> {
-    let facts = Facts::of(program, declared, cx, routines);
+    let facts = Facts::of(program, declared, cx, platform);
     if facts.resources.is_empty() {
         return Ok(());
     }
@@ -120,7 +119,7 @@ fn settle(facts: &Facts<'_>) -> Vec<Vec<Contract>> {
 fn resources(
     declared: &crate::typed::Program,
     symbols: &Symbols,
-    routines: &Routines,
+    platform: &Platform,
 ) -> HashSet<Symbol> {
     declared
         .functions
@@ -129,7 +128,7 @@ fn resources(
             let crate::typed::Definition::External(provider) = function.definition else {
                 return None;
             };
-            let routine = routines.get(symbols.text(provider))?;
+            let routine = platform.routine(symbols.text(provider))?;
             let crate::check::InferredType::Function(parameters, _) = &function.scheme.ty else {
                 unreachable!("every definition has a function scheme")
             };
@@ -190,7 +189,7 @@ impl<'a> Facts<'a> {
         program: &'a d::Program,
         declared: &crate::typed::Program,
         cx: &'a Context,
-        routines: &Routines,
+        platform: &Platform,
     ) -> Self {
         let prelude = &cx.prelude;
         let uses_up = program
@@ -200,7 +199,7 @@ impl<'a> Facts<'a> {
                 let d::Definition::External(provider) = function.definition else {
                     return None;
                 };
-                let routine = routines.get(cx.symbols.text(provider))?;
+                let routine = platform.routine(cx.symbols.text(provider))?;
                 routine.consumes.then_some(0)
             })
             .collect();
@@ -216,7 +215,7 @@ impl<'a> Facts<'a> {
         Self {
             program,
             cx,
-            resources: resources(declared, &cx.symbols, routines),
+            resources: resources(declared, &cx.symbols, platform),
             functions: program
                 .functions
                 .iter()

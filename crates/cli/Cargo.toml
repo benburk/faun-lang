@@ -18,6 +18,7 @@ bpaf = "0.9"
 faun-aarch64-macos.workspace = true
 faun-barb.workspace = true
 faun-core.workspace = true
+faun-driver.workspace = true
 faun-frontend.workspace = true
 faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true

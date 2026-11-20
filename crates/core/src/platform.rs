@@ -1,8 +1,11 @@
 //! What a target answers for, said once.
 //!
 //! A routine describes a chosen environment: what a source program may name,
-//! and the machine contract a target supplies. Frontend setup and lowering
-//! read these contracts; target acceptance checks calls against its own set.
+//! and the machine contract a target supplies. Machine lowering reads these
+//! contracts, and target acceptance checks calls against its own set. The
+//! frontend reads only their names and which use up what they are handed,
+//! which the driver copies into a `faun_frontend::Platform`, so it never
+//! depends on this crate.
 //! Machine programs keep ordinary external function declarations, not this
 //! catalog. barb reads none of it -- an external there is a name with no body,
 //! like any other.
@@ -464,6 +467,11 @@ impl Routines {
                 .map(|high| memory.map_or(high - 1, |memory| memory.min(high - 1))),
             ..word
         }
+    }
+
+    /// Every routine it answers for, offered to a program or not.
+    pub fn all(&self) -> impl Iterator<Item = &Routine> {
+        self.contracts.iter()
     }
 
     /// Every routine a program may call by name.
