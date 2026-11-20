@@ -1,6 +1,5 @@
 //! Select the backend independently of the source program's target host.
 
-use faun_core::barb;
 use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
 use faun_frontend::diagnostic::Diagnostic;
 use faun_x86_64_linux::X86_64Linux;

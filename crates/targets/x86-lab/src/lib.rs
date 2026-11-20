@@ -12,7 +12,6 @@
 //! its own machine IR, instruction selection, register allocator and ELF emitter.
 
 mod barb;
-pub use faun_core::{facts, float, index};
 pub mod ir;
 pub mod platform;
 #[cfg(test)]

@@ -292,7 +292,7 @@ pub(crate) enum Inst {
         bits: u16,
     },
     Float {
-        float: faun_core::float::Float,
+        float: faun_base::float::Float,
         dst: Reg,
         left: Reg,
         right: Option<Reg>,
@@ -684,7 +684,7 @@ impl AllocatedBuilder {
 
     pub(crate) fn float(
         &mut self,
-        float: faun_core::float::Float,
+        float: faun_base::float::Float,
         dst: Reg,
         left: Reg,
         right: Option<Reg>,

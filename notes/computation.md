@@ -74,7 +74,7 @@ The compiler leaves such work out where it can see it. A list read only for
 its first element, from a definition joining what its own calls answer, is
 built only as far as that: `models(formula).first()`, over a search
 answering every model, stops at the first, the second branch searched only
-where the first found none ([`head.rs`](../crates/core/src/barb/head.rs)).
+where the first found none ([`head.rs`](../crates/barb/src/head.rs)).
 So does a test of whether it is empty, a `filter` or a `map` read for its
 first element, and a search over it that stops at what it accepts, as
 `find`, `any` and `all` do: `!models(formula).is_empty()` and

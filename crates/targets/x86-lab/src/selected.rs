@@ -15,7 +15,7 @@ use crate::ir::{
     Terminator as SourceTerminator, ValueId, Width,
 };
 use crate::{ARG_COUNT, WORD_BITS};
-use faun_core::index::{Pool, Range};
+use faun_base::index::{Pool, Range};
 
 pub(crate) use faun_core::codegen::registers::{BlockId, InstId, Role, Timing, VReg};
 
@@ -406,7 +406,7 @@ enum Immediate {
         by: Option<u8>,
     },
     Function(FunctionId),
-    Float(faun_core::float::Float),
+    Float(faun_base::float::Float),
     /// A word slot in a call's area: overflow arguments, then overflow results.
     Slot(u32),
 }

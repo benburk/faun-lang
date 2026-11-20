@@ -10,7 +10,7 @@
 //! thing more. What they are for is the question "is this as small as it can
 //! be", which nobody can answer about a program doing four things at once.
 
-use crate::barb::{FnId, Program, TypeId};
+use barb::{FnId, Program, TypeId};
 
 /// What every program here is read against.
 ///

@@ -53,8 +53,8 @@ pub fn hello_world() -> Program {
 /// # Panics
 /// If the fixture's declarations do not describe a natural-number type.
 #[must_use]
-pub fn two_and_two_in_barb() -> crate::barb::Program {
-    let mut program = crate::barb::Program::default();
+pub fn two_and_two_in_barb() -> barb::Program {
+    let mut program = barb::Program::default();
     let nat = program.declare_type("Nat");
     program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
 
@@ -92,8 +92,8 @@ pub fn two_and_two_in_barb() -> crate::barb::Program {
 /// # Panics
 /// If the fixture's declarations do not describe the shapes it builds.
 #[must_use]
-pub fn an_arm_that_leaves(leave: bool) -> crate::barb::Program {
-    let mut program = crate::barb::Program::default();
+pub fn an_arm_that_leaves(leave: bool) -> barb::Program {
+    let mut program = barb::Program::default();
     let host = program.declare_type("Host");
     program.define_type(host, &[("Host", &[])]);
     let never = program.declare_type("Never");

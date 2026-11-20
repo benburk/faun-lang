@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use super::rewrite::{self, Declarations, Rebuild};
 use super::{Builder, Class, Op, Program, ValueId};
-use crate::index::append_range;
+use faun_base::index::append_range;
 
 /// The scalar or literal that exactly represents a natural.
 #[derive(Clone, Copy)]

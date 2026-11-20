@@ -319,7 +319,7 @@ impl Builder<'_> {
     /// Unordered-or-less-or-equal, expressed on IEEE bit patterns.
     pub(crate) fn float_not_above(
         &mut self,
-        format: crate::float::Format,
+        format: faun_base::float::Format,
         left: ValueId,
         right: ValueId,
     ) -> ValueId {
@@ -328,8 +328,8 @@ impl Builder<'_> {
         let right = self.convert(class, right);
         let sign = 1u64 << (format.bits() - 1);
         let infinity = match format {
-            crate::float::Format::Binary32 => 0x7f80_0000,
-            crate::float::Format::Binary64 => 0x7ff0_0000_0000_0000,
+            faun_base::float::Format::Binary32 => 0x7f80_0000,
+            faun_base::float::Format::Binary64 => 0x7ff0_0000_0000_0000,
         };
         let mask = self.constant(class, sign - 1);
         let infinity = self.constant(class, infinity);
@@ -350,7 +350,7 @@ impl Builder<'_> {
         self.binary(Binary::Or, accepted, le)
     }
 
-    fn float_order_key(&mut self, format: crate::float::Format, value: ValueId) -> ValueId {
+    fn float_order_key(&mut self, format: faun_base::float::Format, value: ValueId) -> ValueId {
         let class = Class::fixed(format.bits());
         let sign = 1u64 << (format.bits() - 1);
         let mask = self.constant(class, sign - 1);
@@ -400,7 +400,7 @@ impl Builder<'_> {
     }
 
     /// `float` of the patterns `operands` hold, a pattern of its format.
-    pub fn float(&mut self, float: crate::float::Float, operands: &[ValueId]) -> ValueId {
+    pub fn float(&mut self, float: faun_base::float::Float, operands: &[ValueId]) -> ValueId {
         let operands = self.program.hold(operands);
         self.push_one(
             Op::Float { float, operands },

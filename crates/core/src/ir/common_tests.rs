@@ -169,7 +169,7 @@ fn widths_are_part_of_an_expressions_identity() {
 
 #[test]
 fn float_expressions_share_only_with_the_same_operand_order() {
-    use crate::float::{Float, Format, Operation};
+    use faun_base::float::{Float, Format, Operation};
     let subtract = Float {
         format: Format::Binary64,
         operation: Operation::Sub,

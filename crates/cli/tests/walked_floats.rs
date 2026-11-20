@@ -18,7 +18,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use faun_core::barb;
 use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;

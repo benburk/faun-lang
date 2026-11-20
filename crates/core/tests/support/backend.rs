@@ -614,7 +614,7 @@ fn running() -> Vec<(&'static str, Program, i32)> {
         ("an arm that leaves", true, 1),
     ] {
         let mut barb = programs::an_arm_that_leaves(leave);
-        faun_core::barb::optimize(&mut barb);
+        barb::optimize(&mut barb);
         let machine = faun_core::lower_to_machine_ir(&barb, &TARGET.routines()).expect("a program");
         held.push((name, machine, answer));
     }
@@ -2905,12 +2905,9 @@ fn the_ladder_answers_what_its_programs_say() {
 /// Both halves, because a program arriving at Barb has not been through
 /// Barb's own schedule yet, and lowering one that has not is lowering a
 /// program nothing writes.
-fn lowered(
-    mut barb: faun_core::barb::Program,
-    routines: &faun_core::platform::Routines,
-) -> Program {
-    faun_core::barb::validate(&barb).expect("a sound program");
-    faun_core::barb::optimize(&mut barb);
+fn lowered(mut barb: barb::Program, routines: &faun_core::platform::Routines) -> Program {
+    barb::validate(&barb).expect("a sound program");
+    barb::optimize(&mut barb);
     faun_core::lower_to_machine_ir(&barb, routines).expect("a representable program")
 }
 

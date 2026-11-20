@@ -12,7 +12,7 @@
 //! its parameters from startup, and it answers one word. An external
 //! declaration keeps its own too, since a provider reads what it reads.
 
-use crate::index::append_range;
+use faun_base::index::append_range;
 
 use super::rewrite::{self, Declarations, Rebuild};
 use super::{Builder, Class, Exit, FunctionId, Op, Program, Terminator, ValueId};

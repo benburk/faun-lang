@@ -10,7 +10,6 @@ use num_bigint::BigUint;
 use super::evaluate::{self, Counts, RejectHost};
 use super::test_support::no_live_objects;
 use super::*;
-use crate::barb;
 use crate::platform::Routines;
 
 const HEAP_BYTES: usize = 1 << 20;

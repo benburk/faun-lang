@@ -18,7 +18,6 @@ use std::process::{Command as Process, ExitCode};
 use args::{Command, Stage};
 use compiler::Compiler;
 use faun_aarch64_macos::Aarch64Macos;
-use faun_core::barb;
 use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_frontend::diagnostic::Diagnostic;
 use faun_frontend::packages::Packages;

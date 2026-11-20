@@ -4,7 +4,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use faun_core::barb::{self, FnId};
+use barb::FnId;
 use faun_core::targets::Target;
 use faun_x86_64_linux::X86_64Linux;
 use support::Package;
@@ -116,8 +116,8 @@ fn float_doubling_is_rewritten_before_machine_lowering() {
         if let barb::Expr::Call(id, _) = expr
             && let Some(float) = facts.float(id)
         {
-            assert_ne!(float.operation, faun_core::float::Operation::Mul);
-            adds += usize::from(float.operation == faun_core::float::Operation::Add);
+            assert_ne!(float.operation, faun_base::float::Operation::Mul);
+            adds += usize::from(float.operation == faun_base::float::Operation::Add);
         }
     }
     assert!(adds >= 2);
@@ -205,7 +205,7 @@ fn reference_table() -> String {
         "//! Written by `FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition`\n\
          //! from the standard's float operations, as the code of each comes to after\n\
          //! canonicalizing. Do not edit by hand.\n\n\
-         use crate::float::{Float, Format, Operation};\n\n\
+         use faun_base::float::{Float, Format, Operation};\n\n\
          pub(super) const KNOWN: &[(u128, Float)] = &[\n",
     );
     for (print, (operation, format)) in reference_fingerprints() {
@@ -228,8 +228,7 @@ fn reference_table() -> String {
 
 #[test]
 fn the_reference_float_table_is_the_standards_code() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src/barb/floats/known.rs");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../barb/src/floats/known.rs");
     let table = reference_table();
     if std::env::var_os("FAUN_BLESS").is_some_and(|value| value != "0") {
         std::fs::write(&path, &table).unwrap();
@@ -243,7 +242,7 @@ fn the_reference_float_table_is_the_standards_code() {
 
 /// What a failing recognition says: the table no longer matches the
 /// standard's code, and how to write it again.
-const STALE: &str = "Barb's table of the standard's float code (crates/core/src/barb/floats/known.rs) \
+const STALE: &str = "Barb's table of the standard's float code (crates/barb/src/floats/known.rs) \
      is stale, so this operation would run as the software routine on x86-64: \
      run `just bless` (FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition \
      the_reference_float_table) and read the diff";

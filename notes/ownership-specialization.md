@@ -93,7 +93,7 @@ Ranges, the second axis, are also one fact per definition: a definition
 starts from what every call hands it, joined
 ([ranges](machine/ranges.md#what-a-term-says)). The precedent for copying
 per call is Barb's specialization by known values
-(`crates/core/src/barb/specialize.rs`): a recursive definition handed
+(`crates/barb/src/specialize.rs`): a recursive definition handed
 different constants by its callers gets a copy for each, at most four, of
 definitions no larger than a bound, and a copy is kept only where it
 decides a match its original could not. Ownership copies would need the

@@ -19,7 +19,7 @@
 
 use std::cell::Cell;
 
-use crate::index::Pool;
+use faun_base::index::Pool;
 
 use super::model::Parameter;
 use super::{

@@ -256,7 +256,7 @@ fn internal_never_contracts_propagate_but_cannot_return_unit() {
 #[test]
 fn source_never_functions_keep_their_contract_without_inlining() {
     let routines = crate::platform::Routines::builtin().with_word(64);
-    let mut source = crate::barb::Program::default();
+    let mut source = barb::Program::default();
     let nat = source.declare_type("Nat");
     source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
     let zero = source.ctor_at(nat, 0);

@@ -8,7 +8,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::BTreeSet;
 
-use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
+use barb::{Atom, Builder, CtorId, FnId, TypeId};
 
 use crate::blessed::PreludeIds;
 use crate::context::Context;

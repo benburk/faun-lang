@@ -2,9 +2,9 @@
 //!
 //! [`super::Program`] owns the pools these values refer to.
 
-use crate::facts::Facts;
-pub use crate::index::Range;
-use crate::index::index;
+use faun_base::facts::Facts;
+pub use faun_base::index::Range;
+use faun_base::index::index;
 
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. Most passes compare and copy symbols as integers; renderers read
@@ -376,7 +376,7 @@ pub enum Op {
     /// these itself (see [`crate::platform::Routines::with_floats`]), for
     /// which it is one instruction; a NaN it writes may be any NaN.
     Float {
-        float: crate::float::Float,
+        float: faun_base::float::Float,
         operands: Range,
     },
     If {
@@ -455,7 +455,7 @@ pub(super) struct Parameter {
 pub struct Function {
     /// A Barb proof, when this declaration came from value-level lowering.
     /// Direct machine-IR clients leave this absent.
-    pub tree_role: Option<crate::barb::TreeRole>,
+    pub tree_role: Option<barb::TreeRole>,
     /// The provider symbol for an external, or a descriptive name for a body.
     /// Source aliases are resolved before constructing this declaration.
     pub name: Symbol,

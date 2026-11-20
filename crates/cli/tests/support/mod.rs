@@ -297,12 +297,12 @@ fn ran_out(
     said
 }
 
-fn run_barb(barb: faun_core::barb::Program, input: &[u8], errno: Option<u64>) -> (u32, String) {
+fn run_barb(barb: barb::Program, input: &[u8], errno: Option<u64>) -> (u32, String) {
     run_barb_fueled(barb, input, errno, 100_000_000)
 }
 
 fn run_barb_fueled(
-    mut barb: faun_core::barb::Program,
+    mut barb: barb::Program,
     input: &[u8],
     errno: Option<u64>,
     fuel: u64,
@@ -320,38 +320,30 @@ fn run_barb_fueled(
 }
 
 /// Run `barb` against `streams`: the status it exits with.
-fn run_on(barb: &mut faun_core::barb::Program, streams: &mut Streams, fuel: u64) -> u32 {
+fn run_on(barb: &mut barb::Program, streams: &mut Streams, fuel: u64) -> u32 {
     try_run_spending(barb, streams, fuel)
         .unwrap_or_else(|error| panic!("{error:?}"))
         .0
 }
 
 /// The same, and how much of `fuel` it spent.
-fn run_spending(
-    barb: &mut faun_core::barb::Program,
-    streams: &mut Streams,
-    fuel: u64,
-) -> (u32, u64) {
+fn run_spending(barb: &mut barb::Program, streams: &mut Streams, fuel: u64) -> (u32, u64) {
     try_run_spending(barb, streams, fuel).unwrap_or_else(|error| panic!("{error:?}"))
 }
 
 /// The status, or why the interpreter stopped short.
-fn try_run_on(
-    barb: &mut faun_core::barb::Program,
-    streams: &mut Streams,
-    fuel: u64,
-) -> Result<u32, Error> {
+fn try_run_on(barb: &mut barb::Program, streams: &mut Streams, fuel: u64) -> Result<u32, Error> {
     try_run_spending(barb, streams, fuel).map(|(status, _)| status)
 }
 
 /// The status and how much of `fuel` it spent, or why the interpreter
 /// stopped short.
 fn try_run_spending(
-    barb: &mut faun_core::barb::Program,
+    barb: &mut barb::Program,
     streams: &mut Streams,
     fuel: u64,
 ) -> Result<(u32, u64), Error> {
-    faun_core::barb::optimize(barb);
+    barb::optimize(barb);
     let machine = faun_core::lower_to_machine_ir(barb, &X86_64Linux.routines())
         .unwrap_or_else(|error| panic!("{error}"));
     let prepared = X86_64Linux

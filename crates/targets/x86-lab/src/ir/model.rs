@@ -2,9 +2,9 @@
 //!
 //! [`super::Program`] owns the pools these values refer to.
 
-use crate::facts::Facts;
-pub use crate::index::Range;
-use crate::index::index;
+use faun_base::facts::Facts;
+pub use faun_base::index::Range;
+use faun_base::index::index;
 
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. Most passes compare and copy symbols as integers; renderers read
@@ -131,7 +131,7 @@ pub enum Relation {
     /// Unsigned, comparing the two bit patterns.
     Less,
     /// True for an unordered pair or when the first IEEE value is less than or equal to the second.
-    FloatNotAbove(crate::float::Format),
+    FloatNotAbove(faun_base::float::Format),
 }
 
 /// Which way a shift moves the bits it keeps.
@@ -380,7 +380,7 @@ pub enum Op {
     /// these itself (see [`crate::platform::Routines::with_floats`]), for
     /// which it is one instruction; a NaN it writes may be any NaN.
     Float {
-        float: crate::float::Float,
+        float: faun_base::float::Float,
         operands: Range,
     },
     If {

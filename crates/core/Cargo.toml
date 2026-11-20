@@ -3,15 +3,18 @@ name = "faun-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The shared Barb and machine compiler core for Faun"
-
-[features]
-backend-tests = []
+description = "The machine tier of the Faun compiler: machine IR, its passes, and what every target shares"
 
 [dependencies]
+faun-barb.workspace = true
+faun-base.workspace = true
 num-bigint = "0.4.8"
 num-traits = "0.2"
 rustc-hash = "2.1.3"
+
+# The tests build their Barb with the fixture's small standard library.
+[dev-dependencies]
+faun-barb = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

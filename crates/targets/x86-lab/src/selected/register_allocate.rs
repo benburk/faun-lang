@@ -7,9 +7,9 @@ mod lower;
 use super::{Inst, OperandSpec, Reg, RegSet, Selected, Terminator};
 use crate::ir::FunctionId;
 use crate::machine::Allocated;
+use faun_base::index::Range;
 use faun_core::codegen;
 use faun_core::codegen::registers::{self, Code};
-use faun_core::index::Range;
 use lower::COPY_SCRATCH;
 
 pub(super) use registers::{BlockPoints, InstPoints, Liveness, Point, place};

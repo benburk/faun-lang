@@ -6,7 +6,7 @@
 //! dropped. [`Code`] owns both, so no pass can move one without the other.
 //! What an instruction is stays with its target: this only stores them.
 
-use crate::index::index;
+use faun_base::index::index;
 
 index!(pub Label);
 

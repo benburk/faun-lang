@@ -7,7 +7,7 @@
 
 use num_bigint::BigUint;
 
-use crate::facts::Facts;
+use faun_base::facts::Facts;
 
 use super::{Binary, Class, Op, Program, Relation, Returns, ValueId, evaluate, optimize, validate};
 

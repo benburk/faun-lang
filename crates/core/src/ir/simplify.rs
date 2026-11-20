@@ -52,7 +52,7 @@ use rustc_hash::FxHashMap as HashMap;
 use num_bigint::BigUint;
 use prepend::{Pushed, temporary_pushes};
 
-use crate::facts::Facts;
+use faun_base::facts::Facts;
 
 use super::{
     Binary, Builder, Class, Direction, Exit, Op, Program, Range, RegionId, Relation, ShapeId,
