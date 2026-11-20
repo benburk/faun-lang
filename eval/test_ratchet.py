@@ -34,6 +34,7 @@ from ratchet import (
     same_work,
     slower,
     standings,
+    table,
 )
 
 
@@ -58,10 +59,10 @@ def cell(
 
 
 def suite(candidates, incumbents=None, target=WASM):
-    """Cells of one target and backend, a workload for each candidate."""
+    """Cells of one target, a workload for each candidate."""
     incumbents = incumbents or [cell() for _ in candidates]
     return {
-        (target, "stock", f"program-{at}"): {"incumbent": old, "candidate": new}
+        (target, f"program-{at}"): {"incumbent": old, "candidate": new}
         for at, (old, new) in enumerate(zip(incumbents, candidates, strict=True))
     }
 
@@ -128,22 +129,19 @@ class Ratchet(unittest.TestCase):
         self.assertEqual(verdict(suite([quicker, more], target=X86)), "reject")
 
     def test_a_memory_past_the_guard_where_the_heaps_arena_falls_is_noted(self):
-        # x86-64 lab collatz under octagons: a fourth 512 KiB arena at 20,000,
+        # x86-64 collatz under octagons: a fourth 512 KiB arena at 20,000,
         # and less than the incumbent at 15,000.
         quicker = cell(speed=100, image="quick")
         arena = cell(memory=488, image="arena")
         cells = suite([quicker, arena], [cell(), cell(memory=376)], X86)
         self.assertEqual(verdict(cells), "reject")
-        key = X86, "stock", "program-1"
+        key = X86, "program-1"
         cells[key]["again"] = {"size": 15000, "incumbent": 336, "candidate": 308}
         scored = score(cells)
         self.assertEqual(decide(scored), ("accept", []))
         self.assertEqual(
             noted(scored),
-            [
-                "x86_64-linux stock program-1 memory is 29.8% worse"
-                " but -8.3% at size 15000"
-            ],
+            ["x86_64-linux program-1 memory is 29.8% worse but -8.3% at size 15000"],
         )
         # The memory still counts in the score as measured.
         self.assertGreater(scored["loss"], 0)
@@ -152,7 +150,7 @@ class Ratchet(unittest.TestCase):
         quicker = cell(speed=100, image="quick")
         more = cell(memory=488, image="more")
         cells = suite([quicker, more], [cell(), cell(memory=376)], X86)
-        key = X86, "stock", "program-1"
+        key = X86, "program-1"
         cells[key]["again"] = {"size": 15000, "incumbent": 290, "candidate": 336}
         self.assertEqual(verdict(cells), "reject")
         self.assertEqual(noted(score(cells)), [])
@@ -162,14 +160,14 @@ class Ratchet(unittest.TestCase):
         # Not running at the second size, it is past it.
         cells[key]["again"] |= {"candidate": None}
         self.assertEqual(verdict(cells), "reject")
-        # And a 6502 memory past the guard at every size, as the lab sort's
-        # first arena is, rejects.
+        # And a 6502 memory past the guard at every size, as the sort's first
+        # arena is, rejects.
         sort = suite(
             [quicker, cell(memory=1502, image="arena")],
             [cell(), cell(memory=804)],
             MOS,
         )
-        sort[MOS, "stock", "program-1"]["again"] = {
+        sort[MOS, "program-1"]["again"] = {
             "size": 18,
             "incumbent": 750,
             "candidate": 1450,
@@ -180,7 +178,7 @@ class Ratchet(unittest.TestCase):
         quicker = cell(speed=100, image="quick")
         slow = cell(speed=1200, image="slow")
         cells = suite([quicker, slow], target=X86)
-        cells[X86, "stock", "program-1"]["again"] = {
+        cells[X86, "program-1"]["again"] = {
             "size": 1,
             "incumbent": 100,
             "candidate": 100,
@@ -267,7 +265,7 @@ class Ratchet(unittest.TestCase):
         self.assertFalse(slower(old, timed(100, 150)))
 
     def test_a_longer_time_doing_the_same_work_is_noted_not_rejected(self):
-        # x86-64 lab checksum under octagons: as many instructions, its loop's
+        # x86-64 checksum under octagons: as many instructions, its loop's
         # head across a cache line.
         def ran(instructions, branches=50_000_000, memory=9512, image="new"):
             return dict(
@@ -289,7 +287,6 @@ class Ratchet(unittest.TestCase):
         steady = [
             {
                 "target": X86,
-                "backend": "lab",
                 "workload": "checksum",
                 "metric": "time",
                 "ratio": 1.197,
@@ -301,7 +298,7 @@ class Ratchet(unittest.TestCase):
         self.assertEqual(
             noted(scored, steady),
             [
-                "x86_64-linux lab checksum time runs 19.7% longer with as many"
+                "x86_64-linux checksum time runs 19.7% longer with as many"
                 " instructions and branches and the same memory"
             ],
         )
@@ -417,10 +414,10 @@ class Ratchet(unittest.TestCase):
 
 
 def probing(candidates, incumbents=None, target=X86):
-    """Cells of probes on one target and backend, a probe for each candidate."""
+    """Cells of probes on one target, a probe for each candidate."""
     incumbents = incumbents or [cell() for _ in candidates]
     return {
-        (target, "stock", f"{PROBE}{at}"): {"incumbent": old, "candidate": new}
+        (target, f"{PROBE}{at}"): {"incumbent": old, "candidate": new}
         for at, (old, new) in enumerate(zip(incumbents, candidates, strict=True))
     }
 
@@ -529,11 +526,11 @@ class Probes(unittest.TestCase):
                 )
 
 
-def family(spellings, name="count", target=X86, backend="stock"):
-    """Cells of one family's spellings on one target and backend, each
-    spelling's name to its incumbent and candidate."""
+def family(spellings, name="count", target=X86):
+    """Cells of one family's spellings on one target, each spelling's name to
+    its incumbent and candidate."""
     return {
-        (target, backend, f"{PROBE}{name}-{spelling}"): {
+        (target, f"{PROBE}{name}-{spelling}"): {
             "incumbent": old,
             "candidate": new,
         }
@@ -621,8 +618,8 @@ class Families(unittest.TestCase):
         many = suite([cell()])
         for at in range(10):
             many |= {
-                (t, b, name.replace("count", f"count{at}")): sides
-                for (t, b, name), sides in spelled((1000, 1000)).items()
+                (t, name.replace("count", f"count{at}")): sides
+                for (t, name), sides in spelled((1000, 1000)).items()
             }
         self.assertEqual(len(score(many)["spreads"]), 40)
         self.assertAlmostEqual(one["score"], score(many)["score"])
@@ -642,13 +639,66 @@ class Families(unittest.TestCase):
             "candidate": {"commit": "abcdef0"},
             "started": "2026-11-19T00:00:00",
             "cells": [
-                {"target": t, "backend": b, "workload": w, "c": {}} | sides
-                for (t, b, w), sides in spelled((1000, 3000), (1000, 3000)).items()
+                {"target": t, "workload": w, "c": {}} | sides
+                for (t, w), sides in spelled((1000, 3000), (1000, 3000)).items()
             ],
         }
         written = standings(report)
-        self.assertIn("## Families, x86_64-linux, stock", written)
+        self.assertIn("## Families, x86_64-linux\n", written)
         self.assertIn("| count  | 3.00  | slow    | 1.00   | fast", written)
+
+
+class Backend(unittest.TestCase):
+    """One backend is measured, lab, and a cell is a program on a target."""
+
+    def test_every_build_names_the_lab_backend(self):
+        for small in (False, True):
+            command = ratchet.faun_command(Path("faun"), WASM, small)
+            at = command.index("--backend")
+            self.assertEqual(command[at + 1], "lab")
+            self.assertEqual("--small" in command, small)
+        self.assertFalse(hasattr(ratchet, "BACKENDS"))
+
+    def test_a_probes_twin_is_built_with_lab_too(self):
+        built = []
+
+        def build(side, target, small, workload, directory, file="main.fn"):
+            built.append(ratchet.faun_command(side.binary, target, small) + [file])
+            return None, "build: no", None, {}
+
+        probe = ratchet.Workload(f"{PROBE}power", Path(), "argument", {X86: 1})
+        side = SimpleNamespace(binary=Path("faun"))
+        with mock.patch.object(ratchet, "faun_build", build):
+            ratchet.c_build(X86, probe, Path(), side)
+        [command] = built
+        self.assertEqual(command[-1], "twin.fn")
+        self.assertEqual(command[command.index("--backend") + 1], "lab")
+
+    def test_the_summary_has_a_row_a_target(self):
+        cells = suite([cell(size=4900, image="two")], target=X86)
+        cells |= suite([cell()], target=MOS)
+        for sides in cells.values():
+            sides["c"] = {}
+        lines = table(cells, score(cells)).splitlines()
+        rows = [line.split()[0] for line in lines[2:5]]
+        self.assertEqual(rows, [X86, WASM, MOS])
+        self.assertNotIn("stock", "\n".join(lines))
+        self.assertIn("x86_64-linux program-0 size", "\n".join(lines))
+
+    def test_the_standings_give_a_table_a_target(self):
+        cells = suite([cell()], target=X86)
+        report = {
+            "candidate": {"commit": "abcdef0"},
+            "started": "2026-11-19T00:00:00",
+            "cells": [
+                {"target": t, "workload": w, "c": {"speed": 500}} | sides
+                for (t, w), sides in cells.items()
+            ],
+        }
+        written = standings(report)
+        self.assertIn("\n## x86_64-linux\n", written)
+        self.assertNotIn("stock", written)
+        self.assertIn("| program-0", written)
 
 
 class Series(unittest.TestCase):

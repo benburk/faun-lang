@@ -2,7 +2,7 @@
 
 Each side is a checkout directory, built in place, or a git revision, exported
 into a cache and built there; no git worktrees are created. Both compile the
-suite's programs for every target, with each backend, favouring speed and
+suite's programs for every target with the lab backend, favouring speed and
 favouring size. A program must print what its C twin prints, and is then
 measured beside it: the instructions, fuel or cycles it ran, the memory it
 used, and the bytes of its image. Beside the suite are the probes: each a
@@ -49,11 +49,12 @@ APPROVED = "origin/main"
 TRUNK = os.environ.get("RATCHET_TRUNK", APPROVED)
 # The log's series: a protected change, once merged, starts the next one, and
 # bumps this with it.
-SERIES = 7
+SERIES = 8
 
 X86, WASM, MOS = "x86_64-linux", "wasm32-wasi", "mos6502-sim65"
 TARGETS = (X86, WASM, MOS)
-BACKENDS = ("stock", "lab")
+# The one backend measured, named on every build.
+BACKEND = "lab"
 # What is measured of a program: how long it ran, in the target's own steady
 # count; its peak memory; its image built for speed; its image built `--small`;
 # and the instructions the compiler ran to build both.
@@ -75,7 +76,7 @@ MINIMUM = 0.001  # a gain below a tenth of a percent overall is neutral
 SLACK = {(X86, "memory"): 16, (WASM, "memory"): 16 << 10, (MOS, "memory"): 128}
 MARGIN = 2.0  # gains must outweigh losses this many times over
 REPAIRED = 0.5  # a cell that starts working counts as a halving
-# A family's spread on a target, backend and metric, its worst spelling over
+# A family's spread on a target and metric, its worst spelling over
 # its best, counts in the probes' group as half one spelling's cell: closing
 # a gap earns half again what the faster spelling earns, opening one costs
 # half what it earns, and slowing the best spelling to close one never pays.
@@ -460,10 +461,10 @@ def c_command(target, workload, source, out):
 def c_build(target, workload, directory, reference):
     """The twin's image for a target, or why there is none: cc65 has no
     floats, and there is no GMP for wasm32 or the 6502. A probe's twin is
-    Faun, built by the reference side's compiler with its stock backend."""
+    Faun, built by the reference side's compiler."""
     if workload.probe:
         image, status, _, _ = faun_build(
-            reference, target, "stock", False, workload, directory, "twin.fn"
+            reference, target, False, workload, directory, "twin.fn"
         )
         return image, status
     directory.mkdir(parents=True, exist_ok=True)
@@ -521,16 +522,11 @@ class Oracle:
         return self.known[key]
 
 
-def faun_build(side, target, backend, small, workload, directory, file="main.fn"):
+def faun_build(side, target, small, workload, directory, file="main.fn"):
     """Build a workload, answering its image or why there is none, and its
     size: for a 6502 image past the machine's 64 KiB, where it would end."""
     directory.mkdir(parents=True, exist_ok=True)
-    command = [side.binary, "build", f"--target={target}"]
-    # Stock is the default, and a revision before the flag has only it.
-    if backend != "stock":
-        command.append(f"--backend={backend}")
-    if small:
-        command.append("--small")
+    command = faun_command(side.binary, target, small)
     source = workload.home / file
     command += [source, "-o", directory / workload.name]
     # The compiler is measured as a program is: its instructions, its time
@@ -560,16 +556,24 @@ def faun_build(side, target, backend, small, workload, directory, file="main.fn"
     return image, "ok", image.stat().st_size, taken
 
 
-def faun_cell(side, label, target, backend, workload, check, oracle, work):
-    """Build a workload both ways for one target and backend, hold both
-    images to the oracle at a seeded size, and measure the one built for
-    speed at the target's size."""
-    directory = work / label / target / backend
+def faun_command(binary, target, small):
+    """The compiler's command building for a target, the backend named: a
+    revision whose default was another backend builds with lab all the same,
+    and one whose only backend is lab takes the flag as it is."""
+    command = [binary, "build", f"--target={target}", "--backend", BACKEND]
+    return command + ["--small"] if small else command
+
+
+def faun_cell(side, label, target, workload, check, oracle, work):
+    """Build a workload both ways for one target, hold both images to the
+    oracle at a seeded size, and measure the one built for speed at the
+    target's size."""
+    directory = work / label / target
     cell = {"status": "ok"}
     images, builds = {}, {}
     for metric, small in (("size", False), ("small", True)):
         image, status, size, builds[metric] = faun_build(
-            side, target, backend, small, workload, directory / metric
+            side, target, small, workload, directory / metric
         )
         cell[metric] = size
         if image is None:
@@ -624,7 +628,6 @@ def c_cell(target, workload, oracle, work):
         built = faun_build(
             oracle.reference,
             target,
-            "stock",
             True,
             workload,
             work / "c" / target / "small",
@@ -647,7 +650,7 @@ def timed(cpu, cells, oracle, workloads):
     lengthen a run, so a side's time is its quickest, kept with its median."""
     allowed = os.sched_getaffinity(0)
     os.sched_setaffinity(0, {cpu})
-    for (target, backend, name), sides in cells.items():
+    for (target, name), sides in cells.items():
         ready = {k: v for k, v in sides.items() if v.get("image")}
         if target != X86 or "candidate" not in ready or "incumbent" not in ready:
             continue
@@ -713,21 +716,19 @@ def measure_again(cells, oracle, workloads, jobs):
     """Measure again, at the size `again_size` gives, both sides of each
     cell whose memory is past the guard, keeping what each held there."""
     wanted = []
-    for (target, backend, name), sides in sorted(cells.items()):
+    for (target, name), sides in sorted(cells.items()):
         old, new = sides["incumbent"], sides["candidate"]
         change = ratio(target, "memory", old, new)
         if not isinstance(change, float) or not (old.get("image") and new.get("image")):
             continue
         if beyond(target, "memory", change, old["memory"], new["memory"]):
-            wanted.append(
-                ((target, backend, name), again_size(workloads[name], target))
-            )
+            wanted.append(((target, name), again_size(workloads[name], target)))
     # Each input is made once, before two cells could ask for it.
-    for (target, _, name), size in wanted:
+    for (target, name), size in wanted:
         oracle.case(workloads[name], size)
 
     def held(key, size, label):
-        target, _, name = key
+        target, name = key
         arguments, stdin, expected = oracle.case(workloads[name], size)
         image = Path(cells[key][label]["image"])
         said = run(target, image, arguments, stdin, image.with_suffix(".again"))
@@ -777,15 +778,10 @@ def score(cells):
     Each family's spreads count in the probes' groups beside its spellings,
     each weighing FAMILY of one of their cells."""
     changes, broken = [], []
-    for (target, backend, name), sides in sorted(cells.items()):
+    for (target, name), sides in sorted(cells.items()):
         for metric in METRICS:
             change = ratio(target, metric, sides["incumbent"], sides["candidate"])
-            where = {
-                "target": target,
-                "backend": backend,
-                "workload": name,
-                "metric": metric,
-            }
+            where = {"target": target, "workload": name, "metric": metric}
             if change == "broken":
                 broken.append(where | {"status": sides["candidate"]["status"]})
             elif change is not None:
@@ -857,17 +853,17 @@ def spread(target, metric, members, label, steady=False):
 
 
 def spreads(cells):
-    """Each family's spread on each target, backend and metric both its
-    spellings run, the candidate's over the incumbent's: below one, the
-    family's spellings are nearer each other."""
+    """Each family's spread on each target and metric its spellings run,
+    the candidate's over the incumbent's: below one, the family's spellings
+    are nearer each other."""
     found = []
-    named = families(name for _, _, name in cells)
-    for target, backend in sorted({(t, b) for t, b, _ in cells}):
+    named = families(name for _, name in cells)
+    for target in sorted({t for t, _ in cells}):
         for name, spellings in named.items():
             members = {
-                spelling: cells[target, backend, spelling]
+                spelling: cells[target, spelling]
                 for spelling in spellings
-                if (target, backend, spelling) in cells
+                if (target, spelling) in cells
             }
             if len(members) < 2:
                 continue
@@ -879,7 +875,6 @@ def spreads(cells):
                 found.append(
                     {
                         "target": target,
-                        "backend": backend,
                         "family": name,
                         "metric": metric,
                         "ratio": 1.0 if new[0] == old[0] else new[0] / old[0],
@@ -977,7 +972,7 @@ def noted(scored, steady=()):
 
 
 def place(cell):
-    return f"{cell['target']} {cell['backend']} {cell['workload']} {cell['metric']}"
+    return f"{cell['target']} {cell['workload']} {cell['metric']}"
 
 
 def tools(work):
@@ -1046,23 +1041,13 @@ def measure(sides, seed, jobs, only, work):
     with pool:
         for workload in chosen:
             for target in workload.sizes:
-                c = pool.submit(c_cell, target, workload, oracle, work)
-                for backend in BACKENDS:
-                    key = target, backend, workload.name
-                    cells[key] = {"c": c}
-                    check = checks[workload.name, target]
-                    for label, side in sides.items():
-                        cells[key][label] = pool.submit(
-                            faun_cell,
-                            side,
-                            label,
-                            target,
-                            backend,
-                            workload,
-                            check,
-                            oracle,
-                            work,
-                        )
+                key = target, workload.name
+                cells[key] = {"c": pool.submit(c_cell, target, workload, oracle, work)}
+                check = checks[workload.name, target]
+                for label, side in sides.items():
+                    cells[key][label] = pool.submit(
+                        faun_cell, side, label, target, workload, check, oracle, work
+                    )
         cells = {
             key: {label: pending.result() for label, pending in found.items()}
             for key, found in cells.items()
@@ -1071,8 +1056,7 @@ def measure(sides, seed, jobs, only, work):
 
 
 def table(cells, scored):
-    """The summary printed after a run: each target and backend's geometric
-    mean change, and how the candidate stands against C; then the same of
+    """The summary printed after a run: each target's geometric mean change, and how the candidate stands against C; then the same of
     the probes, against their twins; then each family's spread on each
     target, its worst spelling over its best, and how much it changed."""
     lines = []
@@ -1088,7 +1072,7 @@ def table(cells, scored):
         (c for c in scored["spreads"] if c["ratio"] != 1), key=lambda c: c["ratio"]
     )
     for change in moved[:6] + moved[6:][-6:]:
-        where = f"{change['target']} {change['backend']} {change['family']}"
+        where = f"{change['target']} {change['family']}"
         lines.append(
             f"  {change['ratio'] - 1:+8.2%}  {where} {change['metric']} spread,"
             f" {change['old']:.3g} to {change['new']:.3g}"
@@ -1098,15 +1082,14 @@ def table(cells, scored):
         for key, sides in cells.items()
         if sides["candidate"]["status"] != "ok"
     )
-    for (target, backend, name), status in failing:
-        lines.append(f"  not running: {target} {backend} {name}: {status}")
+    for (target, name), status in failing:
+        lines.append(f"  not running: {target} {name}: {status}")
     return "\n".join(lines)
 
 
 def family_rows(widths):
     """A row for each family and target: each metric's spread, the
-    candidate's worst spelling over its best, and its change, each the
-    geometric mean of the two backends'."""
+    candidate's worst spelling over its best, and its change."""
     if not widths:
         return []
     lines = [f"{'families':22}" + "".join(f"{m:>18}" for m in SPREAD)]
@@ -1115,15 +1098,17 @@ def family_rows(widths):
         for target in TARGETS:
             row, seen = f"{name + ' ' + target:22}", False
             for metric in SPREAD:
-                held = [
-                    c
-                    for c in widths
-                    if (c["family"], c["target"], c["metric"]) == (name, target, metric)
-                ]
-                change = geomean(c["ratio"] for c in held)
-                width = geomean(c["new"] for c in held)
-                row += f"{change - 1:>+10.2%}" if change else f"{'-':>10}"
-                row += f"{width:>8.2f}" if width else f"{'-':>8}"
+                held = next(
+                    (
+                        c
+                        for c in widths
+                        if (c["family"], c["target"], c["metric"])
+                        == (name, target, metric)
+                    ),
+                    None,
+                )
+                row += f"{held['ratio'] - 1:>+10.2%}" if held else f"{'-':>10}"
+                row += f"{held['new']:>8.2f}" if held else f"{'-':>8}"
                 seen = seen or bool(held)
             if seen:
                 lines.append(row)
@@ -1131,29 +1116,25 @@ def family_rows(widths):
 
 
 def table_rows(cells, probing):
-    """A row for each target and backend, of the suite or of the probes."""
+    """A row for each target, of the suite or of the probes."""
     lines = []
     for target in TARGETS:
-        for backend in BACKENDS:
-            row = f"{target + ' ' + backend:22}"
-            for metric in METRICS:
-                changes, against = [], []
-                for (t, b, name), sides in cells.items():
-                    if (t, b) != (target, backend) or name.startswith(PROBE) != probing:
-                        continue
-                    change = ratio(t, metric, sides["incumbent"], sides["candidate"])
-                    if isinstance(change, float):
-                        changes.append(change)
-                    ours, theirs = (
-                        sides["candidate"].get(metric),
-                        sides["c"].get(metric),
-                    )
-                    if sides["candidate"]["status"] == "ok" and ours and theirs:
-                        against.append(ours / theirs)
-                change, c = geomean(changes), geomean(against)
-                row += f"{change - 1:>+10.2%}" if change else f"{'-':>10}"
-                row += f"{c:>8.2f}" if c else f"{'-':>8}"
-            lines.append(row)
+        row = f"{target:22}"
+        for metric in METRICS:
+            changes, against = [], []
+            for (t, name), sides in cells.items():
+                if t != target or name.startswith(PROBE) != probing:
+                    continue
+                change = ratio(t, metric, sides["incumbent"], sides["candidate"])
+                if isinstance(change, float):
+                    changes.append(change)
+                ours, theirs = sides["candidate"].get(metric), sides["c"].get(metric)
+                if sides["candidate"]["status"] == "ok" and ours and theirs:
+                    against.append(ours / theirs)
+            change, c = geomean(changes), geomean(against)
+            row += f"{change - 1:>+10.2%}" if change else f"{'-':>10}"
+            row += f"{c:>8.2f}" if c else f"{'-':>8}"
+        lines.append(row)
     return lines
 
 
@@ -1177,7 +1158,7 @@ def times(ours, theirs):
 
 def standings(report):
     """A report's candidate against the C twins, as Markdown: a table for
-    each target and backend, and under it what does not run there; then the
+    each target, and under it what does not run there; then the
     probes' natural spellings against their twins the same way."""
     commit = report["candidate"]["commit"][:7]
     lines = [
@@ -1197,23 +1178,17 @@ def standings(report):
     ]
     for probing, twin in ((False, "vs C"), (True, "vs twin")):
         for target in TARGETS:
-            for backend in BACKENDS:
-                lines += standing(report, target, backend, probing, twin)
+            lines += standing(report, target, probing, twin)
     for target in TARGETS:
-        for backend in BACKENDS:
-            lines += family_standing(report, target, backend)
+        lines += family_standing(report, target)
     return "\n".join(lines) + "\n"
 
 
-def family_standing(report, target, backend):
-    """One target and backend's table of the families: each metric's spread,
-    the worst spelling's measure over the best's, and for speed and memory
-    the worst spelling, a cliff to close."""
-    cells = {
-        c["workload"]: c
-        for c in report["cells"]
-        if (c["target"], c["backend"]) == (target, backend)
-    }
+def family_standing(report, target):
+    """One target's table of the families: each metric's spread, the worst
+    spelling's measure over the best's, and for speed and memory the worst
+    spelling, a cliff to close."""
+    cells = {c["workload"]: c for c in report["cells"] if c["target"] == target}
     rows = [["Family", "Speed", "Slowest", "Memory", "Most", "Size", "Small"]]
     for name, spellings in families(cells).items():
         members = {s: cells[s] for s in spellings}
@@ -1229,21 +1204,20 @@ def family_standing(report, target, backend):
         return []
     widths = [max(len(row[at]) for row in rows) for at in range(len(rows[0]))]
     rows.insert(1, ["-" * width for width in widths])
-    lines = ["", f"## Families, {target}, {backend}", ""]
+    lines = ["", f"## Families, {target}", ""]
     for row in rows:
         padded = (cell.ljust(width) for cell, width in zip(row, widths))
         lines.append("| " + " | ".join(padded) + " |")
     return lines
 
 
-def standing(report, target, backend, probing, twin):
-    """One target and backend's table of the suite, or of the probes."""
+def standing(report, target, probing, twin):
+    """One target's table of the suite, or of the probes."""
     lines = []
     cells = [
         c
         for c in report["cells"]
-        if (c["target"], c["backend"]) == (target, backend)
-        and c["workload"].startswith(PROBE) == probing
+        if c["target"] == target and c["workload"].startswith(PROBE) == probing
     ]
     if not cells:
         return []
@@ -1281,7 +1255,7 @@ def standing(report, target, backend, probing, twin):
     widths = [max(len(row[at]) for row in rows) for at in range(len(rows[0]))]
     rows.insert(1, ["-" * width for width in widths])
     heading = f"Probes, {target}" if probing else target
-    lines += ["", f"## {heading}, {backend}", ""]
+    lines += ["", f"## {heading}", ""]
     for row in rows:
         padded = (cell.ljust(width) for cell, width in zip(row, widths))
         lines.append("| " + " | ".join(padded) + " |")
@@ -1319,7 +1293,8 @@ def evaluate(args):
     with tempfile.TemporaryDirectory(prefix="faun-ratchet-") as directory:
         work = Path(directory)
         report = {
-            "schema": 1,
+            # A cell is a program on a target, no longer with a backend.
+            "schema": 2,
             "kind": kind,
             "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "evaluator": evaluator or f"unpinned {git('rev-parse', 'HEAD', cwd=ROOT)}",
@@ -1340,6 +1315,7 @@ def evaluate(args):
                 "again": AGAIN,
                 "steady": STEADY,
                 "memory_limit": MEMORY,
+                "backend": BACKEND,
             },
         }
         sides = {"candidate": candidate, "incumbent": incumbent}
@@ -1349,10 +1325,10 @@ def evaluate(args):
             timed(args.time, cells, oracle, chosen)
     scored = score(cells)
     slowed, steady = [], []
-    for (t, b, w), sides in sorted(cells.items()):
+    for (t, w), sides in sorted(cells.items()):
         old, new = sides["incumbent"], sides["candidate"]
         if slower(old, new):
-            cell = {"target": t, "backend": b, "workload": w, "metric": "time"}
+            cell = {"target": t, "workload": w, "metric": "time"}
             cell["ratio"] = new["time"] / old["time"]
             (steady if same_work(old, new) else slowed).append(cell)
     verdict, reasons = decide(scored, protected, slowed)
@@ -1382,12 +1358,12 @@ def evaluate(args):
         "checks": {f"{name} {target}": size for (name, target), size in checks.items()},
         "units": {target: dict(zip(METRICS, units)) for target, units in UNITS.items()},
         "cells": [
-            {"target": t, "backend": b, "workload": w}
+            {"target": t, "workload": w}
             | {
                 label: {k: v for k, v in side.items() if k != "image"}
                 for label, side in sides.items()
             }
-            for (t, b, w), sides in sorted(cells.items())
+            for (t, w), sides in sorted(cells.items())
         ],
         "slowed": slowed,
         "steady": steady,
@@ -1591,21 +1567,16 @@ if __name__ == "__main__":
     args = parser().parse_args()
     if args.command == "standings":
         # The newest report of the whole suite and its probes, unless one is
-        # named.
-        whole = {
-            (w.name, t, b)
-            for w in [*WORKLOADS, *probes()]
-            for t in w.sizes
-            for b in BACKENDS
-        }
+        # named; one from before cells lost their backend is not read.
+        whole = {(w.name, t) for w in [*WORKLOADS, *probes()] for t in w.sizes}
         paths = [args.report] if args.report else sorted(REPORTS.glob("*.json"))
         reports = (json.loads(path.read_text()) for path in reversed(paths))
         report = next(
             (
                 r
                 for r in reports
-                if whole
-                <= {(c["workload"], c["target"], c["backend"]) for c in r["cells"]}
+                if r.get("schema", 1) >= 2
+                and whole <= {(c["workload"], c["target"]) for c in r["cells"]}
             ),
             None,
         )
