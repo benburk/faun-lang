@@ -30,7 +30,7 @@ keep the two confirming reports with the accepted commit in the experiment
 log. A scoring-policy change starts a new measurement series.
 
 - The new crate starts at optimized, validated
-  [Barb](../../../core/src/barb/README.md). It owns the lowering from
+  [Barb](../../../barb/README.md). It owns the lowering from
   Barb, its machine IR, layout, allocation and x86-64 Linux emission.
   Target-neutral passes may be added to Barb; its input language and
   observable semantics stay the same.
