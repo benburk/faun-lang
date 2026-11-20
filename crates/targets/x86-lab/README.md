@@ -5,12 +5,11 @@ This crate starts with the x86 emitter and machine IR from Faun commit
 `run`, `test` and `emit`. The default backend remains `stock`.
 
 The frontend produces the same optimized Barb program for both backends.
-The shared lowering in `core/src/ir` lowers Barb to machine IR, analyzes
-ownership and storage, and legalizes representations for every target.
-This crate retains its own x86 machine optimization and emission.
+Like every other target, it reads the machine IR `faun-core` lowers,
+optimizes and legalizes, and implements `faun_core::targets::Target`.
 `src/selected.rs`, `src/encode.rs` and `src/elf.rs` select instructions,
-encode them and write the executable. The crate shares Barb, the register
-allocator and general utilities with the stock compiler.
+encode them and write the executable. The crate shares Barb, the machine tier,
+the register allocator and general utilities with the stock compiler.
 
 From the implementation worktree:
 

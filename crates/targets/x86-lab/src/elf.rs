@@ -36,7 +36,7 @@
 //!   `mmap` and the stack from the kernel, so neither needs a segment.
 
 use super::Code;
-use crate::ir::{Origin, Program};
+use faun_core::ir::{Origin, Program};
 use faun_core::targets::SymbolTable;
 use faun_core::targets::bytes::{Bytes, len32};
 
@@ -384,12 +384,12 @@ fn len16(count: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use crate::targets::Target;
+    use faun_core::targets::Target;
 
     use super::*;
 
     fn hello() -> Vec<u8> {
-        crate::X86_64Linux.emit(&crate::programs::hello_world())
+        crate::X86_64Linux.emit(&faun_core::programs::hello_world())
     }
 
     #[test]
@@ -415,7 +415,7 @@ mod tests {
     fn symbols_follow_what_is_loaded() {
         let plain = hello();
         let named = crate::X86_64Linux.emit_with(
-            &crate::programs::hello_world(),
+            &faun_core::programs::hello_world(),
             faun_core::targets::Favour::Speed,
             SymbolTable::Written,
         );

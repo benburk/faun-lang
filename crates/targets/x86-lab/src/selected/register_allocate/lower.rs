@@ -4,7 +4,6 @@
 //! expansion is verified before encoding.
 
 use super::{Allocation, BlockPoints, InstPoints, Liveness, Location, Point, Transition, place};
-use crate::ir::{DataId, FunctionId, Offset, Width};
 use crate::machine::{
     Allocated, AllocatedBuilder, Alu, Condition, FrameSlot, Label, MemoryWidth, Reg, RegisterWidth,
     ShiftDirection,
@@ -12,6 +11,7 @@ use crate::machine::{
 use crate::parallel_copy::{self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place};
 use crate::selected::{BlockId, Immediate, InstId, Opcode, Selected, Terminator, VReg};
 use faun_core::codegen::registers::SpillSlot;
+use faun_core::ir::{DataId, FunctionId, Offset, Width};
 use faun_core::targets::Favour;
 
 const SYS_READ: u64 = 0;

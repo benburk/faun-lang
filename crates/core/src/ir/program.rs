@@ -168,7 +168,8 @@ impl Program {
     }
 
     /// How many instructions and explicit region exits read each SSA value.
-    pub(crate) fn use_counts(&self) -> Vec<usize> {
+    #[must_use]
+    pub fn use_counts(&self) -> Vec<usize> {
         let mut counts = vec![0; self.values_count()];
         let operands = self.ops.iter().flat_map(|op| self.operands(op));
         let exits = self

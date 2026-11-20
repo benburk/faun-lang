@@ -1,5 +1,5 @@
-use crate::ir::{Binary, Class, Offset, Program, Relation, Width};
-use crate::programs::abi::{self, Transfer};
+use faun_core::ir::{Binary, Class, Offset, Program, Relation, Width};
+use faun_core::programs::abi::{self, Transfer};
 
 // The shared runner validates raw emission, without pruning results or fitting
 // the ABI first. It serializes native process creation within the test binary.

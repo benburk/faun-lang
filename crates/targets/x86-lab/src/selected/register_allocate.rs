@@ -5,11 +5,11 @@
 mod lower;
 
 use super::{Inst, OperandSpec, Reg, RegSet, Selected, Terminator};
-use crate::ir::FunctionId;
 use crate::machine::Allocated;
 use barb::index::Range;
 use faun_core::codegen;
 use faun_core::codegen::registers::{self, Code};
+use faun_core::ir::FunctionId;
 use lower::COPY_SCRATCH;
 
 pub(super) use registers::{BlockPoints, InstPoints, Liveness, Point, place};
@@ -171,12 +171,12 @@ const fn terminator(terminator: Terminator, exits: bool) -> registers::Terminato
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Binary, Class, Program};
     use crate::selected::select;
+    use faun_core::ir::{Binary, Class, Program};
 
     #[test]
     fn loops_produce_segmented_live_ranges_and_edge_costs() {
-        let program = crate::programs::carries_a_total_into_an_arm(3);
+        let program = faun_core::programs::carries_a_total_into_an_arm(3);
         let selected = select(&program).unwrap();
         let (_, allocation) = registers::allocate(&selected.code(program.entry(), false)).unwrap();
         assert!(!allocation.segments.is_empty());

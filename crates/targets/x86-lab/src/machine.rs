@@ -4,7 +4,7 @@
 //! physical registers, while labels, frame slots, and data references remain
 //! symbolic until encoding.
 
-use crate::ir::{DataId, FunctionId};
+use faun_core::ir::{DataId, FunctionId};
 use faun_core::targets::code::Code;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

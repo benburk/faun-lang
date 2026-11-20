@@ -101,7 +101,8 @@ enum Backend {
 /// with every float operation walked.
 fn image(source: &Path, backend: Backend, walked: bool) -> Vec<u8> {
     let target: &dyn Target = match backend {
-        Backend::Stock | Backend::Lab => &X86_64Linux,
+        Backend::Stock => &X86_64Linux,
+        Backend::Lab => &faun_x86_lab::X86_64Linux,
         Backend::Wasm => &Wasm32Wasi,
     };
     let mut program = faun_frontend::lower_to_barb(source, &faun_driver::platform(target))
@@ -110,14 +111,8 @@ fn image(source: &Path, backend: Backend, walked: bool) -> Vec<u8> {
         program.walk_floats();
     }
     barb::optimize(&mut program);
-    let built = match backend {
-        Backend::Lab => faun_x86_lab::compile(&program, Favour::Speed, SymbolTable::Omitted),
-        Backend::Stock | Backend::Wasm => {
-            faun_core::lower_to_machine_ir(&program, &target.routines()).and_then(|ir| {
-                target.compile_machine_ir_with(&ir, Favour::Speed, SymbolTable::Omitted)
-            })
-        }
-    };
+    let built = faun_core::lower_to_machine_ir(&program, &target.routines())
+        .and_then(|ir| target.compile_machine_ir_with(&ir, Favour::Speed, SymbolTable::Omitted));
     built.unwrap_or_else(|error| panic!("{} on {backend:?}: {error}", source.display()))
 }
 

@@ -7,21 +7,9 @@
 //! as bytes. Data addresses remain `Reloc`s until `elf` chooses
 //! the image layout and fills them in.
 //!
-//! The lab takes the same optimized Barb as the stock backend. It shares portable
-//! lowering and representation passes with the other lab targets and keeps
-//! its own machine IR, instruction selection, register allocator and ELF emitter.
-
-mod barb;
-pub mod ir;
-pub mod platform;
-#[cfg(test)]
-#[path = "../../../core/src/programs.rs"]
-pub mod programs;
-pub mod targets;
-
-#[cfg(test)]
-#[path = "../../../core/tests/support/runtime_lifetimes.rs"]
-mod lifetime_fixture;
+//! It reads the machine IR every target shares, as `faun-core` lowers and
+//! legalizes it, and keeps its own instruction selection, register
+//! allocator and ELF emitter.
 
 mod elf;
 mod encode;
@@ -35,8 +23,8 @@ mod tests;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ir::{DataId, FunctionId, Program};
-use crate::targets::{Favour, SymbolTable, Target, write_image};
+use faun_core::ir::{DataId, FunctionId, Program};
+use faun_core::targets::{Favour, SymbolTable, Target, write_image};
 
 /// How wide this machine's own word is, which is the widest value it holds
 /// and what any class but a fixed one means here.
@@ -140,48 +128,4 @@ struct Code {
 struct Reloc {
     offset: usize,
     data: DataId,
-}
-
-/// Lower a validated Barb program to machine IR and run the machine
-/// optimization passes: the middle stage of compiling, between a frontend's
-/// Barb and a target's image.
-///
-/// # Errors
-///
-/// Names what the machine tier cannot represent.
-pub fn lower_to_machine_ir(
-    program: &barb::Program,
-    routines: &platform::Routines,
-) -> Result<Program, String> {
-    let held = ir::lower(program, routines)?;
-    ir::validate(&held)?;
-    let optimized = ir::optimize(&held);
-    // A program that reads only how many arguments it has keeps no call
-    // making them a list, and is lowered again without one, so that what
-    // it holds is what it would have held counting them.
-    let made = optimized
-        .functions()
-        .iter()
-        .position(|function| optimized.name(function.name) == ir::MAKE_ARGUMENTS);
-    if let Some(made) = made
-        && !optimized.calls(FunctionId::at(made))
-    {
-        let counted = ir::lower_counting_arguments(program, routines)?;
-        ir::validate(&counted)?;
-        return Ok(ir::optimize(&counted));
-    }
-    Ok(optimized)
-}
-
-/// Compile shared, optimized Barb through the experimental x86 pipeline.
-///
-/// # Errors
-/// Reports invalid Barb or a program the machine cannot represent.
-pub fn compile(
-    barb: &barb::Program,
-    favour: Favour,
-    symbols: SymbolTable,
-) -> Result<Vec<u8>, String> {
-    let machine = lower_to_machine_ir(barb, &X86_64Linux.routines())?;
-    X86_64Linux.compile_machine_ir_with(&machine, favour, symbols)
 }
