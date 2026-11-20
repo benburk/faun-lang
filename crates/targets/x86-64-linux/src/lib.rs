@@ -101,6 +101,8 @@ impl Target for X86_64Linux {
         // A program written with its symbols is one to profile, so each
         // function keeps a frame pointer a profiler can walk the stack by.
         let frame_pointers = symbols == SymbolTable::Written;
+        // This emitter compares floats on their bit patterns.
+        let program = &faun_core::ir::expand_float_compares(program);
         let allocated = selected::select_and_allocate_favouring(program, favour, frame_pointers)
             .expect("accepted machine IR has a valid x86 selected allocation");
         let code = encode::encode(&allocated);

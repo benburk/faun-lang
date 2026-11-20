@@ -1708,6 +1708,9 @@ impl Selector<'_> {
                     let opcode = match relation {
                         Relation::Equal => Opcode::Equal,
                         Relation::Less => Opcode::Below,
+                        Relation::FloatNotAbove(_) => {
+                            unreachable!("float comparisons are expanded before selection")
+                        }
                     };
                     self.emit(
                         block,

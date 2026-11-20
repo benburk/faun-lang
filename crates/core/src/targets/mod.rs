@@ -247,25 +247,7 @@ pub trait Target: fmt::Debug {
             .filter_map(crate::ir::Function::body)
             .flat_map(|body| program.walk_within(body))
         {
-            // A shift by a register is one instruction or nothing: see
-            // `ir::expand_shifts`, which preparation runs.
-            if let Op::Binary {
-                op: crate::ir::Binary::ShiftUp | crate::ir::Binary::ShiftDown,
-                ..
-            } = *op
-                && !self.shifts_by_register()
-            {
-                return Err(format!("{name} shifts by a known distance only"));
-            }
-            // Encoded constants must fit; narrowing is explicit.
-            if let Op::Constant { value } = *op {
-                let bits = program.class(results[0]).bits(word);
-                if bits < 64 && value >> bits != 0 {
-                    return Err(format!(
-                        "{name} holds {bits} bits, and {value} does not fit in them"
-                    ));
-                }
-            }
+            accepts_op(self, program, op, results)?;
         }
         self.limits(program)
     }
@@ -317,6 +299,45 @@ fn prepare_counting<T: Target + ?Sized>(
     crate::ir::validate(&prepared).map_err(|error| format!("after rotating loops: {error}"))?;
     target.accepts(&prepared)?;
     Ok(prepared)
+}
+
+/// Whether `target` can make `op`, writing `results`.
+fn accepts_op<T: Target + ?Sized>(
+    target: &T,
+    program: &Program,
+    op: &Op,
+    results: &[ValueId],
+) -> Result<(), String> {
+    let (name, word) = (target.name(), target.word());
+    // A shift by a register is one instruction or nothing: see
+    // `ir::expand_shifts`, which preparation runs.
+    if let Op::Binary {
+        op: crate::ir::Binary::ShiftUp | crate::ir::Binary::ShiftDown,
+        ..
+    } = *op
+        && !target.shifts_by_register()
+    {
+        return Err(format!("{name} shifts by a known distance only"));
+    }
+    // Only a machine computing IEEE values compares them itself.
+    if let Op::Compare {
+        relation: crate::ir::Relation::FloatNotAbove(_),
+        ..
+    } = *op
+        && !target.floats()
+    {
+        return Err(format!("{name} compares no float itself"));
+    }
+    // Encoded constants must fit; narrowing is explicit.
+    if let Op::Constant { value } = *op {
+        let bits = program.class(results[0]).bits(word);
+        if bits < 64 && value >> bits != 0 {
+            return Err(format!(
+                "{name} holds {bits} bits, and {value} does not fit in them"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn accepts_externals<T: Target + ?Sized>(target: &T, program: &Program) -> Result<(), String> {

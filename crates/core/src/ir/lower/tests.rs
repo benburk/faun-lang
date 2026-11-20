@@ -288,6 +288,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
     let demand = Demand::discover(&source, &facts, &Routines::default(), entry).unwrap();
     let lowering = Lowering {
         native_inline_bytes: false,
+        floats: false,
         barb: &source,
         facts: &facts,
         carries: demand.carries,

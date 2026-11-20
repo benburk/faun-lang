@@ -758,6 +758,9 @@ impl Lowering<'_> {
                 let opcode = match relation {
                     Relation::Equal => I32_EQ,
                     Relation::Less => I32_LT_U,
+                    Relation::FloatNotAbove(_) => {
+                        unreachable!("accepted only where the target compares floats")
+                    }
                 };
                 self.binary(opcode, *left, *right, results[0]);
             }
