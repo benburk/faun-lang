@@ -46,41 +46,41 @@ fn equal_pattern(b: &mut Builder, value: ValueId, expected: u64, format: Format)
     }
 }
 
+fn scalar_patterns(format: Format) -> &'static [u64] {
+    match format {
+        Format::Binary32 => &[
+            0,
+            0x8000_0000,
+            1,
+            0x3F80_0000,
+            0x3F80_0001,
+            0xC040_0000,
+            0x7F7F_FFFF,
+            0x7F80_0000,
+            0xFF80_0000,
+            0x7FC0_1234,
+            0x7FA0_5678,
+        ],
+        Format::Binary64 => &[
+            0,
+            0x8000_0000_0000_0000,
+            1,
+            0x3FF0_0000_0000_0000,
+            0x3FF0_0000_0000_0001,
+            0xC008_0000_0000_0000,
+            0x7FEF_FFFF_FFFF_FFFF,
+            0x7FF0_0000_0000_0000,
+            0xFFF0_0000_0000_0000,
+            0x7FF8_0000_0000_1234,
+            0x7FF0_0000_0000_5678,
+        ],
+    }
+}
+
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "a deterministic arithmetic matrix at both scalar widths"
-)]
 fn scalar_arithmetic_preserves_rounding_signed_zero_and_operand_order() {
     for format in [Format::Binary32, Format::Binary64] {
-        let patterns: &[u64] = match format {
-            Format::Binary32 => &[
-                0,
-                0x8000_0000,
-                1,
-                0x3F80_0000,
-                0x3F80_0001,
-                0xC040_0000,
-                0x7F7F_FFFF,
-                0x7F80_0000,
-                0xFF80_0000,
-                0x7FC0_1234,
-                0x7FA0_5678,
-            ],
-            Format::Binary64 => &[
-                0,
-                0x8000_0000_0000_0000,
-                1,
-                0x3FF0_0000_0000_0000,
-                0x3FF0_0000_0000_0001,
-                0xC008_0000_0000_0000,
-                0x7FEF_FFFF_FFFF_FFFF,
-                0x7FF0_0000_0000_0000,
-                0xFFF0_0000_0000_0000,
-                0x7FF8_0000_0000_1234,
-                0x7FF0_0000_0000_5678,
-            ],
-        };
+        let patterns = scalar_patterns(format);
         let (mut program, main) = Program::new("float matrix");
         program.define(main, |b, _| {
             let mut passed = b.constant(Class::Word, 0);
@@ -116,6 +116,48 @@ fn scalar_arithmetic_preserves_rounding_signed_zero_and_operand_order() {
             b.ret(&[failed]);
         });
         assert_eq!(status(&program), 0, "{format:?}");
+    }
+}
+
+#[test]
+fn doubling_by_addition_matches_multiplication_in_either_order() {
+    for format in [Format::Binary32, Format::Binary64] {
+        let mul = Float {
+            format,
+            operation: Operation::Mul,
+        };
+        let two = match format {
+            Format::Binary32 => u64::from(2.0f32.to_bits()),
+            Format::Binary64 => 2.0f64.to_bits(),
+        };
+        let class = Class::fixed(format.bits());
+        let (mut program, main) = Program::new("doubling");
+        let twice = program.declare("twice", &[class], &[class, class]);
+        program.define(twice, |b, args| {
+            let two = b.constant(class, two);
+            let left = b.float(mul, &[two, args[0]]);
+            let right = b.float(mul, &[args[0], two]);
+            b.ret(&[left, right]);
+        });
+        program.define(main, |b, _| {
+            let mut passed = b.constant(Class::Word, 1);
+            for &bits in scalar_patterns(format) {
+                let input = b.constant(class, bits);
+                for result in b.call(twice, &[input]) {
+                    let equal = equal_pattern(b, result, mul.calculate(&[two, bits]), format);
+                    passed = b.binary(Binary::And, passed, equal);
+                }
+            }
+            b.ret(&[passed]);
+        });
+        let optimized = faun_core::ir::optimize(&program);
+        let body = optimized.function(twice).body().unwrap();
+        assert!(
+            !optimized
+                .every(body)
+                .any(|op| matches!(op, faun_core::ir::Op::Float { float, .. } if *float == mul))
+        );
+        assert_eq!(status(&optimized), 1, "{format:?}");
     }
 }
 
@@ -562,4 +604,104 @@ fn allocated_instructions_reject_wrong_banks_before_encoding() {
         Some(Reg::Xmm2),
     );
     assert!(b.finish().unwrap_err().contains("register banks"));
+}
+
+/// An input bit pattern keeps every operand live through the frontend. A
+/// runtime loop puts the standard sign observation beside its subtraction.
+fn difference_program(format: Format, expression: &str) -> Program {
+    use faun_core::targets::Target;
+    let bits = format.bits();
+    let bytes = if bits == 32 {
+        "a,b,c,d"
+    } else {
+        "a,b,c,d,e,f,g,h"
+    };
+    let source = format!(
+        r"
+import std.host {{Host}}
+orbit : (F{bits}, Nat) -> Bool
+orbit(x, n) -> (
+  if ({expression}).sign_bit() return False
+  n is Succ(left) else return True
+  orbit(x + 1.0, left)
+)
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.read!({})
+  read is Ok(Data([{bytes}])) else return host.exit!(255)
+  x = F{bits}.of_bits(U{bits}.of_le_bytes({bytes}))
+  host.exit!(orbit(x, host.args.len() - 1).select(0, 1))
+)
+",
+        bits / 8
+    );
+    let target = crate::X86_64Linux;
+    target
+        .prepare(&super::faun::lower(&source, &target).unwrap())
+        .unwrap()
+}
+
+fn checked_difference_program(format: Format, expression: &str, direct: bool) -> Program {
+    let bits = format.bits();
+    let p = difference_program(format, expression);
+    let code = crate::selected::select_and_allocate(&p).unwrap();
+    assert_eq!(
+        code.instructions()
+            .iter()
+            .any(|i| matches!(i, Inst::FloatCompare { bits: w, .. } if *w == bits)),
+        direct,
+        "{format:?} {expression}"
+    );
+    p
+}
+
+fn difference_sign(format: Format, left: u64, right: u64) -> i32 {
+    let sub = Float {
+        format,
+        operation: Operation::Sub,
+    };
+    let diff = sub.calculate(&[left, right]);
+    let nan = match format {
+        Format::Binary32 => f32::from_bits(u32::try_from(diff).unwrap()).is_nan(),
+        Format::Binary64 => f64::from_bits(diff).is_nan(),
+    };
+    i32::from(!nan && diff >> (format.bits() - 1) != 0)
+}
+
+#[test]
+fn observed_difference_compares_directly_only_when_negative_zero_is_excluded() {
+    for format in [Format::Binary32, Format::Binary64] {
+        let bits = format.bits();
+        let four = if bits == 32 {
+            u64::from(4.0_f32.to_bits())
+        } else {
+            4.0_f64.to_bits()
+        };
+        let sign = 1 << (bits - 1);
+        let neg_zero = format!("F{bits}.of_bits(U{bits}.of_nat({sign}))");
+        for (expression, left, right, direct) in [
+            ("4.0 - x".to_owned(), Some(four), None, true),
+            ("0.0 - x".to_owned(), Some(0), None, true),
+            (format!("x - {neg_zero}"), None, Some(sign), true),
+            (format!("{neg_zero} - x"), Some(sign), None, false),
+            ("x - 0.0".to_owned(), None, Some(0), false),
+        ] {
+            let p = checked_difference_program(format, &expression, direct);
+            for x in scalar_patterns(format).iter().copied().chain([
+                four - 1,
+                four,
+                four + 1,
+                sign | 1,
+                sign | scalar_patterns(format)[10],
+            ]) {
+                let expected = difference_sign(format, left.unwrap_or(x), right.unwrap_or(x));
+                let input = x.to_le_bytes();
+                assert_eq!(
+                    super::shared::execute_with_input(&p, &input[..usize::from(bits / 8)]).0,
+                    expected,
+                    "{expression} at {x:#x}"
+                );
+            }
+        }
+    }
 }

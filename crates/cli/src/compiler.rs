@@ -1,11 +1,7 @@
-//! Select the backend independently of the source program's target host.
-//!
-//! Every backend compiles by `faun_driver`'s line. On x86-64 Linux there
-//! are two emitters: the stock one and x86-lab's.
+//! Compile for the chosen target by `faun_driver`'s line.
 
 use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_frontend::diagnostic::Diagnostic;
-use faun_x86_64_linux::X86_64Linux;
 
 use crate::args::Stage;
 
@@ -13,17 +9,20 @@ use crate::args::Stage;
 pub(crate) struct Compiler(&'static dyn Target);
 
 impl Compiler {
-    pub(crate) fn choose(target: &'static dyn Target, backend: &str) -> Result<Self, String> {
-        let x86 = target.name() == X86_64Linux.name();
+    /// The target, and the backend a command line names for it: every
+    /// target has one, which `lab` and `x86-lab` still name
+    /// for a script written when there were two.
+    pub(crate) fn choose(
+        target: &'static dyn Target,
+        backend: Option<&str>,
+    ) -> Result<Self, String> {
         match backend {
-            "lab" | "x86-lab" if x86 => Ok(Self(&faun_x86_lab::X86_64Linux)),
-            "stock" | "lab" => Ok(Self(target)),
-            "x86-lab" => Err(format!(
-                "the x86-lab backend cannot compile for {}",
-                target.name()
+            None | Some("lab" | "x86-lab") => Ok(Self(target)),
+            Some("stock") => Err(String::from(
+                "the stock backend is gone: every target has one backend, so leave out --backend",
             )),
-            _ => Err(format!(
-                "unknown backend `{backend}`, expected stock, lab or x86-lab"
+            Some(backend) => Err(format!(
+                "unknown backend `{backend}`: every target has one backend, so leave out --backend"
             )),
         }
     }

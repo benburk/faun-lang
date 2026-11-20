@@ -6,6 +6,7 @@
 //! [`super::machine::Allocated`].
 
 mod register_allocate;
+mod rotates;
 mod thread;
 
 use super::machine::Reg;
@@ -140,6 +141,7 @@ pub(crate) enum Opcode {
     /// Moved up or down by the distance in `rcx`, below the word.
     ShiftUp,
     ShiftDown,
+    RotateLeft,
     Equal,
     Below,
     Load,
@@ -173,6 +175,7 @@ pub(crate) enum Opcode {
     ReadByte,
     /// IEEE 754 arithmetic on scalar patterns allocated to XMM registers.
     Float,
+    FloatNotAbove,
 }
 
 impl Opcode {
@@ -198,6 +201,7 @@ impl Opcode {
                 | Self::Xor
                 | Self::ShiftUp
                 | Self::ShiftDown
+                | Self::RotateLeft
                 | Self::Monus
                 | Self::Convert
                 | Self::Shift
@@ -288,6 +292,7 @@ impl Opcode {
             | Self::Equal
             | Self::Below
             // SSE arithmetic leaves the flags as they were.
+            | Self::FloatNotAbove
             | Self::Float => Effects::PURE,
             Self::Add
             | Self::Multiply
@@ -298,6 +303,7 @@ impl Opcode {
             | Self::Xor
             | Self::ShiftUp
             | Self::ShiftDown
+                | Self::RotateLeft
             | Self::Shift => arithmetic,
             Self::ArgumentVector => Effects {
                 clobbers: RegSet::of(&[Reg::Rcx]),
@@ -358,6 +364,7 @@ impl Opcode {
             | Self::Grow
             | Self::ReadByte
             | Self::ArgumentVector
+            | Self::FloatNotAbove
             | Self::Float => Expansion::Sequence,
             _ => Expansion::Single,
         };
@@ -393,6 +400,10 @@ enum Immediate {
         up: bool,
         by: u8,
         bits: u16,
+    },
+    Rotate {
+        bits: u16,
+        by: Option<u8>,
     },
     Function(FunctionId),
     Float(barb::float::Float),
@@ -433,7 +444,11 @@ impl Inst {
             }
             op if op.in_place() && use_at == 0 => Constraint::Tied(0),
             Opcode::Divide | Opcode::Modulo if use_at == 0 => Constraint::Fixed(Reg::Rax),
-            Opcode::ShiftUp | Opcode::ShiftDown | Opcode::Divide | Opcode::Modulo
+            Opcode::ShiftUp
+            | Opcode::ShiftDown
+            | Opcode::RotateLeft
+            | Opcode::Divide
+            | Opcode::Modulo
                 if use_at == 1 =>
             {
                 Constraint::Fixed(Reg::Rcx)
@@ -454,6 +469,7 @@ impl Inst {
 
     fn allowed(self, result: bool, use_at: usize) -> faun_core::codegen::RegSet {
         match self.opcode {
+            Opcode::FloatNotAbove if !result => XMMS,
             Opcode::Float => XMMS,
             // Every scalar already fits a word: this conversion emits no
             // instruction and must not force an otherwise floating chain
@@ -859,6 +875,10 @@ impl Selected {
             | Opcode::CloseFd
             | Opcode::StoreIncoming
             | Opcode::StoreOutgoing => 1,
+            Opcode::RotateLeft => match inst.immediate {
+                Immediate::Rotate { by, .. } => 1 + usize::from(by.is_none()),
+                _ => usize::MAX,
+            },
             Opcode::Float => match inst.immediate {
                 Immediate::Float(float) => float.operation.arity(),
                 _ => usize::MAX,
@@ -876,6 +896,7 @@ impl Selected {
             | Opcode::Modulo
             | Opcode::Equal
             | Opcode::Below
+            | Opcode::FloatNotAbove
             | Opcode::Store
             | Opcode::Write => 2,
             Opcode::WriteFd | Opcode::ReadFd => 3,
@@ -1304,12 +1325,14 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             | Opcode::Divide
             | Opcode::Modulo
             | Opcode::Shift
+            | Opcode::RotateLeft
             | Opcode::ArgumentVector => effects.flags == Access::Write,
             Opcode::DataAddress
             | Opcode::Equal
             | Opcode::Below
             | Opcode::Convert
             | Opcode::ArgumentCount
+            | Opcode::FloatNotAbove
             | Opcode::Float => effects == Effects::PURE,
         };
     if valid {
@@ -1349,8 +1372,16 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
                 Immediate::Bits(_)
             )
             | (Opcode::Load | Opcode::Store, Immediate::Memory { .. })
+            | (
+                Opcode::RotateLeft,
+                Immediate::Rotate {
+                    bits: 8 | 16 | 32 | 64,
+                    ..
+                }
+            )
             | (Opcode::Shift, Immediate::Shift { .. })
             | (Opcode::Call, Immediate::Function(_))
+            | (Opcode::FloatNotAbove, Immediate::Bits(32 | 64))
             | (Opcode::Float, Immediate::Float(_))
             | (
                 Opcode::LoadIncoming
@@ -1404,6 +1435,7 @@ struct Flow {
 struct Selector<'a> {
     source: &'a Program,
     widths: Vec<u16>,
+    rotates: rotates::Plan,
     /// Conversions an enclosing comparison has already bounded.
     whole: Vec<bool>,
     operands: Vec<VReg>,
@@ -1445,6 +1477,7 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
         source,
         widths,
         whole: faun_core::ir::conversions_taking_nothing(source),
+        rotates: rotates::Plan::new(source),
         operands: Vec::new(),
         instructions: Pool::default(),
         blocks: Pool::default(),
@@ -1599,6 +1632,26 @@ impl Selector<'_> {
         self.blocks[block].instructions.push(id);
     }
 
+    fn emit_rotate(&mut self, block: BlockId, result: ValueId, rotate: rotates::Rotate) {
+        let bits = rotate.bits;
+        match rotate.count {
+            rotates::Count::Immediate(by) => self.emit(
+                block,
+                Opcode::RotateLeft,
+                Some(result),
+                &[rotate.value],
+                Immediate::Rotate { bits, by: Some(by) },
+            ),
+            rotates::Count::Register(count) => self.emit(
+                block,
+                Opcode::RotateLeft,
+                Some(result),
+                &[rotate.value, count],
+                Immediate::Rotate { bits, by: None },
+            ),
+        }
+    }
+
     fn terminate(&mut self, block: BlockId, terminator: Terminator) {
         let held = &mut self.blocks[block].terminator;
         assert!(held.is_none(), "an x86 block is terminated once");
@@ -1623,6 +1676,15 @@ impl Selector<'_> {
     ) -> Result<(), String> {
         let source = self.source;
         for (op, results) in source.walk(region) {
+            if let [result] = *results {
+                if self.rotates.omitted.contains(&result) {
+                    continue;
+                }
+                if let Some(&rotate) = self.rotates.roots.get(&result) {
+                    self.emit_rotate(block, result, rotate);
+                    continue;
+                }
+            }
             match *op {
                 SourceOp::NaturalConstant(_) => {
                     return Err("x86 selection received an arbitrary-precision constant".to_owned());
@@ -1705,19 +1767,19 @@ impl Selector<'_> {
                     left,
                     right,
                 } => {
-                    let opcode = match relation {
-                        Relation::Equal => Opcode::Equal,
-                        Relation::Less => Opcode::Below,
-                        Relation::FloatNotAbove(_) => {
-                            unreachable!("float comparisons are expanded before selection")
+                    let (opcode, bits) = match relation {
+                        Relation::FloatNotAbove(format) => (Opcode::FloatNotAbove, format.bits()),
+                        Relation::Equal => {
+                            (Opcode::Equal, compared_bits(&self.widths, left, right))
                         }
+                        Relation::Less => (Opcode::Below, compared_bits(&self.widths, left, right)),
                     };
                     self.emit(
                         block,
                         opcode,
                         results.first().copied(),
                         &[left, right],
-                        Immediate::Bits(compared_bits(&self.widths, left, right)),
+                        Immediate::Bits(bits),
                     );
                 }
                 SourceOp::Load {

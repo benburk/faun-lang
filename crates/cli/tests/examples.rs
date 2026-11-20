@@ -328,7 +328,7 @@ fn a_needed_call_that_never_comes_back_hangs_the_program() {
 }
 
 /// A function that never comes back, taking more arguments than the 6502
-/// passes as they are, builds and runs on every target and backend. The
+/// passes as they are, builds and runs on every target. The
 /// 6502 hands those past its fourth over in a cell its caller makes, and
 /// the call is the end of the caller: nothing may be released after it, as
 /// md5's loop over its input once was.
@@ -350,18 +350,18 @@ fn a_call_that_never_comes_back_with_five_arguments_runs_everywhere() {
          main! : Host -> []
          main!(host) -> count!(host, 1, 2, 3, 4, 5)",
     );
-    for (target, backend) in MACHINES {
-        let (status, written, said) = run_on(target, backend, &package.entry(), b"hello world\n");
+    for target in MACHINES {
+        let (status, written, said) = run_on(target, &package.entry(), b"hello world\n");
         assert_eq!(
             (status, written.as_str()),
             (Some(0), "27\n"),
-            "{target} {backend}: {said}"
+            "{target}: {said}"
         );
     }
 }
 
 /// A byte an arm leaves with, where the `if`'s answer is read whole, prints
-/// as itself on every target and backend. The 6502 worked the arm's answer
+/// as itself on every target. The 6502 worked the arm's answer
 /// out in the place the `if`'s lives, one byte of it, and left the byte
 /// above as it found it, so `223` printed as `65503`: the writer probe's
 /// twin printed a wrong checksum with both backends this way.
@@ -378,37 +378,25 @@ fn a_byte_an_arm_leaves_with_prints_as_itself_everywhere() {
            host.exit!(0)
          )",
     );
-    for (target, backend) in MACHINES {
-        let (status, written, said) = run_on(target, backend, &package.entry(), b"");
+    for target in MACHINES {
+        let (status, written, said) = run_on(target, &package.entry(), b"");
         assert_eq!(
             (status, written.as_str()),
             (Some(0), "223\n"),
-            "{target} {backend}: {said}"
+            "{target}: {said}"
         );
     }
 }
 
-/// Every target and backend `faun run` builds for.
-const MACHINES: [(&str, &str); 6] = [
-    ("x86_64-linux", "stock"),
-    ("x86_64-linux", "lab"),
-    ("wasm32-wasi", "stock"),
-    ("wasm32-wasi", "lab"),
-    ("mos6502-sim65", "stock"),
-    ("mos6502-sim65", "lab"),
-];
+/// Every target `faun run` builds for.
+const MACHINES: [&str; 3] = ["x86_64-linux", "wasm32-wasi", "mos6502-sim65"];
 
-/// Build `entry` for `target` with `backend` and run it with `input` on
+/// Build `entry` for `target` and run it with `input` on
 /// standard input: its status, and what it wrote to standard output and to
 /// standard error.
-fn run_on(
-    target: &str,
-    backend: &str,
-    entry: &Path,
-    input: &[u8],
-) -> (Option<i32>, String, String) {
+fn run_on(target: &str, entry: &Path, input: &[u8]) -> (Option<i32>, String, String) {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
-        .args(["run", "--backend", backend, "--target", target])
+        .args(["run", "--target", target])
         .arg(entry)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

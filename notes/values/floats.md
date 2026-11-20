@@ -113,7 +113,7 @@ machine and once of the definitions alone, and must agree.
 A table gone stale recognizes nothing, and a program is only slower for it:
 every routine then compiles as the natural-number code it is. The suite's
 programs, the probes and the float examples are built that way too, with
-every float operation walked, on x86-64, its lab backend and wasm32, and
+every float operation walked, on x86-64 and wasm32, and
 must write what they write recognized (`crates/cli/tests/walked_floats.rs`).
 That is the code x86-64 otherwise never runs, and it once found the x86
 backends comparing a number held in fewer bits with a wider one at the

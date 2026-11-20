@@ -3,7 +3,7 @@
 //! comparing it with a list's length, and a count below a constant joined
 //! to another test by `&`, cost what the same loop over `U64` costs, while
 //! a natural whose guard is no length crosses every word width and stays
-//! the number it is, on every target and backend.
+//! the number it is, on every target.
 mod support;
 
 use std::process::Command;
@@ -125,21 +125,14 @@ fn a_count_below_a_constant_joined_by_and_is_a_word() {
     );
 }
 
-/// Every target and backend `faun run` builds for.
-const MACHINES: [(&str, &str); 6] = [
-    ("x86_64-linux", "stock"),
-    ("x86_64-linux", "lab"),
-    ("wasm32-wasi", "stock"),
-    ("wasm32-wasi", "lab"),
-    ("mos6502-sim65", "stock"),
-    ("mos6502-sim65", "lab"),
-];
+/// Every target `faun run` builds for.
+const MACHINES: [&str; 3] = ["x86_64-linux", "wasm32-wasi", "mos6502-sim65"];
 
-/// That `package` prints `expected` built for every target and backend.
+/// That `package` prints `expected` built for every target.
 fn prints_everywhere(package: &Package, expected: &str) {
-    for (target, backend) in MACHINES {
+    for target in MACHINES {
         let result = Command::new(env!("CARGO_BIN_EXE_faun"))
-            .args(["run", "--backend", backend, "--target", target])
+            .args(["run", "--target", target])
             .arg(package.entry())
             .output()
             .unwrap();
@@ -149,7 +142,7 @@ fn prints_everywhere(package: &Package, expected: &str) {
                 String::from_utf8_lossy(&result.stdout).trim()
             ),
             (Some(0), expected),
-            "{target} {backend}: {}",
+            "{target}: {}",
             String::from_utf8_lossy(&result.stderr)
         );
     }
@@ -218,20 +211,17 @@ fn a_natural_a_branch_bounds_is_narrowed_where_it_is_operated_on() {
         "#,
     );
     prints_everywhere(&package, "16");
-    for (target, backend) in MACHINES {
+    for target in MACHINES {
         let result = Command::new(env!("CARGO_BIN_EXE_faun"))
-            .args(["emit", "--backend", backend, "--target", target, "machine"])
+            .args(["emit", "--target", target, "machine"])
             .arg(package.entry())
             .output()
             .unwrap();
         let machine = String::from_utf8_lossy(&result.stdout);
-        assert!(
-            machine.contains("to 0..9\n"),
-            "{target} {backend}: {machine}"
-        );
+        assert!(machine.contains("to 0..9\n"), "{target}: {machine}");
         assert!(
             !machine.contains(&format!("to 0..{}\n", u64::MAX)),
-            "{target} {backend}: {machine}"
+            "{target}: {machine}"
         );
     }
 }

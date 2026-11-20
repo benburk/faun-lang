@@ -64,6 +64,7 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 bits,
             } => asm.shift(direction, dst, by, bits),
             Inst::ShiftByCount { direction, dst } => asm.shift_by_count(direction, dst),
+            Inst::RotateLeft { dst, bits, by } => asm.rotate_left(dst, bits, by),
             Inst::Multiply { dst, src } => asm.multiply(dst, src),
             Inst::MultiplyImmediate {
                 dst,
@@ -78,13 +79,21 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 plus,
                 bits,
             } => asm.scale(dst, src, times, plus, bits),
+            Inst::FloatCompare { left, right, bits } => {
+                asm.step();
+                if bits == 64 {
+                    asm.emit(&[0x66]);
+                }
+                asm.rex(false, Some(left), right);
+                asm.emit(&[0x0f, 0x2e, modrm(left, right)]);
+            }
             Inst::Float {
                 float,
                 dst,
                 left,
                 right,
             } => asm.float(float, dst, left, right),
-            Inst::Divide => asm.divide(),
+            Inst::Divide(width) => asm.divide(width),
             Inst::Syscall => asm.syscall(),
             Inst::Halt => asm.halt(),
             Inst::LoadStack { dst, displacement } => asm.load_slot(dst, displacement),
@@ -173,6 +182,10 @@ const fn condition_code(condition: Condition) -> u8 {
         Condition::NotEqual => 0x5,
         Condition::Below => 0x2,
         Condition::NotBelow => 0x3,
+        Condition::Sign => 0x8,
+        Condition::NotSign => 0x9,
+        Condition::Above => 0x7,
+        Condition::NotAbove => 0x6,
     }
 }
 
@@ -424,9 +437,7 @@ impl RawEncoder {
         self.emit(&value.to_le_bytes());
     }
 
-    /// `dst = [base + disp]` and its mirror, in whole words. A `ModRM` mod
-    /// of 10 takes a 32-bit displacement; rsp and rbp are not addressable
-    /// this way, and nothing here asks to be.
+    /// `dst = [base + disp]` and its mirror, in whole words.
     fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.step();
         if dst.is_xmm() {
@@ -505,13 +516,22 @@ impl RawEncoder {
 
     fn addressed(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
         self.emit(opcode);
-        self.emit(&[0x80 | (reg.low() << 3) | base.low()]);
-        // A base whose low bits are those of `rsp` -- `r12` -- is said
-        // through a scale-index byte naming no index.
+        // mod=00 with low register 5 means RIP-relative. RBP and R13
+        // therefore need an explicit displacement even when it is zero.
+        let bytes = disp.to_le_bytes();
+        let (mode, displacement) = if disp == 0 && base.low() != 5 {
+            (0, &bytes[..0])
+        } else if i8::try_from(disp).is_ok() {
+            (0x40, &bytes[..1])
+        } else {
+            (0x80, &bytes[..])
+        };
+        self.emit(&[mode | (reg.low() << 3) | base.low()]);
         if base.low() == 4 {
+            // RSP and R12 require a SIB byte with no index.
             self.emit(&[0x24]);
         }
-        self.emit(&disp.to_le_bytes());
+        self.emit(displacement);
     }
 
     /// `dst` explicitly taken modulo two to the `bits`, including odd widths.
@@ -596,6 +616,29 @@ impl RawEncoder {
         self.emit(&[0xD3, 0xC0 | (extension << 3) | dst.low()]);
     }
 
+    fn rotate_left(&mut self, dst: Reg, bits: u16, by: Option<u8>) {
+        self.step();
+        if bits == 16 {
+            self.emit(&[0x66]);
+        }
+        if bits == 8 {
+            self.rex_byte(None, dst);
+        } else {
+            self.rex(bits == 64, None, dst);
+        }
+        let opcode = match by {
+            Some(1) => 0xD0,
+            Some(_) => 0xC0,
+            None => 0xD2,
+        };
+        self.emit(&[opcode + u8::from(bits != 8), 0xC0 | dst.low()]);
+        if let Some(count) = by
+            && count != 1
+        {
+            self.emit(&[count]);
+        }
+    }
+
     /// The low 64 bits of `dst * src`, leaving every other register alone.
     fn multiply(&mut self, dst: Reg, src: Reg) {
         self.step();
@@ -670,10 +713,13 @@ impl RawEncoder {
         self.emit(&[0x0F, opcode, modrm(dst, source)]);
     }
 
-    /// Unsigned RAX = RDX:RAX / RCX, RDX = remainder. The caller guards zero.
-    fn divide(&mut self) {
+    /// Unsigned quotient in (E)AX and remainder in (E)DX.
+    fn divide(&mut self, width: RegisterWidth) {
         self.step();
-        self.emit(&[0x48, 0xF7, 0xF1]);
+        if width == RegisterWidth::Word {
+            self.emit(&[0x48]);
+        }
+        self.emit(&[0xF7, 0xF1]);
     }
 
     fn syscall(&mut self) {
@@ -922,6 +968,21 @@ mod tests {
     }
 
     #[test]
+    fn indirect_addresses_use_the_shortest_displacement() {
+        let load = |base, disp| encoded(|a| a.load(MemoryWidth::Word, Reg::Rax, base, disp));
+        assert_eq!(load(Reg::Rdi, 0), [0x48, 0x8b, 0x07]);
+        assert_eq!(load(Reg::R13, 0), [0x49, 0x8b, 0x45, 0]);
+        assert_eq!(load(Reg::R12, 0), [0x49, 0x8b, 0x04, 0x24]);
+        assert_eq!(load(Reg::Rdi, -128), [0x48, 0x8b, 0x47, 0x80]);
+        assert_eq!(load(Reg::Rdi, 127), [0x48, 0x8b, 0x47, 0x7f]);
+        assert_eq!(load(Reg::Rdi, 128), [0x48, 0x8b, 0x87, 0x80, 0, 0, 0]);
+        assert_eq!(
+            load(Reg::Rdi, -129),
+            [0x48, 0x8b, 0x87, 0x7f, 0xff, 0xff, 0xff]
+        );
+    }
+
+    #[test]
     fn each_form_encodes_to_its_documented_bytes() {
         assert_eq!(encoded(|a| a.xor_self(Reg::Rdi)), [0x31, 0xFF]);
         assert_eq!(encoded(|a| a.pop(Reg::Rdx)), [0x5A]);
@@ -934,7 +995,11 @@ mod tests {
             encoded(|a| a.multiply(Reg::R12, Reg::R9)),
             [0x4D, 0x0F, 0xAF, 0xE1]
         );
-        assert_eq!(encoded(AllocatedBuilder::divide), [0x48, 0xF7, 0xF1]);
+        assert_eq!(
+            encoded(|a| a.divide(RegisterWidth::Word)),
+            [0x48, 0xF7, 0xF1]
+        );
+        assert_eq!(encoded(|a| a.divide(RegisterWidth::Low32)), [0xF7, 0xF1]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rax, 0)), [0x31, 0xC0]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 7)), [0x83, 0xE7, 0x7F]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 8)), [0x40, 0x0F, 0xB6, 0xFF]);

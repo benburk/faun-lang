@@ -23,7 +23,6 @@ faun-frontend.workspace = true
 faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true
-faun-x86-lab.workspace = true
 mimalloc = { version = "0.1.52", features = ["no_thp"] }
 tar = { version = "0.4.46", default-features = false }
 ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }

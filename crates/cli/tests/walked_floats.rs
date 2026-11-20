@@ -4,14 +4,14 @@
 //!
 //! Recognizing a routine only lets a target answer it with an instruction:
 //! a table of fingerprints gone stale must leave every program as it was,
-//! only slower. So these are built twice for each backend, once as `faun
+//! only slower. So these are built twice for each target, once as `faun
 //! build` builds them and once with every float routine walked, its body
 //! compiled as any other definition is. Where the two images are the same,
 //! as for a program with no floats, there is nothing to run; where they
 //! differ, both run at a small size and must write the same and leave with
 //! status zero. A walked routine is ordinary natural-number code that the
 //! recognized build never runs on x86-64, so this is also where the
-//! backends meet the guard-heavy code the routines are, which once found a
+//! targets meet the guard-heavy code the routines are, which once found a
 //! comparison read at its narrower operand's width.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 
@@ -92,8 +92,7 @@ fn programs() -> Vec<(PathBuf, Input)> {
 
 #[derive(Clone, Copy, Debug)]
 enum Backend {
-    Stock,
-    Lab,
+    X86,
     Wasm,
 }
 
@@ -101,8 +100,7 @@ enum Backend {
 /// with every float operation walked.
 fn image(source: &Path, backend: Backend, walked: bool) -> Vec<u8> {
     let target: &dyn Target = match backend {
-        Backend::Stock => &X86_64Linux,
-        Backend::Lab => &faun_x86_lab::X86_64Linux,
+        Backend::X86 => &X86_64Linux,
         Backend::Wasm => &Wasm32Wasi,
     };
     let mut program = faun_frontend::lower_to_barb(source, &faun_driver::platform(target))
@@ -125,7 +123,7 @@ fn run(image: &[u8], backend: Backend, input: Input, path: &Path) -> (i32, Vec<u
     let starting = ONE_AT_A_TIME.lock().unwrap();
     std::fs::write(path, image).unwrap();
     let mut command = match backend {
-        Backend::Stock | Backend::Lab => {
+        Backend::X86 => {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
             Command::new(path)
@@ -241,12 +239,7 @@ fn checked(source: &Path, input: Input, backend: Backend, scratch: &Path) -> Opt
 
 #[test]
 fn walked_floats_write_what_recognized_floats_write_on_x86_64() {
-    check(Backend::Stock);
-}
-
-#[test]
-fn walked_floats_write_what_recognized_floats_write_on_the_x86_lab_backend() {
-    check(Backend::Lab);
+    check(Backend::X86);
 }
 
 /// On wasm32 every float operation runs its body anyway; recognizing one

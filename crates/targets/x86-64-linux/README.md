@@ -1,35 +1,38 @@
-# Experimental x86-64 Linux backend
+# x86-64 Linux target
 
-This crate starts with the x86 emitter and machine IR from Faun commit
-`711f676`. The CLI selects it with `--backend=x86-lab` for `build`,
-`run`, `test` and `emit`. The default backend remains `stock`.
-
-The frontend produces the same optimized Barb program for both backends.
-Like every other target, it reads the machine IR `faun-core` lowers,
-optimizes and legalizes, and implements `faun_core::targets::Target`.
-`src/selected.rs`, `src/encode.rs` and `src/elf.rs` select instructions,
-encode them and write the executable. The crate shares Barb, the machine tier,
-the register allocator and general utilities with the stock compiler.
-
-From the implementation worktree:
+The x86-64 Linux target reads the machine IR `faun-core` lowers, optimizes
+and legalizes for every target, and implements `faun_core::targets::Target`.
+`src/selected.rs` flattens machine-IR regions into a target-local SSA CFG
+and selects instructions, its allocator places them in registers,
+`src/encode.rs` encodes them and `src/elf.rs` writes a static executable
+that makes its system calls itself. It shares Barb, the machine tier, the
+register allocator and general utilities with the other targets.
 
 ```sh
 nix develop -c cargo build --locked --release -p faun
-target/release/faun build --backend=x86-lab crates/frontend/examples/hello.fn -o target/hello-lab
-target/release/faun emit --backend=x86-lab machine crates/frontend/examples/hello.fn
+target/release/faun build crates/frontend/examples/hello.fn -o target/hello
+target/release/faun emit target crates/frontend/examples/hello.fn
 ```
 
-Measure future changes from the prep worktree with the
+## History
+
+This crate began as `faun-x86-lab`, an experimental second backend that
+started from the x86 emitter and machine IR at Faun commit `711f676`,
+beside a stock x86 emitter and a stock lowering. The command chose it with
+`--backend=lab` or `--backend=x86-lab`, which it still accepts and which
+change nothing now. Its lowering became the one every target uses, its
+private copy of the machine tier went, and it replaced the stock emitter.
+What follows was measured along the way, against the
 [experiment contract](../../frontend/examples/benchmarks-game/LAB.md).
 
-## Shared recognition benchmark, 2026-11-14
+### Shared recognition benchmark, 2026-11-14
 
 Compared `b2d3af9` with `d5f6b2d`, using `x86-lab` on both sides and the
 same source and standard library from the trusted prep worktree. These
 results isolate the move to shared Barb recognition, not the cumulative
 benefit of the experimental backend over stock.
 
-### WebAssembly
+#### WebAssembly
 
 Times are median milliseconds around `_start`, excluding compilation and
 instantiation, with a fresh instance per run. Wasmtime 50.0.1 ran nine
@@ -55,7 +58,7 @@ Host process RSS, measured separately with startup and JIT included,
 was 24.6 / 25.2 MiB for MD5, 108.8 / 108.8 MiB for Mandelbrot, and
 56.5 / 26.5 MiB for the float fixture.
 
-### 6502
+#### 6502
 
 Cycle counts come from the pinned sim65 emulator with identical `run.bin`
 argument names. RAM is peak dynamic guest bytes: reserved bump heap plus
@@ -82,7 +85,7 @@ programs and MD5 still exceed the address space on both revisions;
 binary-trees at depth six overflows its stack on both. Failed programs
 have no performance ratio.
 
-### Validation and evidence
+#### Validation and evidence
 
 All successful benchmark outputs were checked against C, hashlib, or an
 independent checksum oracle. Other workloads running on the host make

@@ -68,7 +68,7 @@ faun-core      machine IR, platform, shared codegen, on faun-barb
 faun-<target>  one target each, on faun-core and faun-barb
 faun-driver    the line: source, Barb, optimized Barb, machine IR,
                image, on faun-frontend, faun-barb and faun-core
-faun           the command: chooses the target and back end, on all
+faun           the command: chooses the target, on all
 ```
 
 Barb being a crate of its own keeps its interface what it is `pub`: the
@@ -85,9 +85,8 @@ routines themselves (`faun_core::platform`) are written in machine IR's
 classes and declared into machine programs, so they stay with the machine
 tier, and `faun_driver::platform` reads a frontend's `Platform` off a
 target. The driver depends on no target: the command names the targets
-and, on x86-64 Linux, chooses between the stock emitter and the
-experimental x86-lab one. A target's tests run the whole line with the driver as a
-dev-dependency.
+and every target compiles by the one line the driver runs. A target's
+tests run the whole line with the driver as a dev-dependency.
 
 `faun emit barb FILE`, `faun emit machine FILE` and `faun emit target FILE`
 print each stage. A definition counting a list, compiled for x86-64:
@@ -216,10 +215,13 @@ and walking every body to check them.
 
 ## Open questions
 
-The [experimental x86-64 backend](../../crates/targets/x86-lab/README.md) takes
-optimized Barb and starts with its own copy of x86 lowering and emission.
-Its machine IR can choose representation and placement independently. The [experiment contract](../../crates/frontend/examples/benchmarks-game/LAB.md)
-describes the boundary, the first milestones and how to compare results.
+The x86-64 emitter (`crates/targets/x86-64-linux`) began as an
+experimental second backend with its own copy of the machine tier, beside
+a stock emitter and a stock lowering; the [experiment contract](../../crates/frontend/examples/benchmarks-game/LAB.md) describes
+how the two were compared. The experiment's lowering became the only one
+and its emitter the only x86-64 one, so every target now reads the same
+machine IR. Its [README](../../crates/targets/x86-64-linux/README.md)
+keeps what was measured along the way.
 
 ## Related
 
