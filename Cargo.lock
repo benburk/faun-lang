@@ -247,7 +247,6 @@ dependencies = [
  "bpaf",
  "faun-aarch64-macos",
  "faun-barb",
- "faun-base",
  "faun-core",
  "faun-frontend",
  "faun-mos6502-sim65",
@@ -274,22 +273,16 @@ dependencies = [
 name = "faun-barb"
 version = "0.1.0"
 dependencies = [
- "faun-base",
  "num-bigint",
  "num-traits",
  "rustc-hash",
 ]
 
 [[package]]
-name = "faun-base"
-version = "0.1.0"
-
-[[package]]
 name = "faun-core"
 version = "0.1.0"
 dependencies = [
  "faun-barb",
- "faun-base",
  "num-bigint",
  "num-traits",
  "rustc-hash",
@@ -333,7 +326,6 @@ name = "faun-x86-64-linux"
 version = "0.1.0"
 dependencies = [
  "faun-barb",
- "faun-base",
  "faun-core",
  "faun-frontend",
  "rustc-hash",
@@ -344,7 +336,6 @@ name = "faun-x86-lab"
 version = "0.1.0"
 dependencies = [
  "faun-barb",
- "faun-base",
  "faun-core",
  "faun-frontend",
  "faun-x86-64-linux",

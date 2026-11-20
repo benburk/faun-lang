@@ -15,7 +15,7 @@
 //! `held`, since a bound too narrow compiles a word that can overflow.
 
 use super::facts::Operation;
-use faun_base::facts::Facts as Bounds;
+use crate::Bounds;
 
 /// The naturals from `low` to `high`, a greatest past `u64` being no
 /// bound; nothing where the least is past the greatest.

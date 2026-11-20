@@ -60,11 +60,11 @@ itself; wasm32 writes a module importing WASI; the 6502 target holds a
 The crates follow the tiers, each depending only on those above it:
 
 ```text
-faun-base      indices, IEEE float operations, what is known of a number
-faun-barb      Barb (read as `barb`), on faun-base
+faun-barb      Barb (read as `barb`), with the indices, IEEE float
+               operations and number bounds every tier below reads
 faun-core      machine IR, platform, shared codegen, on faun-barb
 faun-frontend  source to Barb, on faun-barb, and faun-core for routines
-faun-<target>  one target each, on faun-core
+faun-<target>  one target each, on faun-core and faun-barb
 faun           the command, on all of them
 ```
 

@@ -1,7 +1,6 @@
 [workspace]
 members = [
   "crates/barb",
-  "crates/base",
   "crates/cli",
   "crates/core",
   "crates/frontend",
@@ -18,7 +17,6 @@ license = "0BSD"
 [workspace.dependencies]
 faun-aarch64-macos = { path = "crates/targets/aarch64-macos", version = "0.1.0" }
 faun-barb = { path = "crates/barb", version = "0.1.0" }
-faun-base = { path = "crates/base", version = "0.1.0" }
 faun-core = { path = "crates/core", version = "0.1.0" }
 faun-frontend = { path = "crates/frontend", version = "0.1.0" }
 faun-mos6502-sim65 = { path = "crates/targets/mos6502-sim65", version = "0.1.0" }

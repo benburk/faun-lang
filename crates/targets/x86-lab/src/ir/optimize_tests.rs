@@ -7,7 +7,7 @@
 
 use num_bigint::BigUint;
 
-use faun_base::facts::Facts;
+use barb::Bounds;
 
 use super::{Binary, Class, Op, Program, Relation, Returns, ValueId, evaluate, optimize, validate};
 
@@ -326,7 +326,7 @@ fn a_run_of_steps_past_a_value_is_one_step() {
     // The number it steps by can be nothing but four.
     assert_eq!(
         count_at(&held, |op, class| {
-            *op == Op::Constant { value: 4 } && class == Class::Held(Facts::at(4))
+            *op == Op::Constant { value: 4 } && class == Class::Held(Bounds::at(4))
         }),
         1
     );
@@ -1045,7 +1045,7 @@ fn a_branch_on_a_number_known_before_it_runs_is_the_arm_it_takes() {
         .expect("a layout the program allows");
     let note = p.external("note", &[Class::Word], Returns::Values(&[]));
     p.define(main, |b, _| {
-        let three = b.constant(Class::Held(Facts::at(3)), 3);
+        let three = b.constant(Class::Held(Bounds::at(3)), 3);
         let doubled = b.shift(Class::Word, super::Direction::Up, three, 1);
         let handle = b.convert(Class::Address, doubled);
         let held = b.convert(Class::Word, handle);

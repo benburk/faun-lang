@@ -290,9 +290,11 @@ from the standard. A frontend doesn't need them.
 Barb is its own crate, `faun-barb`, read as `barb`, so what crosses the
 boundary is exactly what is `pub` here. The frontend depends on it to build
 a program; `faun-core`, the machine tier, depends on it to read one back
-with its facts and to lower it. Barb depends on nothing of the compiler but
-`faun-base`, the indices, float operations and number facts every tier
-says alike. The `test-support` feature adds `fixture`, a small standard
+with its facts and to lower it. Barb depends on nothing else of the
+compiler, and owns what the tiers below read in its words: `index`, the
+pools and ranges every tier keeps a program in; `float`, the IEEE 754
+operations it recognizes; and `Bounds`, what is known of a number, which
+machine IR holds a value at. The `test-support` feature adds `fixture`, a small standard
 library built with the builder, and `test_support`, the optimizer's single
 steps, for the tests of the tiers below; only dev-dependencies turn it on.
 

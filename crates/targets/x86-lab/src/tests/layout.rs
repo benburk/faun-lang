@@ -149,7 +149,7 @@ fn input_room_covers_every_count_accepted_at_a_parameter() {
     use crate::ir::{Offset, Width};
     let (mut p, main) = Program::new("main");
     let byte = Class::fixed(8);
-    let narrow = Class::Held(faun_base::facts::Facts::at(128));
+    let narrow = Class::Held(barb::Bounds::at(128));
     let reserve = p.declare("reserve", &[narrow], &[Class::Buffer]);
     p.define(reserve, |b, args| {
         let shape = b.shape(&[byte]);

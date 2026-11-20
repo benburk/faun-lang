@@ -6,7 +6,7 @@
 //! construction still assumes well-formed references and lexical scopes.
 
 use super::{Arm, Atom, Body, Expr, ExprId, Range};
-use faun_base::index::{Pool, append_range};
+use crate::index::{Pool, append_range};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct TermArena {

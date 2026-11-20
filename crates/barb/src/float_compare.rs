@@ -1,6 +1,6 @@
 //! Recognize a comparison observed through a canonicalized floating difference.
 use super::{Atom, Body, CtorId, Expr, ExprId, FnId, Local, Operation, Program, TypeShape};
-use faun_base::float::{Float, Format, Operation as FloatOp};
+use crate::float::{Float, Format, Operation as FloatOp};
 
 /// Whether `left - right` has a nonnegative observed sign. NaNs answer yes.
 /// The signed-zero case that differs from an ordered comparison is excluded.

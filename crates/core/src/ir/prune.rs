@@ -29,7 +29,7 @@
 //! What no instruction left names any more is dropped from the data and
 //! globals too, so an image carries only what the program reaches.
 
-use faun_base::index::append_range;
+use barb::index::append_range;
 
 use super::rewrite::Declarations;
 use super::{

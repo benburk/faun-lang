@@ -318,7 +318,7 @@ impl Builder<'_> {
 
     pub(crate) fn float_not_above(
         &mut self,
-        format: faun_base::float::Format,
+        format: barb::float::Format,
         left: ValueId,
         right: ValueId,
     ) -> ValueId {
@@ -357,7 +357,7 @@ impl Builder<'_> {
     }
 
     /// `float` of the patterns `operands` hold, a pattern of its format.
-    pub fn float(&mut self, float: faun_base::float::Float, operands: &[ValueId]) -> ValueId {
+    pub fn float(&mut self, float: barb::float::Float, operands: &[ValueId]) -> ValueId {
         let operands = self.program.hold(operands);
         self.push_one(
             Op::Float { float, operands },

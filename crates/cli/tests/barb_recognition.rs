@@ -116,8 +116,8 @@ fn float_doubling_is_rewritten_before_machine_lowering() {
         if let barb::Expr::Call(id, _) = expr
             && let Some(float) = facts.float(id)
         {
-            assert_ne!(float.operation, faun_base::float::Operation::Mul);
-            adds += usize::from(float.operation == faun_base::float::Operation::Add);
+            assert_ne!(float.operation, barb::float::Operation::Mul);
+            adds += usize::from(float.operation == barb::float::Operation::Add);
         }
     }
     assert!(adds >= 2);
@@ -205,7 +205,7 @@ fn reference_table() -> String {
         "//! Written by `FAUN_BLESS=1 cargo nextest run -p faun --test barb_recognition`\n\
          //! from the standard's float operations, as the code of each comes to after\n\
          //! canonicalizing. Do not edit by hand.\n\n\
-         use faun_base::float::{Float, Format, Operation};\n\n\
+         use crate::float::{Float, Format, Operation};\n\n\
          pub(super) const KNOWN: &[(u128, Float)] = &[\n",
     );
     for (print, (operation, format)) in reference_fingerprints() {

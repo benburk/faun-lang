@@ -5,7 +5,7 @@ use super::model::{
     Symbol, Terminator, ValueId, Width,
 };
 use super::program::Program;
-use faun_base::index::{Id, Pool};
+use barb::index::{Id, Pool};
 
 /// Check pool references, lexical SSA scope, and operation/control-flow classes.
 ///
@@ -773,7 +773,7 @@ impl Checker<'_> {
     /// Patterns in and one out, each no wider than the format's.
     fn float(
         &self,
-        float: faun_base::float::Float,
+        float: barb::float::Float,
         operands: Range,
         results: &[ValueId],
     ) -> Result<(), String> {

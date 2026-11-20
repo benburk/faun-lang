@@ -3,12 +3,13 @@
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-use faun_base::float::Float;
+use crate::float::Float;
 
+use super::Bounds;
 use super::affine::Affine;
-use super::bounds::{Bounds, Ranges};
 use super::model::{CtorId, ExprId, FnId, TypeId};
 use super::program::Program;
+use super::ranges::Ranges;
 
 /// Operations on unbounded naturals. These are not wrapping machine ops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,7 +291,7 @@ impl Facts {
     pub fn field(&self, program: &Program, ctor: CtorId, at: usize) -> Bounds {
         self.ranges
             .fields
-            .get(super::bounds::slot(program, ctor, at))
+            .get(super::ranges::slot(program, ctor, at))
             .copied()
             .unwrap_or(Bounds::ANY)
     }
@@ -315,7 +316,7 @@ pub(super) fn analyze(
     if !assumed.floats {
         recognised.floats.fill(None);
     }
-    let ranges = super::bounds::analyze(program, &recognised, assumed);
+    let ranges = super::ranges::analyze(program, &recognised, assumed);
     let affine = super::affine::analyze(program, &recognised.operations);
     let pure = super::calls::pure(program, &recognised);
     let comparisons = super::float_compare::analyze(program, &recognised.operations);

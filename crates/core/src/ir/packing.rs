@@ -523,11 +523,11 @@ mod tests {
     fn a_small_tag_and_its_fields_share_a_word() {
         let symbol = [
             Class::fixed(1),
-            Class::Held(faun_base::facts::Facts {
+            Class::Held(barb::Bounds {
                 low: 0,
                 high: Some(258),
             }),
-            Class::Held(faun_base::facts::Facts {
+            Class::Held(barb::Bounds {
                 low: 1,
                 high: Some(32768),
             }),

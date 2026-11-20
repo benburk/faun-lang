@@ -21,7 +21,7 @@
 //! by the two variables' own bounds (Bagnara, Hill and Zaffanella, 2008).
 //! A closed octagon answers a question by reading one entry.
 
-use faun_base::facts::Facts as Bounds;
+use crate::Bounds;
 
 /// A bound in the matrix. Naturals here are below `2^64`, and a matrix
 /// entry is at most two of them summed or doubled, so an `i128` holds any

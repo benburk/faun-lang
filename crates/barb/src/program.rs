@@ -13,7 +13,7 @@ use super::model::{
 };
 use super::terms::TermArena;
 use super::types::{TypeInfo, TypeShape};
-use faun_base::index::{Pool, Range, append_range};
+use crate::index::{Pool, Range, append_range};
 
 /// A program, and the pools every part of it lives in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -468,7 +468,7 @@ impl Program {
 
     /// Record that `id`'s code is the reference routine for `float`: see
     /// [`super::floats::recognise`].
-    pub(super) fn recognise_float(&mut self, id: FnId, float: faun_base::float::Float) {
+    pub(super) fn recognise_float(&mut self, id: FnId, float: crate::float::Float) {
         self.redefined();
         self.functions[id].float = Some(float);
     }

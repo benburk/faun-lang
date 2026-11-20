@@ -19,7 +19,7 @@
 
 use num_bigint::BigUint;
 
-use faun_base::index::append_range;
+use barb::index::append_range;
 
 use super::digits::{add_carry, mul_wide, sub_borrow};
 use super::rewrite::{self, Declarations, Rebuild};

@@ -17,7 +17,6 @@ name = "barb"
 test-support = []
 
 [dependencies]
-faun-base.workspace = true
 num-bigint = "0.4.8"
 num-traits = "0.2"
 rustc-hash = "2.1.3"

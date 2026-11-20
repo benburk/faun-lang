@@ -427,7 +427,7 @@ impl Routines {
         self
     }
 
-    /// Say that the machine computes each [`faun_base::float::Float`] with an
+    /// Say that the machine computes each [`barb::float::Float`] with an
     /// instruction of its own, correctly rounded to nearest-even and never
     /// trapping, so that a definition recognized as one is answered by
     /// the instruction rather than by its body.

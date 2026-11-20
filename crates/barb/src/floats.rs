@@ -10,7 +10,7 @@
 
 use num_bigint::BigUint;
 
-use faun_base::float::Float;
+use crate::float::Float;
 
 use super::budget::Budget;
 use super::constant::{ConstantView, Held};

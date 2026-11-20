@@ -9,9 +9,9 @@ use super::{
     Constant, ConstructionError, Held, Value, checked, encode, write_natural, write_number,
 };
 use crate::budget::LimitExceeded;
+use crate::index::Pool;
 use crate::types::TypeInfo;
 use crate::{ConstId, Range, TypeId};
-use faun_base::index::Pool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Entry {
