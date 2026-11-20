@@ -2,7 +2,7 @@
 //! only low exit statuses. Runtime inputs are parameters, never folded terms.
 use num_bigint::BigUint;
 
-use crate::facts::Facts;
+use faun_base::facts::Facts;
 
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
 use super::natural::Config;
@@ -923,7 +923,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
 fn source_host_arguments_are_not_implicitly_truncated() {
     // A sum of two counts a word holds may not fit a word, and a status must.
     let routines = crate::platform::Routines::builtin().with_word(64);
-    let mut library = crate::barb::fixture::Library::new();
+    let mut library = barb::fixture::Library::new();
     let (nat, add) = (library.nat, library.add);
     let world = tests::host(&mut library.program, nat);
     let main =
@@ -950,7 +950,7 @@ fn source_host_arguments_are_not_implicitly_truncated() {
 
     // A status known to be small fits even a narrow word.
     let routines = crate::platform::Routines::builtin().with_word(16);
-    let mut library = crate::barb::fixture::Library::new();
+    let mut library = barb::fixture::Library::new();
     let one = library.number(1);
     let world = tests::host(&mut library.program, library.nat);
     let main = library

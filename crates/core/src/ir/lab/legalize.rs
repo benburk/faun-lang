@@ -1401,7 +1401,7 @@ impl Pass<'_> {
                         let small = most
                             .filter(|&most| op == Binary::Mod && most < self.library.half)
                             .map(|most| {
-                                Class::Held(crate::facts::Facts {
+                                Class::Held(faun_base::facts::Facts {
                                     low: 0,
                                     high: Some(most),
                                 })

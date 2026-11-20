@@ -1,7 +1,7 @@
 //! Preserve arithmetic and its range-selected classes until target selection.
 
 use super::{Binary, Builder, Class, Relation, ValueId};
-use crate::barb::Operation;
+use barb::Operation;
 
 pub(super) fn widest(a: Class, b: Class) -> Class {
     match (a, b) {
@@ -30,7 +30,7 @@ fn room(a: Class, b: Class) -> Class {
     match (a, b) {
         (Class::Natural, _) | (_, Class::Natural) => Class::Natural,
         (Class::Word, _) | (_, Class::Word) => Class::Word,
-        (Class::Held(a), Class::Held(b)) => Class::Held(crate::facts::Facts {
+        (Class::Held(a), Class::Held(b)) => Class::Held(faun_base::facts::Facts {
             low: 0,
             high: a.high.zip(b.high).map(|(a, b)| a.max(b)),
         }),
@@ -81,7 +81,7 @@ pub(super) fn lower(
     // above the wider's top bit.
     let brought = match (op, brought) {
         (Operation::Or | Operation::Xor, Class::Held(held)) => {
-            Class::Held(held.merged(crate::facts::Facts::at(0), false))
+            Class::Held(held.merged(faun_base::facts::Facts::at(0), false))
         }
         _ => brought,
     };

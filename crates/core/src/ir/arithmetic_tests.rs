@@ -1,5 +1,4 @@
 use super::*;
-use crate::barb;
 use num_bigint::BigUint;
 
 #[test]
@@ -101,9 +100,9 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
         program.set_entry(main);
         barb::validate(program).unwrap();
         // Isolate lowering from laws such as mod(n, n) = 0.
-        barb::structural(program);
-        barb::normalize_with_limits(program, barb::InlineLimits::default());
-        barb::fold(program);
+        barb::test_support::structural(program);
+        barb::test_support::normalize_with_limits(program, barb::InlineLimits::default());
+        barb::test_support::fold(program);
         let machine = crate::lower_to_machine_ir(program, &routines).unwrap();
         validate(&machine).unwrap();
         let body = machine.function(machine.entry()).body().unwrap();
@@ -130,4 +129,66 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
                 .all(|index| machine.class(ValueId::at(index)) != Class::Natural)
         );
     }
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the guard, its entry and the lowering check are one program"
+)]
+fn an_early_exit_refines_the_continuation() {
+    let routines = crate::platform::Routines::builtin();
+    let mut library = barb::fixture::Library::new();
+    let two = library.number(2);
+    let nought = library.number(0);
+    let (nat, bool_, true_) = (library.nat, library.bool_, library.true_);
+    let (add, less_than) = (library.add, library.less_than);
+    let p = &mut library.program;
+    let host = p.declare_type("Host");
+    p.define_type(host, &[("Host", &[])]);
+    let never = p.declare_type("Never");
+    p.define_type(never, &[]);
+    let exit = p.declare("exit!", &[host, nat], never);
+    let input = p.declare("read_byte!", &[host], nat);
+    // bounded!(h, True, n) -> n
+    // bounded!(h, False, n) -> exit!(h, Zero)
+    let bounded = p.declare("bounded!", &[host, bool_, nat], nat);
+    p.define(bounded, |b, args| {
+        b.match_(args[1], bool_, |b, ctor, _| {
+            if ctor == true_ {
+                args[2]
+            } else {
+                let nought = b.known(nought);
+                b.call(exit, &[args[0], nought])
+            }
+        })
+    });
+    let main = p.declare_named("main!", &[("host", host)], never);
+    p.define(main, |b, args| {
+        let count = b.call(input, &[args[0]]);
+        let two = b.known(two);
+        let below = b.call(less_than, &[count, two]);
+        let n = b.call(bounded, &[args[0], below, count]);
+        let sum = b.call(add, &[n, n]);
+        b.call(exit, &[args[0], sum])
+    });
+    p.set_entry(main);
+    let mut program = library.program;
+    barb::validate(&program).unwrap();
+    barb::test_support::normalize_with_limits(&mut program, barb::InlineLimits::default());
+    barb::test_support::fold(&mut program);
+    let facts = program.analyze();
+    let body = program.function(program.entry()).body().unwrap();
+    let sum = program.bindings(body.bindings).iter().copied().find(|expr| {
+        matches!(program.expr(*expr), barb::Expr::Call(called, _) if facts.operation(called) == Some(barb::Operation::Add))
+    }).expect("runtime addition");
+    assert_eq!(
+        facts.held(sum),
+        barb::Bounds {
+            low: 0,
+            high: Some(2)
+        }
+    );
+    let machine = lower(&program, &routines).unwrap();
+    assert!((0..machine.values_count()).all(|at| machine.class(ValueId::at(at)) != Class::Natural));
 }

@@ -22,7 +22,7 @@
 use rustc_hash::FxHashMap as HashMap;
 
 use super::{BlockDraft, Immediate, Inst, Opcode, Selector, Terminator, VReg, append};
-use faun_core::index::{Pool, Range};
+use faun_base::index::{Pool, Range};
 
 use super::{BlockId, InstId};
 

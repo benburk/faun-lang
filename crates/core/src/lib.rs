@@ -1,15 +1,12 @@
 //! The Faun compiler core, down to the tier a target reads.
 //!
-//! Source-language policy lives in the sibling `faun-frontend` crate. [`barb`] is the
-//! shared functional core; [`ir`] decides
-//! how a value is held, while [`platform`] describes what a target answers for.
-//! A target is a separate crate implementing [`targets::Target`].
+//! Source-language policy lives in the sibling `faun-frontend` crate, and
+//! Barb, the shared functional core, in `faun-barb`: this crate takes an
+//! optimized [`barb::Program`] from there. [`ir`] decides how a value is
+//! held, while [`platform`] describes what a target answers for. A target is
+//! a separate crate implementing [`targets::Target`].
 
-pub mod barb;
 pub mod codegen;
-pub mod facts;
-pub mod float;
-pub mod index;
 pub mod ir;
 pub mod platform;
 pub mod programs;

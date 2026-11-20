@@ -4,7 +4,7 @@
 //! read, to be fused with what reads it.
 mod support;
 
-use faun_core::barb::{self, FnId};
+use barb::FnId;
 use faun_x86_64_linux::X86_64Linux;
 use support::{Package, run_counted};
 

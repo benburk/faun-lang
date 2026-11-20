@@ -1,0 +1,26 @@
+[package]
+name = "faun-barb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Barb, the Faun compiler's first-order core IR: built by the frontend, optimized and analyzed here, read by the machine tier"
+
+# The IR is named `barb` wherever it is read, as it was when it was a module
+# of the core.
+[lib]
+name = "barb"
+
+[features]
+# A small standard library built with the builder, and the optimizer's
+# individual steps, for the tests of the tiers below: only a
+# dev-dependency turns it on.
+test-support = []
+
+[dependencies]
+faun-base.workspace = true
+num-bigint = "0.4.8"
+num-traits = "0.2"
+rustc-hash = "2.1.3"
+
+[lints]
+workspace = true

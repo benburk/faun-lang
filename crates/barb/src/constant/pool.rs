@@ -1,0 +1,141 @@
+//! The constant module owns storage and every insertion path. Only Program
+//! pairs these operations with its declaration metadata; the pool is not public.
+
+use rustc_hash::FxHashMap as HashMap;
+
+use num_bigint::BigUint;
+
+use super::{
+    Constant, ConstructionError, Held, Value, checked, encode, write_natural, write_number,
+};
+use crate::budget::LimitExceeded;
+use crate::types::TypeInfo;
+use crate::{ConstId, Range, TypeId};
+use faun_base::index::Pool;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Entry {
+    owner: TypeId,
+    bytes: Range,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ConstantPool {
+    entries: Pool<ConstId, Entry>,
+    bytes: Vec<u8>,
+    /// Each constant held, by its type and encoding: one written again is
+    /// the one already held, so a value is one constant however many times
+    /// a program writes it.
+    held: HashMap<(TypeId, Box<[u8]>), ConstId>,
+}
+
+impl ConstantPool {
+    pub(crate) fn bytes(&self, id: ConstId) -> &[u8] {
+        &self.bytes[self.entries[id].bytes.range()]
+    }
+
+    pub(crate) fn get<'a>(&'a self, types: TypeInfo<'a>, id: ConstId) -> Constant<'a> {
+        Constant::new(types, self.entries[id].owner, self.bytes(id))
+    }
+
+    pub(crate) fn intern(
+        &mut self,
+        types: TypeInfo<'_>,
+        owner: TypeId,
+        value: &Value,
+    ) -> Result<ConstId, ConstructionError> {
+        checked::tree(types, owner, value)?;
+        Ok(self.hold(owner, |out| encode(types, owner, value, out)))
+    }
+
+    pub(crate) fn number(
+        &mut self,
+        types: TypeInfo<'_>,
+        owner: TypeId,
+        value: u64,
+    ) -> Result<ConstId, ConstructionError> {
+        checked::natural(types, owner)?;
+        Ok(self.hold(owner, |out| write_number(value, out)))
+    }
+
+    pub(crate) fn natural(
+        &mut self,
+        types: TypeInfo<'_>,
+        owner: TypeId,
+        value: &BigUint,
+    ) -> Result<ConstId, ConstructionError> {
+        checked::natural(types, owner)?;
+        Ok(self.hold(owner, |out| write_natural(value, out)))
+    }
+
+    pub(crate) fn byte_spine(
+        &mut self,
+        types: TypeInfo<'_>,
+        owner: TypeId,
+        bytes: &[u8],
+    ) -> Result<ConstId, ConstructionError> {
+        checked::byte_spine(types, owner)?;
+        let count = u64::try_from(bytes.len()).map_err(|_| LimitExceeded::ValueSize)?;
+        Ok(self.hold(owner, |out| {
+            write_number(count, out);
+            for &byte in bytes {
+                write_number(u64::from(byte), out);
+            }
+        }))
+    }
+
+    pub(crate) fn intern_held(&mut self, value: &Held) -> ConstId {
+        self.hold(value.owner(), |out| out.extend_from_slice(value.encoded()))
+    }
+
+    fn hold(&mut self, owner: TypeId, write: impl FnOnce(&mut Vec<u8>)) -> ConstId {
+        let start = self.bytes.len();
+        write(&mut self.bytes);
+        let key = (owner, Box::from(&self.bytes[start..]));
+        if let Some(&id) = self.held.get(&key) {
+            self.bytes.truncate(start);
+            return id;
+        }
+        let id = self.entries.push(Entry {
+            owner,
+            bytes: Range::of(start, self.bytes.len() - start),
+        });
+        self.held.insert(key, id);
+        id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::TypeDefinition;
+    use crate::{Ctor, CtorId, Symbol, Type};
+
+    #[test]
+    fn a_pool_needs_only_declarations_not_a_program_or_name_table() {
+        let mut types = Pool::default();
+        let nat = types.push(Type {
+            name: Symbol::at(0),
+            inline: false,
+            definition: TypeDefinition::Defined(Range::of(0, 2)),
+        });
+        let mut ctors = Pool::default();
+        // Successor first, empty constructor last. Names are opaque to the codec.
+        for fields in [Range::of(0, 1), Range::EMPTY] {
+            ctors.push(Ctor {
+                name: Symbol::at(0),
+                owner: nat,
+                fields,
+                details: Range::EMPTY,
+            });
+        }
+        let fields = [nat];
+        let types = TypeInfo::new(&types, &ctors, &fields);
+        let mut pool = ConstantPool::default();
+        let zero = pool.number(types, nat, 0).unwrap();
+        assert_eq!(pool.get(types, zero).constructor(), CtorId::at(1));
+        let one = pool.number(types, nat, 1).unwrap();
+        assert_eq!(pool.bytes(one), &[1]);
+        assert_eq!(pool.get(types, one).constructor(), CtorId::at(0));
+    }
+}

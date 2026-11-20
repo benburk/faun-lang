@@ -55,8 +55,8 @@ use rustc_hash::FxHashMap as HashMap;
 
 use num_bigint::BigUint;
 
-use crate::facts::Facts;
-use crate::float::{Float, Format, Operation};
+use faun_base::facts::Facts;
+use faun_base::float::{Float, Format, Operation};
 
 use super::{
     Binary, Builder, Class, Direction, Exit, Op, Program, Range, RegionId, Relation, ShapeId,

@@ -1,5 +1,4 @@
 use super::*;
-use crate::barb;
 
 /// What a frontend declares for its host: the authority a program is
 /// handed, a type with no values for what never comes back, and the

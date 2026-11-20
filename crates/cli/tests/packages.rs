@@ -58,7 +58,7 @@ fn an_application_builds_only_what_main_reaches() {
     let barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert!(barb.render().contains("unused(v0: Nat) -> Nat ="));
     let mut optimized = barb.clone();
-    faun_core::barb::optimize(&mut optimized);
+    barb::optimize(&mut optimized);
     let machine = faun_core::lower_to_machine_ir(&optimized, &X86_64Linux.routines()).unwrap();
     assert!(!machine.render().contains("unused"));
     faun_frontend::compile_barb_to_image(barb, &X86_64Linux).unwrap();
@@ -92,7 +92,7 @@ fn a_guard_worked_out_into_a_bool_bounds_what_its_match_builds() {
          )\n",
     );
     let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
-    faun_core::barb::optimize(&mut barb);
+    barb::optimize(&mut barb);
     let machine = faun_core::lower_to_machine_ir(&barb, &X86_64Linux.routines()).unwrap();
     let rendered = machine.render();
     assert!(rendered.contains("count(v0: 0..3999)"), "{rendered}");
@@ -114,7 +114,7 @@ fn what_a_loop_asks_of_a_value_every_caller_hands_it_is_folded() {
     );
     let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert!(barb.render().contains("List.any"));
-    faun_core::barb::optimize(&mut barb);
+    barb::optimize(&mut barb);
     let rendered = barb.render();
     assert!(!rendered.contains("List.any"), "{rendered}");
 }
@@ -144,7 +144,7 @@ fn a_loop_handed_different_strings_is_copied_for_each_where_that_decides_somethi
         ),
     );
     let mut barb = faun_frontend::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
-    faun_core::barb::optimize(&mut barb);
+    barb::optimize(&mut barb);
     let rendered = barb.render();
     assert!(!rendered.contains("List.any"), "{rendered}");
     assert!(!rendered.contains("\nseek("), "{rendered}");

@@ -9,6 +9,7 @@ description = "The wasm32-wasi target for Faun"
 faun-core.workspace = true
 
 [dev-dependencies]
+faun-barb.workspace = true
 faun-frontend.workspace = true
 
 [lints]

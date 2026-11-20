@@ -1,7 +1,7 @@
 use super::tests::{World, host};
 use super::*;
-use crate::barb::fixture::Library;
-use crate::{barb, platform::Routines};
+use crate::platform::Routines;
+use barb::fixture::Library;
 
 fn bodies(program: &Program) -> usize {
     program
@@ -238,7 +238,7 @@ fn folded_library_calls_leave_no_runtime_representation_demand() {
         let sum = b.call(s.library.add, &[byte, magnitude]);
         s.exit(b, host, sum)
     });
-    barb::fold(&mut source);
+    barb::test_support::fold(&mut source);
     // The old function bodies and library types remain in the arenas, but
     // their callers now hold naturals, not products or signed sums.
     let machine = lower_program(&source).unwrap();
@@ -271,9 +271,9 @@ fn default_pipeline_removes_folded_library_temporaries() {
         );
         // Without cleanup, which would remove what folding left behind.
         let mut uncleaned = source;
-        barb::structural(&mut uncleaned);
-        barb::normalize_with_limits(&mut uncleaned, barb::InlineLimits::default());
-        barb::fold(&mut uncleaned);
+        barb::test_support::structural(&mut uncleaned);
+        barb::test_support::normalize_with_limits(&mut uncleaned, barb::InlineLimits::default());
+        barb::test_support::fold(&mut uncleaned);
         let uncleaned = crate::lower_to_machine_ir(&uncleaned, &routines()).unwrap();
         validate(&uncleaned).unwrap();
     }
@@ -537,7 +537,10 @@ fn unsupported_values_after_nonreturning_bindings_are_not_lowered() {
             let mut source = source.clone();
             if normalized {
                 // The second case becomes a match whose every arm leaves.
-                barb::normalize_with_limits(&mut source, barb::InlineLimits::default());
+                barb::test_support::normalize_with_limits(
+                    &mut source,
+                    barb::InlineLimits::default(),
+                );
             }
             lower_program(&source).unwrap();
         }

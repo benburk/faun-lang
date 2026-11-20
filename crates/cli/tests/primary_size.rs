@@ -65,7 +65,7 @@ fn faun_rungs_are_as_small_as_the_ladder() {
                 .find(|(rung, _)| *rung == name)
                 .expect("a rung of the ladder");
             let mut barb = rung.clone();
-            faun_core::barb::optimize(&mut barb);
+            barb::optimize(&mut barb);
             let machine = faun_core::lower_to_machine_ir(&barb, &target.routines()).unwrap();
             let image = target.compile_machine_ir(&machine).unwrap();
             assert_eq!(

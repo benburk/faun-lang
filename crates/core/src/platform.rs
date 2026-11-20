@@ -217,7 +217,7 @@ impl Routine {
     /// a program adds to is a count it has a bound for. One that answers
     /// nothing, or answers something that is not a number, bounds nothing.
     #[must_use]
-    pub fn bounds(&self) -> Option<crate::barb::Bounds> {
+    pub fn bounds(&self) -> Option<barb::Bounds> {
         self.answers().map(held_bounds)
     }
 }
@@ -237,13 +237,13 @@ pub struct Startup {
 impl Startup {
     /// What a program may assume about the number it is handed.
     #[must_use]
-    pub fn bounds(&self) -> crate::barb::Bounds {
+    pub fn bounds(&self) -> barb::Bounds {
         held_bounds(self.class)
     }
 }
 
 /// The numbers a machine value of `class` can hold.
-fn held_bounds(class: Class) -> crate::barb::Bounds {
+fn held_bounds(class: Class) -> barb::Bounds {
     let high = match class {
         Class::Word => Some(u64::MAX),
         held @ Class::Held(_) => held.width().map(|bits| {
@@ -257,7 +257,7 @@ fn held_bounds(class: Class) -> crate::barb::Bounds {
         // with no bound rather than no number.
         _ => None,
     };
-    crate::barb::Bounds { low: 0, high }
+    barb::Bounds { low: 0, high }
 }
 
 /// The routines a program is read against.
@@ -427,7 +427,7 @@ impl Routines {
         self
     }
 
-    /// Say that the machine computes each [`crate::float::Float`] with an
+    /// Say that the machine computes each [`faun_base::float::Float`] with an
     /// instruction of its own, correctly rounded to nearest-even and never
     /// trapping, so that a definition recognized as one is answered by
     /// the instruction rather than by its body.
@@ -452,13 +452,13 @@ impl Routines {
     /// each), so no more elements than bytes: on x86-64 a length times
     /// eight, a count of bits, still fits a word.
     #[must_use]
-    pub fn length(&self) -> crate::barb::Bounds {
+    pub fn length(&self) -> barb::Bounds {
         let word = held_bounds(self.word.map_or(Class::Word, Class::fixed));
         let memory = self
             .address
             .filter(|&bits| bits < 64)
             .map(|bits| (1u64 << bits) - 1);
-        crate::barb::Bounds {
+        barb::Bounds {
             high: word
                 .high
                 .map(|high| memory.map_or(high - 1, |memory| memory.min(high - 1))),

@@ -2,7 +2,7 @@
 //! is one immortal byte buffer. Projecting a row produces an ordinary slice,
 //! so readers, tails and calls use the existing buffer ABI.
 
-use super::{Carried, Class, Lowering, Storage, ValueId, barb, peeled};
+use super::{Carried, Class, Lowering, Storage, ValueId, peeled};
 use crate::ir::{Binary, Builder, Relation, ShapeId};
 
 const ROW: usize = 24;

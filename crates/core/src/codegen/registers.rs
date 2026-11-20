@@ -25,8 +25,8 @@ use super::parallel_copy::{
     self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place, TransitionCost,
 };
 use super::{FrameSlot, RegSet, Register};
-use crate::index::{BitSet, Pool, Range, SparseSet, index};
 use crate::ir::FunctionId;
+use faun_base::index::{BitSet, Pool, Range, SparseSet, index};
 
 index!(pub VReg, BlockId, InstId);
 
@@ -2321,7 +2321,7 @@ impl<R: Register> From<parallel_copy::PlanError<R>> for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::Range;
+    use faun_base::index::Range;
 
     /// A machine of two registers, nothing else known of it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

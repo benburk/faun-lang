@@ -4,7 +4,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use crate::float::Float;
+use faun_base::float::Float;
 
 use super::{
     Binary, Builder, Class, DataId, Direction, Op, Program, RegionId, Relation, ValueId, rewrite,

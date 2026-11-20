@@ -24,7 +24,7 @@ expr = x                                   a local
 
 Barb keeps the high-level shape of a program: types are still constructors,
 loops are still recursion, a list is still a list. That is what makes
-patterns easy to find. The [README](../../crates/core/src/barb/README.md) is
+patterns easy to find. The [README](../../crates/barb/README.md) is
 the full contract.
 
 ## Nothing is blessed, only recognized
@@ -165,7 +165,7 @@ down what is left, `range` is a producer like `map`, and a fold reading it
 reads each element as it is made. Its elements are still bounded by
 `count`: a count kept beside a walk down what is left never passes what
 the two start as together
-([counters](../../crates/core/src/barb/counters.rs)).
+([counters](../../crates/barb/src/counters.rs)).
 
 `List.repeat` was left building from the end. Front to back, evaluating
 a known repeat at compile time appends to a list a walk at a time, which

@@ -26,7 +26,7 @@ monomorphized, first-order program. A library stops before Barb. Its
 [README](../../crates/frontend/README.md) is its contract, including what
 syntax is blessed to.
 
-**Barb** (`crates/core/src/barb`) is a first-order language in A-normal
+**Barb** (`crates/barb`, its own crate) is a first-order language in A-normal
 form (ANF), where every argument is a local and anything else is bound
 first:
 
@@ -39,11 +39,11 @@ arm  ::= Ctor(x*) -> body
 A type is a name with constructors. `if` is a match on `Bool`, records and
 tuples are one-constructor types, numbers are recursion over constructors.
 A definition with no body is one the target computes, an effect among
-them. Barb's [README](../../crates/core/src/barb/README.md) is its contract;
+them. Barb's [README](../../crates/barb/README.md) is its contract;
 [barb](barb.md) is the short form.
 
-**Machine IR** (`crates/core/src/ir`) decides how each value is held: as a
-word, a number known to fit some width, an arbitrary-precision natural, a
+**Machine IR** (`crates/core/src/ir`) decides how each value is held: as
+a word, a number known to fit some width, an arbitrary-precision natural, a
 counted cell, or a sequence buffer. It places reference counts, lays out
 data, and keeps control structured: regions take parameters, and a loop
 stays the tail call it was written as. A short fixed schedule of passes
@@ -56,6 +56,23 @@ loads, stores and calls to routines generated in machine IR. Then it emits.
 x86-64 allocates registers and writes a static ELF that makes system calls
 itself; wasm32 writes a module importing WASI; the 6502 target holds a
 16-bit word as two bytes and writes a sim65 image.
+
+The crates follow the tiers, each depending only on those above it:
+
+```text
+faun-base      indices, IEEE float operations, what is known of a number
+faun-barb      Barb (read as `barb`), on faun-base
+faun-core      machine IR, platform, shared codegen, on faun-barb
+faun-frontend  source to Barb, on faun-barb, and faun-core for routines
+faun-<target>  one target each, on faun-core
+faun           the command, on all of them
+```
+
+Barb being a crate of its own keeps its interface what it is `pub`: the
+frontend builds a program with it, the machine tier reads one back with
+its facts, and nothing else of it crosses. A change below Barb rebuilds
+nothing of it. Barb's own test fixtures reach the tiers below through its
+`test-support` feature, which only their dev-dependencies turn on.
 
 `faun emit barb FILE`, `faun emit machine FILE` and `faun emit target FILE`
 print each stage. A definition counting a list, compiled for x86-64:
@@ -193,7 +210,7 @@ describes the boundary, the first milestones and how to compare results.
 
 - [Memory](memory.md): reference counting and reuse in the machine tier
 - [Barb](barb.md) and its
-  [README](../../crates/core/src/barb/README.md): the core's contract
+  [README](../../crates/barb/README.md): the core's contract
 - [Types](../types.md): inference, rows and monomorphization in the frontend
 - [Functions](../values/functions.md): second-class callbacks
 - [Floats](../values/floats.md): the float contract the recognized routines stand for

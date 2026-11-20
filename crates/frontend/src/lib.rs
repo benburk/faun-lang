@@ -40,7 +40,6 @@
 
 use std::path::{Path, PathBuf};
 
-use faun_core::barb;
 use faun_core::targets::{Favour, SymbolTable, Target};
 
 use context::Context;

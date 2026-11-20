@@ -45,7 +45,7 @@ fn returns_cell(p: &Program, id: FunctionId) -> bool {
 fn constructor(p: &Program, id: FunctionId, packed: &[Packed]) -> bool {
     let f = p.function(id);
     if f.tree_role
-        .is_some_and(|role| role != crate::barb::TreeRole::Builder)
+        .is_some_and(|role| role != barb::TreeRole::Builder)
     {
         return false;
     }
@@ -132,7 +132,7 @@ fn connected(p: &Program, region: RegionId, exit: super::Exit) -> bool {
 fn reader(p: &Program, id: FunctionId) -> bool {
     let f = p.function(id);
     if f.tree_role
-        .is_some_and(|role| role != crate::barb::TreeRole::Reader)
+        .is_some_and(|role| role != barb::TreeRole::Reader)
     {
         return false;
     }

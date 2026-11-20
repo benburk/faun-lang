@@ -1,7 +1,7 @@
 use super::{Class, Op, Program, Returns, evaluate, validate};
-use crate::barb::fixture::Library;
-use crate::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 use crate::platform::Routines;
+use barb::fixture::Library;
+use barb::{Atom, Builder, CtorId, FnId, TypeId};
 use num_bigint::BigUint;
 
 const ZERO: Class = Class::fixed(0);
@@ -76,9 +76,9 @@ fn stages(optimized: bool) -> fn(&mut barb::Program) {
 /// Inlining and folding, without the laws that would decide a remainder
 /// outright.
 fn without_laws(program: &mut barb::Program) {
-    barb::structural(program);
-    barb::normalize_with_limits(program, barb::InlineLimits::default());
-    barb::fold(program);
+    barb::test_support::structural(program);
+    barb::test_support::normalize_with_limits(program, barb::InlineLimits::default());
+    barb::test_support::fold(program);
 }
 
 #[test]
@@ -407,8 +407,8 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
     p.set_entry(main);
 
     // Inlining, without the laws or folding that would decide the comparison.
-    barb::structural(&mut p);
-    barb::normalize_with_limits(&mut p, barb::InlineLimits::default());
+    barb::test_support::structural(&mut p);
+    barb::test_support::normalize_with_limits(&mut p, barb::InlineLimits::default());
     let lowered = crate::ir::lower(&p, &routines).unwrap();
     validate(&lowered).unwrap();
     let optimized = crate::ir::optimize(&lowered);

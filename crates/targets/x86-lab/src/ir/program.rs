@@ -5,7 +5,7 @@ use super::model::{
     Class, DataId, Definition, Exit, Function, FunctionId, Op, Origin, Parameter, Range, Region,
     RegionId, Returns, ShapeId, Span, Symbol, ValueId,
 };
-use crate::index::{Pool, append_range};
+use faun_base::index::{Pool, append_range};
 
 /// An empty construction state by default.
 ///

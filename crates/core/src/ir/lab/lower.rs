@@ -48,8 +48,7 @@
 
 use std::rc::Rc;
 
-use crate::barb;
-use crate::index::append_range;
+use faun_base::index::append_range;
 
 use super::model::{Binary, Class, FunctionId, Relation, ShapeId, ValueId};
 use super::program::Program;
@@ -281,7 +280,7 @@ enum Callee<'a> {
     Unreachable,
     Instruction(barb::Operation),
     /// Answered by the target's own IEEE 754 instruction.
-    Float(crate::float::Float),
+    Float(faun_base::float::Float),
     Rotation(barb::Rotation),
     /// Answered from how the sequence it is handed is held.
     Sequence(barb::SequenceOperation),
@@ -1297,7 +1296,7 @@ impl<'a> Demand<'a> {
             return Ok(None);
         }
         let most = u64::try_from(ctors.len() - 1).expect("a sane constructor count");
-        let mut leaves = vec![Class::Held(crate::facts::Facts {
+        let mut leaves = vec![Class::Held(faun_base::facts::Facts {
             low: 0,
             high: Some(most),
         })];

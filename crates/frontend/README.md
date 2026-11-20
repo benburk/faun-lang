@@ -1,7 +1,7 @@
 # faun
 
 The Faun frontend: it reads a package, checks it, and lowers an
-application to [Barb](../core/src/barb/README.md).
+application to [Barb](../barb/README.md).
 
 Every error a programmer can cause is found here. What comes out is plain
 Barb: typed, monomorphized, first-order, with no syntax sugar left. Below

@@ -95,7 +95,7 @@ fn ladder_code_size_ratchets() {
     let routines = TARGET.routines();
     let mut code = Vec::new();
     for (name, mut barb) in crate::programs::ladder::every() {
-        faun_core::barb::optimize(&mut barb);
+        barb::optimize(&mut barb);
         let machine = crate::lower_to_machine_ir(&barb, &routines).unwrap();
         let prepared = TARGET.prepare(&machine).unwrap();
         let allocated = crate::selected::select_and_allocate(&prepared).unwrap();

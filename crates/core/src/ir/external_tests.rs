@@ -165,7 +165,7 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
 
 #[test]
 fn source_externals_check_unit_against_nonreturning_provider_contracts() {
-    use crate::{barb, platform};
+    use crate::platform;
     for returns in [platform::Returns::Unit, platform::Returns::Never] {
         let mut source = barb::Program::default();
         let unit = source.declare_type("Unit");

@@ -2,7 +2,7 @@
 //! only low exit statuses. Runtime inputs are parameters, never folded terms.
 use num_bigint::BigUint;
 
-use crate::facts::Facts;
+use faun_base::facts::Facts;
 
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
 use super::natural::Config;

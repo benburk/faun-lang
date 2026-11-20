@@ -1,7 +1,7 @@
 use super::shared::status;
 use crate::machine::{Allocated, AllocatedBuilder, Inst, MemoryWidth, Reg, RegisterWidth};
+use faun_base::float::{Float, Format, Operation};
 use faun_core::codegen::FrameSlot;
-use faun_core::float::{Float, Format, Operation};
 use faun_core::ir::{Binary, Builder, Class, Offset, Program, Relation, ValueId, Width};
 
 const XMMS: [Reg; 16] = [
