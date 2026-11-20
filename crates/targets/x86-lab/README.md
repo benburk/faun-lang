@@ -1,15 +1,16 @@
 # Experimental x86-64 Linux backend
 
 This crate starts with the x86 emitter and machine IR from Faun commit
-`711f676`. The CLI selects it with `--backend=x86-lab` for `build`,
-`run`, `test` and `emit`. The default backend remains `stock`.
+`711f676`. It is the default for `build`, `run`, `test` and `emit` on
+x86-64 Linux, selected by `--backend=lab` or its older spelling
+`--backend=x86-lab`; `--backend=stock` selects the stock emitter.
 
 The frontend produces the same optimized Barb program for both backends.
 The shared `core/src/ir/lab` implementation lowers Barb to machine IR,
 analyzes ownership and storage, and legalizes representations for the
-selected target. Wasm and 6502 can use this lowering with the `x86-lab`
-selector too; Apple Silicon support is experimental. This crate retains
-its x86 machine optimization and emission pipeline.
+selected target. Wasm and 6502 use this lowering by default too; Apple
+Silicon support is experimental. This crate retains its x86 machine
+optimization and emission pipeline.
 `src/selected.rs`, `src/encode.rs` and `src/elf.rs` select instructions,
 encode them and write the executable. The crate shares Barb, the register
 allocator and general utilities with the stock compiler.

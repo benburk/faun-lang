@@ -80,9 +80,18 @@ fn faun_rungs_are_as_small_as_the_ladder() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Built with the stock backend, which the ladder's images are built with
+/// below.
 fn build(target: &str, source: &Path, output: &Path) {
     let result = Command::new(env!("CARGO_BIN_EXE_faun"))
-        .args(["build", "--target", target, "--output"])
+        .args([
+            "build",
+            "--backend",
+            "stock",
+            "--target",
+            target,
+            "--output",
+        ])
         .arg(output)
         .arg(source)
         .output()

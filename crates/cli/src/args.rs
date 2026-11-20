@@ -206,9 +206,9 @@ fn uses() -> impl Parser<Command> {
 fn compiler() -> impl Parser<Compiler> {
     let target = target();
     let backend = long("backend")
-        .help("Code generator: stock or lab (x86-lab selects lab on x86-64 Linux)")
+        .help("Code generator: lab, the default, or stock (x86-lab is lab on x86-64 Linux)")
         .argument::<String>("BACKEND")
-        .fallback(String::from("stock"));
+        .fallback(String::from("lab"));
     construct!(target, backend).parse(|(target, backend)| Compiler::choose(target, &backend))
 }
 

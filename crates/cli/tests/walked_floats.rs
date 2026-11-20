@@ -97,8 +97,9 @@ enum Backend {
     Wasm,
 }
 
-/// The image `source` makes favouring speed, as `faun build` makes it, or
-/// with every float operation walked.
+/// The image `source` makes favouring speed, as `faun build` makes it with
+/// that backend (`Wasm` being stock on wasm32), or with every float
+/// operation walked.
 fn image(source: &Path, backend: Backend, walked: bool) -> Vec<u8> {
     let target: &dyn Target = match backend {
         Backend::Stock | Backend::Lab => &X86_64Linux,

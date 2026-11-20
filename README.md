@@ -48,12 +48,12 @@ Compilation targets
 - MOS 6502 sim65
 - Apple Silicon macOS, with baseline support for constant exits, argument counts, and static writes.
 
-`--backend lab` selects the experimental lowering and storage passes on any target. Word size governs which layouts are available. On x86-64 Linux this also selects the experimental x86 emitter (`--backend x86-lab` is its existing spelling). `--backend stock` is the default. In the development shell, `faun run` and `faun test` can execute Wasm with Wasmtime and 6502 images with sim65.
+The lab backend is the default on every target: its lowering and storage passes, with layouts chosen by word size, and on x86-64 Linux its own x86 emitter (`--backend x86-lab` is that emitter's older spelling). `--backend stock` selects the previous lowering and x86 emitter while they remain. In the development shell, `faun run` and `faun test` can execute Wasm with Wasmtime and 6502 images with sim65.
 
 ```sh
-faun run --target wasm32-wasi --backend lab crates/frontend/examples/minimal-hello.fn
-faun run --target mos6502-sim65 --backend lab crates/frontend/examples/minimal-hello.fn
-faun build --target aarch64-macos --backend lab crates/frontend/examples/minimal-hello.fn -o hello
+faun run --target wasm32-wasi crates/frontend/examples/minimal-hello.fn
+faun run --target mos6502-sim65 crates/frontend/examples/minimal-hello.fn
+faun build --target aarch64-macos crates/frontend/examples/minimal-hello.fn -o hello
 ```
 
 Programs, in [`crates/frontend/examples`](crates/frontend/examples)
