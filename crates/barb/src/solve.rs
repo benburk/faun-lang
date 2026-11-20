@@ -32,7 +32,7 @@ use super::facts::{Operation, SequenceOperation};
 use super::numeric::{Answer, Arm, Block, Built, Field, Kind, Numeric, Term, Test, Var};
 use super::octagon::{Bound, Constraint, Domain, INFINITE, node};
 use super::packs::{Layout, Place};
-use faun_base::facts::Facts as Bounds;
+use crate::Bounds;
 
 /// How many sweeps a value may grow in before it is widened.
 const WIDEN: usize = 8;

@@ -7,7 +7,7 @@ use super::machine::{
     Allocated, Alu, Condition, Inst, MemoryWidth, Reg, RegisterWidth, ShiftDirection, SlotOffset,
 };
 use super::{Code, Reloc};
-use faun_base::index::Range;
+use barb::index::Range;
 
 #[expect(
     clippy::too_many_lines,
@@ -646,8 +646,8 @@ impl RawEncoder {
 
     /// Compute a scalar result in its allocated XMM register. Every value
     /// has a canonical low 64-bit word, including zero above binary32 bits.
-    fn float(&mut self, float: faun_base::float::Float, dst: Reg, left: Reg, right: Option<Reg>) {
-        use faun_base::float::{Format, Operation};
+    fn float(&mut self, float: barb::float::Float, dst: Reg, left: Reg, right: Option<Reg>) {
+        use barb::float::{Format, Operation};
         self.step();
         let wide = float.format == Format::Binary64;
         if !wide && float.operation == Operation::Sqrt && dst != left {
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn scalar_sse_operands_encode_at_both_widths() {
-        use faun_base::float::{Float, Format, Operation};
+        use barb::float::{Float, Format, Operation};
         let add = Float {
             format: Format::Binary64,
             operation: Operation::Add,

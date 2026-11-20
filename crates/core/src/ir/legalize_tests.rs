@@ -2,7 +2,7 @@
 //! only low exit statuses. Runtime inputs are parameters, never folded terms.
 use num_bigint::BigUint;
 
-use faun_base::facts::Facts;
+use barb::Bounds;
 
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
 use super::natural::Config;
@@ -319,7 +319,7 @@ fn division_by_a_word_across_the_immediate_boundary_matches_the_reference() {
             By::Constant(half + 1),
             By::Constant(most),
             By::Scalar(Class::fixed(8)),
-            By::Scalar(Class::Held(Facts {
+            By::Scalar(Class::Held(Bounds {
                 low: 1,
                 high: Some(200),
             })),

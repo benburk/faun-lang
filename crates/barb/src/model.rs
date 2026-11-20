@@ -2,8 +2,8 @@
 //!
 //! [`super::Program`] owns the pools these values refer to.
 
-pub use faun_base::index::Range;
-use faun_base::index::index;
+pub use crate::index::Range;
+use crate::index::index;
 
 // `Symbol` is a name. Most IR passes do not read the characters of one: names are
 // compared, hashed and copied as integers, and the string is read back only
@@ -161,7 +161,7 @@ pub struct Function {
     pub definition: Definition,
     /// The IEEE 754 operation its body computes, where its code is the
     /// standard's routine for one: see `floats::recognise`.
-    pub(super) float: Option<faun_base::float::Float>,
+    pub(super) float: Option<crate::float::Float>,
 }
 
 impl Function {

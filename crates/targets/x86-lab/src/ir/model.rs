@@ -2,9 +2,9 @@
 //!
 //! [`super::Program`] owns the pools these values refer to.
 
-use faun_base::facts::Facts;
-pub use faun_base::index::Range;
-use faun_base::index::index;
+use barb::Bounds;
+pub use barb::index::Range;
+use barb::index::index;
 
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. Most passes compare and copy symbols as integers; renderers read
@@ -63,7 +63,7 @@ pub enum Class {
     /// asking, rather than a machine deciding.
     ///
     /// Except at sixty-four bits: see [`Self::wraps`].
-    Held(Facts),
+    Held(Bounds),
     Address,
 }
 
@@ -72,7 +72,7 @@ impl Class {
     /// when a width is all that is known.
     #[must_use]
     pub const fn fixed(bits: u16) -> Self {
-        Self::Held(Facts {
+        Self::Held(Bounds {
             low: 0,
             high: Some(if bits >= 64 {
                 u64::MAX
@@ -84,7 +84,7 @@ impl Class {
 
     /// What is known about it, where it is a number worked out here.
     #[must_use]
-    pub const fn facts(self) -> Option<Facts> {
+    pub const fn facts(self) -> Option<Bounds> {
         match self {
             Self::Held(facts) => Some(facts),
             Self::Cell | Self::Buffer | Self::Natural | Self::Word | Self::Address => None,
@@ -131,7 +131,7 @@ pub enum Relation {
     /// Unsigned, comparing the two bit patterns.
     Less,
     /// True for an unordered pair or when the first IEEE value is less than or equal to the second.
-    FloatNotAbove(faun_base::float::Format),
+    FloatNotAbove(barb::float::Format),
 }
 
 /// Which way a shift moves the bits it keeps.
@@ -380,7 +380,7 @@ pub enum Op {
     /// these itself (see [`crate::platform::Routines::with_floats`]), for
     /// which it is one instruction; a NaN it writes may be any NaN.
     Float {
-        float: faun_base::float::Float,
+        float: barb::float::Float,
         operands: Range,
     },
     If {

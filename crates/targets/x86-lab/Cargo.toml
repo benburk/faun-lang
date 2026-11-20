@@ -7,7 +7,6 @@ description = "Experimental lowering from Barb to x86-64 Linux"
 
 [dependencies]
 faun-barb.workspace = true
-faun-base.workspace = true
 faun-core.workspace = true
 num-bigint = "0.4.8"
 num-traits = "0.2"

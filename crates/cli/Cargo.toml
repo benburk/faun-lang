@@ -34,7 +34,6 @@ zstd = "0.14.4"
 faun-frontend.workspace = true
 
 [dev-dependencies]
-faun-base.workspace = true
 libtest-mimic = "0.8"
 num-bigint = "0.4.8"
 

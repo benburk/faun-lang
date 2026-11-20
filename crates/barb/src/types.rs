@@ -2,7 +2,7 @@
 //! Program supplies this view from its own pools; IDs remain program-local.
 
 use super::{Ctor, CtorId, Type, TypeId};
-use faun_base::index::Pool;
+use crate::index::Pool;
 
 /// Structural behavior relevant to runtime representation selection.
 ///

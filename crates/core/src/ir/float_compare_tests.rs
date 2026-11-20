@@ -1,6 +1,6 @@
 //! The same IEEE boundary matrix exercises portable and native comparison lowering.
 use super::{Class, Program, evaluate, validate};
-use faun_base::float::Format;
+use barb::float::Format;
 use num_bigint::BigUint;
 
 fn patterns(format: Format) -> Vec<u64> {

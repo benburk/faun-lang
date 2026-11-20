@@ -25,7 +25,7 @@ use super::facts::{Operation, Recognised, SequenceOperation};
 use super::model::{Body, CtorId, Expr, ExprId, FnId, TypeId};
 use super::program::Program;
 use super::{Shape, shape, single_field};
-use faun_base::facts::Facts as Bounds;
+use crate::Bounds;
 
 /// A value of a definition, by its place in scope: the parameters first,
 /// then each statement and each arm's fields in turn.
@@ -268,7 +268,7 @@ pub(super) fn extract(
     }
     Numeric {
         functions,
-        slots: super::bounds::field_slots(program),
+        slots: super::ranges::field_slots(program),
         outside: unknown(program, assumed, &outside),
         divisors,
         length: assumed.length,
@@ -436,7 +436,7 @@ impl Reading<'_> {
         };
         Kind::Build {
             args: self.atoms(args),
-            slots: super::bounds::slot(self.program, ctor, 0),
+            slots: super::ranges::slot(self.program, ctor, 0),
             built,
         }
     }
@@ -460,7 +460,7 @@ impl Reading<'_> {
             };
             let slots = wrappers
                 .into_iter()
-                .map(|wrapper| super::bounds::slot(self.program, wrapper, 0))
+                .map(|wrapper| super::ranges::slot(self.program, wrapper, 0))
                 .collect();
             Some((pattern, slots))
         });
@@ -495,7 +495,7 @@ impl Reading<'_> {
                     Test::Wrapper(_) | Test::Empty => Field::Whole,
                     _ if rest == Some(at) => Field::Rest,
                     _ => Field::Slot {
-                        slot: super::bounds::slot(self.program, ctor, at),
+                        slot: super::ranges::slot(self.program, ctor, at),
                         tags: tag_count(self.program, ty),
                     },
                 };
@@ -533,7 +533,7 @@ impl Constants<'_> {
             .fields(&mut budget)
             .expect("validated constants can be revisited");
         for (at, field) in fields.into_iter().enumerate() {
-            let place = super::bounds::slot(self.program, ctor.constructor(), at);
+            let place = super::ranges::slot(self.program, ctor.constructor(), at);
             self.stores
                 .push((place, constant_bounds(self.program, field)));
             self.fields(field);
@@ -564,7 +564,7 @@ impl Constants<'_> {
         };
         let element = usize::from(recursive == 0);
         self.stores.push((
-            super::bounds::slot(self.program, cons, element),
+            super::ranges::slot(self.program, cons, element),
             Bounds {
                 low: u64::from(low),
                 high: Some(u64::from(high)),
@@ -581,7 +581,7 @@ impl Constants<'_> {
             for (at, field) in fields.into_iter().enumerate() {
                 let at = if at >= recursive { at + 1 } else { at };
                 self.stores.push((
-                    super::bounds::slot(self.program, cons, at),
+                    super::ranges::slot(self.program, cons, at),
                     constant_bounds(self.program, field),
                 ));
                 self.fields(field);

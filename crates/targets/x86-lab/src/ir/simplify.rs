@@ -55,8 +55,8 @@ use rustc_hash::FxHashMap as HashMap;
 
 use num_bigint::BigUint;
 
-use faun_base::facts::Facts;
-use faun_base::float::{Float, Format, Operation};
+use barb::Bounds;
+use barb::float::{Float, Format, Operation};
 
 use super::{
     Binary, Builder, Class, Direction, Exit, Op, Program, Range, RegionId, Relation, ShapeId,
@@ -652,7 +652,7 @@ impl Simplify {
             return false;
         }
         let next = b.constant(
-            Class::Held(Facts {
+            Class::Held(Bounds {
                 low: next,
                 high: Some(next),
             }),
@@ -944,7 +944,7 @@ impl Simplify {
             Op::NaturalConstant(_) | Op::Constant { .. } => {
                 let digits = self.known(source, value)?.to_u64_digits();
                 let number = digits.first().copied().unwrap_or(0);
-                Some(b.constant(Class::Held(Facts::at(number)), number))
+                Some(b.constant(Class::Held(Bounds::at(number)), number))
             }
             Op::Binary { op, left, right } => {
                 if op == Binary::Mod
@@ -1071,7 +1071,7 @@ impl Simplify {
         // keeps a constant from taking the range of whatever it stands
         // beside. Anything reading it has room, the run having been checked
         // to fit the width the step is taken at.
-        let by = b.constant(Class::Held(Facts::at(step.by)), step.by);
+        let by = b.constant(Class::Held(Bounds::at(step.by)), step.by);
         let from = rebuild.value(step.from);
         rebuild.stands_for(result, b.binary_at(class, Binary::Add, from, by));
         true

@@ -11,7 +11,7 @@
 //! constants are neither dropped nor renumbered.
 
 use super::{Expr, ExprId, FnId, Program};
-use faun_base::index::Pool;
+use crate::index::Pool;
 
 /// Keep only the definitions the entry reaches.
 pub(crate) fn sweep(program: &mut Program) {

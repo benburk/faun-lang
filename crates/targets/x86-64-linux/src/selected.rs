@@ -10,7 +10,7 @@ mod thread;
 
 use super::machine::Reg;
 use crate::{ARG_COUNT, WORD_BITS};
-use faun_base::index::{Pool, Range};
+use barb::index::{Pool, Range};
 use faun_core::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op as SourceOp, Program, RegionId, Relation,
     Terminator as SourceTerminator, ValueId, Width,
@@ -395,7 +395,7 @@ enum Immediate {
         bits: u16,
     },
     Function(FunctionId),
-    Float(faun_base::float::Float),
+    Float(barb::float::Float),
     /// A word slot in a call's area: overflow arguments, then overflow results.
     Slot(u32),
 }

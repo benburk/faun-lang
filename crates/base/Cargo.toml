@@ -1,9 +1,0 @@
-[package]
-name = "faun-base"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "What every tier of the Faun compiler says alike: dense indices, IEEE float operations and what is known of a number"
-
-[lints]
-workspace = true

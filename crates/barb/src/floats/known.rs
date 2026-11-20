@@ -2,7 +2,7 @@
 //! from the standard's float operations, as the code of each comes to after
 //! canonicalizing. Do not edit by hand.
 
-use faun_base::float::{Float, Format, Operation};
+use crate::float::{Float, Format, Operation};
 
 pub(super) const KNOWN: &[(u128, Float)] = &[
     (

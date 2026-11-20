@@ -1,6 +1,6 @@
 //! Value identities applied before storage or instruction selection.
 use super::{Atom, Expr, FnId, Rewrite, Scope};
-use faun_base::float::{Float, Format, Operation};
+use crate::float::{Float, Format, Operation};
 
 impl Rewrite<'_> {
     /// Reverse a bounded constructor chain directly onto its destination.

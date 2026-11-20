@@ -261,7 +261,7 @@ pub(crate) enum Inst {
     /// Scalar SSE2 over allocated XMM registers. Binary operations tie
     /// their result to the left input; sqrt has independent operands.
     Float {
-        float: faun_base::float::Float,
+        float: barb::float::Float,
         dst: Reg,
         left: Reg,
         right: Option<Reg>,
@@ -638,7 +638,7 @@ impl AllocatedBuilder {
 
     pub(crate) fn float(
         &mut self,
-        float: faun_base::float::Float,
+        float: barb::float::Float,
         dst: Reg,
         left: Reg,
         right: Option<Reg>,

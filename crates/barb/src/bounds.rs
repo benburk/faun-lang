@@ -1,207 +1,280 @@
-//! What a number can be, worked out from what a program does with it.
+//! What is known about a value, said once for every tier that reads one.
 //!
-//! A type says a value is a number and nothing about which numbers, so
-//! deciding how wide to hold one is deciding what it could be. That is a
-//! question about terms, not about storage: `Succ` is one more than what it
-//! wraps, a match on `Zero` says which argument is nought in which arm, and
-//! a call answers whatever the name it calls does. None of it needs a word
-//! size, which is why it is worked out here and read below.
+//! Barb works these out, machine IR carries them as the class a value is
+//! held at, and a target reads them to decide how many bytes a value takes
+//! and whether anything has to be taken off it. Said once, here where it is
+//! worked out, and read below in the same words, because a fact said twice
+//! in two vocabularies is two facts that have to agree and nothing checking
+//! that they do.
 //!
-//! It is worked out in three stages (`notes/machine/ranges.md`). Each
-//! definition is read once into a numeric program ([`super::numeric`]),
-//! which keeps only what bears on numbers, and each statement the Barb term
-//! it came from. A solver ([`super::solve`]) works out every value of it,
-//! with intervals and, where values are related, an octagon besides. And
-//! what it found is mapped back here to the terms, definitions and fields
-//! the tier below reads, as [`Ranges`].
-//!
-//! What comes out is per term, since that is what the tier deciding
-//! representation walks: every term has an answer, so how wide to hold what
-//! it answers is a question with one. A term walked more than once -- an
-//! arm reached at two widths, a definition gone round again -- holds what
-//! it held at any of them.
-//!
-//! A field is held the same way: every value built into one field of one
-//! constructor, anywhere, is what reading that field back can answer. That
-//! is what lets a number inside a product be held as narrowly as a number
-//! outside one. A value no walk sees built -- handed in at the entry, or
-//! answered by something outside -- could hold anything in any field it
-//! reaches.
-//!
-//! Nothing here is exact. A bound too wide costs a wider number and never a
-//! wrong one, so where the walk cannot say -- a definition that counts up
-//! without a last step, an argument from outside -- it says so and the
-//! tiers below hold what they must.
+//! Today this is an interval. What else is worth knowing -- which bits are
+//! certainly nought, whether a value is certainly not nought -- belongs
+//! beside it rather than instead of it: an interval answers what a
+//! comparison decides, and a bit pattern answers what a mask does, and
+//! neither answers the other.
 
-use super::model::{CtorId, FnId, TypeId};
-use super::octagon::Octagon;
-use super::program::Program;
-use super::solve::{Solution, solve};
-use super::{Shape, shape, single_field};
-pub use faun_base::facts::Facts as Bounds;
-
-/// Final conservative ranges consumed by lowering.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Ranges {
-    /// What each term answers, by the term.
-    pub terms: Vec<Bounds>,
-    pub matched: Vec<Bounds>,
-    pub arguments: Vec<Vec<Bounds>>,
-    /// What each definition is handed, by definition.
-    pub takes: Vec<Vec<Bounds>>,
-    /// And what each answers.
-    pub answers: Vec<Bounds>,
-    /// What each constructor field holds, by its place in the field pool.
-    pub fields: Vec<Bounds>,
+/// The least and greatest a number can be. No greatest is a number counting
+/// up without a last step, which is every `Nat` until something says less.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Bounds {
+    pub low: u64,
+    pub high: Option<u64>,
 }
 
-pub(super) fn analyze(
-    program: &Program,
-    recognised: &super::facts::Recognised,
-    assumed: &Assumed,
-) -> Ranges {
-    let numeric = super::numeric::extract(program, recognised, assumed);
-    mapped(program, assumed, solve::<Octagon>(&numeric))
-}
+impl Bounds {
+    /// Nothing is known, so anything is possible.
+    pub const ANY: Self = Self { low: 0, high: None };
 
-/// What the solver found, as the tier below reads it. A term nothing
-/// reached is a term nothing knows, and so is a parameter nothing was ever
-/// handed.
-fn mapped(program: &Program, assumed: &Assumed, solution: Solution) -> Ranges {
-    let takes = solution
-        .takes
-        .into_iter()
-        .enumerate()
-        .map(|(at, takes)| {
-            let params = program.params(FnId::at(at)).len();
-            takes.map_or_else(
-                || vec![Bounds::ANY; params],
-                |takes| takes.into_iter().map(|held| anything(Some(held))).collect(),
-            )
-        })
-        .collect();
-    let mut fields: Vec<_> = solution.slots.into_iter().map(anything).collect();
-    // A spine's rest is read as a step of its count, not as what was built
-    // there, so nothing is said of that field.
-    for ty in 0..program.types().len() {
-        if let Shape::Spine {
-            cons, recursive, ..
-        } = shape(program, TypeId::at(ty))
-        {
-            fields[slot(program, cons, recursive)] = Bounds::ANY;
+    /// And no number at all, which is where a walk starts: a name nothing
+    /// has reached yet holds nothing, rather than holding anything. Starting
+    /// at anything would be sound and would stay there, since what is known
+    /// only ever grows.
+    pub const NOTHING: Self = Self {
+        low: 1,
+        high: Some(0),
+    };
+
+    #[must_use]
+    pub const fn is_nothing(self) -> bool {
+        matches!(self.high, Some(high) if high < self.low)
+    }
+
+    /// Exactly this.
+    #[must_use]
+    pub const fn at(value: u64) -> Self {
+        Self {
+            low: value,
+            high: Some(value),
         }
     }
-    // What is assumed of a field holds wherever the value was built.
-    for &(ctor, at, bounds) in &assumed.fields {
-        let place = slot(program, ctor, at);
-        fields[place] = fields[place].and(bounds);
-    }
-    let known = |held: Vec<Bounds>| held.into_iter().map(|held| anything(Some(held))).collect();
-    Ranges {
-        terms: known(solution.terms),
-        matched: known(solution.matched),
-        arguments: solution.arguments.into_iter().map(known).collect(),
-        takes,
-        answers: solution.answers.into_iter().map(anything).collect(),
-        fields,
-    }
-}
 
-/// What nothing known comes out as. The walk starts at nothing so that one
-/// name's ignorance does not spread to every name that calls it; what comes
-/// out is read by a tier that has to hold something, and nothing known
-/// there means anything at all.
-const fn anything(held: Option<Bounds>) -> Bounds {
-    match held {
-        Some(held) if !held.is_nothing() => held,
-        _ => Bounds::ANY,
-    }
-}
-
-/// What the tier lowering a program assumes of values that come from
-/// outside it: what its routines answer and what its target hands the entry.
-///
-/// Barb works out what the program itself says and nothing about any
-/// target; these are asked of an analysis by the tier that knows the target,
-/// and what comes out belongs to that tier, never to the program.
-#[derive(Clone, Debug, Default)]
-pub struct Assumed {
-    /// What a declaration with no body answers.
-    pub results: Vec<(FnId, Bounds)>,
-    /// What the entry's parameters are handed, by place.
-    pub parameters: Vec<(usize, Bounds)>,
-    /// What every value of a constructor holds in one field.
-    pub fields: Vec<(CtorId, usize, Bounds)>,
-    /// What any sequence's length can be, where anything says.
-    pub length: Option<Bounds>,
-    /// Whether a recognized float operation is answered by a machine rather
-    /// than by its body. This selects native float lowering and range
-    /// assumptions; semantic recognition still reads the operation.
-    pub floats: bool,
-}
-
-impl Assumed {
-    pub(super) fn result(&self, id: FnId) -> Bounds {
-        self.results
-            .iter()
-            .find(|(of, _)| *of == id)
-            .map_or(Bounds::ANY, |(_, bounds)| *bounds)
-    }
-
-    pub(super) fn parameter(&self, at: usize) -> Bounds {
-        self.parameters
-            .iter()
-            .find(|(of, _)| *of == at)
-            .map_or(Bounds::ANY, |(_, bounds)| *bounds)
-    }
-
-    pub(super) fn field(&self, ctor: CtorId, at: usize) -> Bounds {
-        self.fields
-            .iter()
-            .find(|(of, place, _)| *of == ctor && *place == at)
-            .map_or(Bounds::ANY, |(_, _, bounds)| *bounds)
-    }
-
-    /// What a value of `ty` built outside is: anything, but for what is
-    /// assumed of the one field of each wrapper it is held through. A wrapper
-    /// is its field, so that bounds the value itself.
-    pub(super) fn value(&self, program: &Program, ty: TypeId) -> Bounds {
-        let mut held = Bounds::ANY;
-        let mut ty = ty;
-        for _ in 0..program.types().len() {
-            let Some((ctor, field)) = single_field(program, ty) else {
-                break;
-            };
-            held = held.and(self.field(ctor, 0));
-            ty = field;
+    /// Either of two, which is what a match holds where its arms disagree.
+    #[must_use]
+    pub fn or(self, other: Self) -> Self {
+        if self.is_nothing() {
+            return other;
         }
-        held
+        if other.is_nothing() {
+            return self;
+        }
+        Self {
+            low: self.low.min(other.low),
+            high: self.high.zip(other.high).map(|(a, b)| a.max(b)),
+        }
     }
-}
 
-/// How many field places the program declares, end to end.
-pub(super) fn field_slots(program: &Program) -> usize {
-    (0..program.types().len())
-        .flat_map(|ty| program.ctors(TypeId::at(ty)))
-        .map(|ctor| ctor.fields.range().end)
-        .max()
-        .unwrap_or(0)
-}
+    /// One more, which is what a constructor of a number answers.
+    #[must_use]
+    pub fn up(self) -> Self {
+        if self.is_nothing() {
+            return self;
+        }
+        Self {
+            low: self.low.saturating_add(1),
+            high: self.high.and_then(|high| high.checked_add(1)),
+        }
+    }
 
-/// The place one field of one constructor has in the field pool.
-pub(super) fn slot(program: &Program, ctor: CtorId, at: usize) -> usize {
-    program.ctor(ctor).fields.range().start + at
-}
+    /// One less, stopping at nought, which is what taking one apart holds.
+    #[must_use]
+    pub fn down(self) -> Self {
+        if self.is_nothing() {
+            return self;
+        }
+        Self {
+            low: self.low.saturating_sub(1),
+            high: self.high.map(|high| high.saturating_sub(1)),
+        }
+    }
 
-/// The values any of these constants can represent, using the same join as a
-/// match. For a sequence or a transparent wrapper around one, this is its
-/// element count. An empty set has no possible value.
-#[must_use]
-pub fn bounds_of_constants<'a>(
-    program: &Program,
-    values: impl IntoIterator<Item = super::Constant<'a>>,
-) -> Bounds {
-    values.into_iter().fold(Bounds::NOTHING, |held, value| {
-        held.or(super::numeric::constant_bounds(program, value))
-    })
+    /// Both together, which is what adding them answers.
+    #[must_use]
+    pub fn plus(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        Self {
+            low: self.low.saturating_add(other.low),
+            high: self
+                .high
+                .zip(other.high)
+                .and_then(|(a, b)| a.checked_add(b)),
+        }
+    }
+
+    /// The intersection is what a branch establishes in addition to its input.
+    #[must_use]
+    pub fn and(self, other: Self) -> Self {
+        Self {
+            low: self.low.max(other.low),
+            high: match (self.high, other.high) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn monus(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        Self {
+            low: other.high.map_or(0, |b| self.low.saturating_sub(b)),
+            high: self.high.map(|a| a.saturating_sub(other.low)),
+        }
+    }
+
+    #[must_use]
+    pub fn times(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        if self.high == Some(0) || other.high == Some(0) {
+            return Self::at(0);
+        }
+        Self {
+            low: self.low.saturating_mul(other.low),
+            high: self
+                .high
+                .zip(other.high)
+                .and_then(|(a, b)| a.checked_mul(b)),
+        }
+    }
+
+    #[must_use]
+    pub fn quotient(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        if other.high == Some(0) {
+            return Self::at(0);
+        }
+        Self {
+            low: if other.low == 0 {
+                0
+            } else {
+                other.high.map_or(0, |b| self.low / b)
+            },
+            high: self.high.map(|a| a / other.low.max(1)),
+        }
+    }
+
+    #[must_use]
+    pub fn remainder(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        if other.high == Some(0) {
+            return self;
+        }
+        let high = if other.low == 0 {
+            self.high
+        } else {
+            match (self.high, other.high.map(|b| b.saturating_sub(1))) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        };
+        Self { low: 0, high }
+    }
+
+    /// What a bitwise and of the two can be: no bit either lacks, so no
+    /// more than the smaller.
+    #[must_use]
+    pub fn masked(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        Self {
+            low: 0,
+            high: match (self.high, other.high) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        }
+    }
+
+    /// What a bitwise or, or exclusive or, of the two can be: no bit above
+    /// the wider's highest. `at_least` is whether the answer is at least
+    /// each operand, as an or's is and an exclusive or's is not.
+    #[must_use]
+    pub fn merged(self, other: Self, at_least: bool) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        let high = self.high.zip(other.high).map(|(a, b)| {
+            let widest = a.max(b);
+            u64::MAX.checked_shr(widest.leading_zeros()).unwrap_or(0)
+        });
+        Self {
+            low: if at_least { self.low.max(other.low) } else { 0 },
+            high,
+        }
+    }
+
+    /// What the first to the power of the second can be: at least one
+    /// where the base is, and no more than the greatest base to the
+    /// greatest exponent.
+    #[must_use]
+    pub fn power(self, exponent: Self) -> Self {
+        if self.is_nothing() || exponent.is_nothing() {
+            return Self::NOTHING;
+        }
+        let high = match self.high {
+            // Nought to the nought is one, and to anything else nought.
+            Some(0 | 1) => Some(1),
+            Some(base) => exponent
+                .high
+                .and_then(|exponent| u32::try_from(exponent).ok())
+                .and_then(|exponent| base.checked_pow(exponent)),
+            None => None,
+        };
+        Self {
+            low: u64::from(self.low > 0),
+            high,
+        }
+    }
+
+    /// How many bits hold every number this could be, where anything does.
+    #[must_use]
+    pub fn width(self) -> Option<u16> {
+        // A `u64` needs at most sixty-four bits, so the count is one a
+        // `u16` holds however big the number is.
+        let high = self.high?;
+        u16::try_from(u64::BITS - high.leading_zeros()).ok()
+    }
+
+    /// Whether nothing this can be is above anything that one can be.
+    ///
+    /// This is what says a value is already something the other admits:
+    /// what a place has to hold is the greatest that reaches it, and a
+    /// least says nothing about that. A value that might be nought where
+    /// something expects at least two is still a value that place holds.
+    #[must_use]
+    pub const fn no_higher_than(self, other: Self) -> bool {
+        match (self.high, other.high) {
+            (_, None) => true,
+            (None, Some(_)) => false,
+            (Some(held), Some(other)) => held <= other,
+        }
+    }
+
+    /// Whether this says less than `other` does, which is what says a walk
+    /// has settled.
+    #[must_use]
+    pub const fn within(self, other: Self) -> bool {
+        if self.is_nothing() {
+            return true;
+        }
+        if other.is_nothing() {
+            return false;
+        }
+        self.low >= other.low
+            && match (self.high, other.high) {
+                (_, None) => true,
+                (None, Some(_)) => false,
+                (Some(held), Some(other)) => held <= other,
+            }
+    }
 }
