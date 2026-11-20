@@ -2699,6 +2699,9 @@ impl Lowering<'_> {
                 self.compare_byte(left.byte(0), right.byte(0));
                 self.asm.branch(Cc::NoCarry, yes);
             }
+            Relation::FloatNotAbove(_) => {
+                unreachable!("accepted only where the target compares floats")
+            }
         }
         self.asm.bind(no);
     }
@@ -2739,6 +2742,9 @@ impl Lowering<'_> {
                 self.compare_byte(left.byte(0), right.byte(0));
                 self.asm.branch(Cc::Carry, no);
                 self.asm.bind(yes);
+            }
+            Relation::FloatNotAbove(_) => {
+                unreachable!("accepted only where the target compares floats")
             }
         }
     }

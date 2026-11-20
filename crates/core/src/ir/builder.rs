@@ -316,8 +316,22 @@ impl Builder<'_> {
         )
     }
 
-    /// Unordered-or-less-or-equal, expressed on IEEE bit patterns.
+    /// Unordered-or-less-or-equal, as one comparison: for a machine that
+    /// compares IEEE values itself.
     pub(crate) fn float_not_above(
+        &mut self,
+        format: barb::float::Format,
+        left: ValueId,
+        right: ValueId,
+    ) -> ValueId {
+        let class = Class::fixed(format.bits());
+        let left = self.convert(class, left);
+        let right = self.convert(class, right);
+        self.compare(Relation::FloatNotAbove(format), left, right)
+    }
+
+    /// Unordered-or-less-or-equal, expressed on IEEE bit patterns.
+    pub(crate) fn float_not_above_in_bits(
         &mut self,
         format: barb::float::Format,
         left: ValueId,

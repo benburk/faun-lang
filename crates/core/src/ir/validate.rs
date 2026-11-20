@@ -584,6 +584,15 @@ impl Checker<'_> {
             Op::Binary { left, right, .. } => self.binary(left, right, results)?,
             Op::Shift { value, by, .. } => self.shift(value, by, results)?,
             Op::Float { float, operands } => self.float(float, operands, results)?,
+            Op::Compare {
+                relation: super::Relation::FloatNotAbove(format),
+                left,
+                right,
+            } => {
+                self.require(left, Class::fixed(format.bits()))?;
+                self.require(right, Class::fixed(format.bits()))?;
+                self.results(results, &[Class::Word])?;
+            }
             Op::Compare { left, right, .. } => {
                 self.comparison(left, right)?;
                 self.results(results, &[Class::Word])?;

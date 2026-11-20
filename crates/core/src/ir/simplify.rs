@@ -45,14 +45,17 @@
 //! requirement is worked out exactly, and left alone where the answer would
 //! not fit it.
 
+mod float_sign;
 mod prepend;
+
+use prepend::{Pushed, temporary_pushes};
 
 use rustc_hash::FxHashMap as HashMap;
 
 use num_bigint::BigUint;
-use prepend::{Pushed, temporary_pushes};
 
 use barb::Bounds;
+use barb::float::{Float, Format, Operation};
 
 use super::{
     Binary, Builder, Class, Direction, Exit, Op, Program, Range, RegionId, Relation, ShapeId,
@@ -135,6 +138,29 @@ impl rewrite::Pass for Simplify {
             return true;
         }
         match op {
+            Op::Float { float, operands } if float.operation == Operation::Mul => {
+                let two = match float.format {
+                    Format::Binary32 => u64::from(2.0f32.to_bits()),
+                    Format::Binary64 => 2.0f64.to_bits(),
+                };
+                let args = rebuild.source().values(operands);
+                let value = if self.number(args[0]) == Some(two) {
+                    args[1]
+                } else if self.number(args[1]) == Some(two) {
+                    args[0]
+                } else {
+                    return false;
+                };
+                // Doubling has the same exact result before rounding, including
+                // the sign of zero. The scalar add needs only one input register.
+                let add = Float {
+                    operation: Operation::Add,
+                    ..float
+                };
+                let value = rebuild.value(value);
+                rebuild.stands_for(results[0], b.float(add, &[value, value]));
+                true
+            }
             Op::BufferPrepend { operands, shape } => {
                 self.prepend_elements(rebuild, b, operands, shape, results)
             }
@@ -261,6 +287,25 @@ impl rewrite::Pass for Simplify {
                 });
                 self.folded[results[0].index()] = Some(answer);
                 rebuild.stands_for(results[0], b.constant(Class::Word, answer));
+                true
+            }
+            Op::Compare {
+                relation: Relation::Less,
+                left,
+                right,
+            } => {
+                let Some((format, a, c)) =
+                    self.wrote
+                        .nonnegative_difference(rebuild.source(), left, right)
+                else {
+                    return false;
+                };
+                let held = b.compare(
+                    Relation::FloatNotAbove(format),
+                    rebuild.value(c),
+                    rebuild.value(a),
+                );
+                rebuild.stands_for(results[0], held);
                 true
             }
             Op::Compare {

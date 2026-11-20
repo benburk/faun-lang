@@ -880,6 +880,18 @@ impl<H: Host> Machine<'_, H> {
         Ok(Number::from(u8::from(match relation {
             Relation::Equal => left == right,
             Relation::Less => left < right,
+            Relation::FloatNotAbove(format) => {
+                let number = |v: Number| -> Result<f64, Error> {
+                    let bits = v.small().ok_or_else(|| invalid("a float's operand"))?;
+                    Ok(match format {
+                        barb::float::Format::Binary64 => f64::from_bits(bits),
+                        barb::float::Format::Binary32 => f64::from(f32::from_bits(
+                            u32::try_from(bits).map_err(|_| invalid("a binary32 operand"))?,
+                        )),
+                    })
+                };
+                number(left)?.partial_cmp(&number(right)?) != Some(std::cmp::Ordering::Greater)
+            }
         })))
     }
 

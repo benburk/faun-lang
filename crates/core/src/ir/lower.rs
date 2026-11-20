@@ -157,6 +157,7 @@ fn lowered(
 
     let lowering = Lowering {
         native_inline_bytes: routines.word() == Some(64),
+        floats: routines.floats(),
         barb: program,
         facts,
         carries: demand.carries,
@@ -2141,6 +2142,9 @@ fn returned(
 
 struct Lowering<'a> {
     native_inline_bytes: bool,
+    /// Whether the machine compares IEEE values itself, so that a float
+    /// comparison is one comparison rather than one on bit patterns.
+    floats: bool,
     barb: &'a barb::Program,
     facts: &'a barb::Facts,
     /// Whether a value of each barb type takes a place, by type.
@@ -2647,7 +2651,11 @@ impl Lowering<'_> {
     ) -> ValueId {
         let left = Self::scalar(locals, comparison.left);
         let right = Self::scalar(locals, comparison.right);
-        let condition = b.float_not_above(comparison.format, right, left);
+        let condition = if self.floats {
+            b.float_not_above(comparison.format, right, left)
+        } else {
+            b.float_not_above_in_bits(comparison.format, right, left)
+        };
         let yes = u64::from(self.barb.tag(comparison.yes));
         let no = u64::from(self.barb.tag(comparison.no));
         let class = width(barb::Bounds::at(yes).or(barb::Bounds::at(no)));

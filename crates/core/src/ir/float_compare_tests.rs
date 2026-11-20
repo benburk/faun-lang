@@ -26,12 +26,19 @@ fn patterns(format: Format) -> Vec<u64> {
 
 #[test]
 fn unordered_comparison_preserves_ieee_boundaries() {
-    for format in [Format::Binary32, Format::Binary64] {
+    for (format, native) in [Format::Binary32, Format::Binary64]
+        .into_iter()
+        .flat_map(|format| [(format, false), (format, true)])
+    {
         let class = Class::fixed(format.bits());
         let (mut program, entry) =
             Program::new_with_params("compare", &[("left", class), ("right", class)]);
         program.define(entry, |b, args| {
-            let result = b.float_not_above(format, args[0], args[1]);
+            let result = if native {
+                b.float_not_above(format, args[0], args[1])
+            } else {
+                b.float_not_above_in_bits(format, args[0], args[1])
+            };
             b.ret(&[result]);
         });
         validate(&program).unwrap();
@@ -54,7 +61,7 @@ fn unordered_comparison_preserves_ieee_boundaries() {
                 assert_eq!(
                     result.returned().unwrap(),
                     &[BigUint::from(expected)],
-                    "{format:?}: {left:x}, {right:x}"
+                    "{format:?} native {native}: {left:x}, {right:x}"
                 );
             }
         }
