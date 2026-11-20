@@ -23,23 +23,7 @@ pub fn lower_to_machine_ir(
     program: &barb::Program,
     routines: &platform::Routines,
 ) -> Result<ir::Program, String> {
-    lower_with_pipeline(program, routines, targets::Pipeline::Stock)
-}
-
-/// Lower Barb using the selected target-independent representation passes.
-///
-/// # Errors
-/// Reports invalid Barb or machine IR.
-pub fn lower_with_pipeline(
-    program: &barb::Program,
-    routines: &platform::Routines,
-    pipeline: targets::Pipeline,
-) -> Result<ir::Program, String> {
-    let (lower, counting): (Lower, Lower) = match pipeline {
-        targets::Pipeline::Stock => (ir::lower, ir::lower_counting_arguments),
-        targets::Pipeline::Lab => (ir::lab::lower, ir::lab::lower_counting_arguments),
-    };
-    let held = lower(program, routines)?;
+    let held = ir::lower(program, routines)?;
     ir::validate(&held)?;
     let optimized = ir::optimize(&held);
     // A program that reads only how many arguments it has keeps no call
@@ -52,11 +36,9 @@ pub fn lower_with_pipeline(
     if let Some(made) = made
         && !optimized.calls(ir::FunctionId::at(made))
     {
-        let counted = counting(program, routines)?;
+        let counted = ir::lower_counting_arguments(program, routines)?;
         ir::validate(&counted)?;
         return Ok(ir::optimize(&counted));
     }
     Ok(optimized)
 }
-
-type Lower = fn(&barb::Program, &platform::Routines) -> Result<ir::Program, String>;

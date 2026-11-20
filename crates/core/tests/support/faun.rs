@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use faun_core::ir::Program;
-use faun_core::targets::{Pipeline, Target};
+use faun_core::targets::Target;
 
 /// Lower a Faun application to the machine IR `target` compiles: to Barb,
 /// optimized, then to machine IR.
@@ -17,7 +17,7 @@ pub(crate) fn lower(text: &str, target: &dyn Target) -> Result<Program, String> 
     fs::remove_dir_all(dir).expect("the scratch source to go");
     let mut barb = barb?;
     barb::optimize(&mut barb);
-    faun_driver::machine_ir(&barb, target, Pipeline::Stock)
+    faun_driver::machine_ir(&barb, target)
 }
 
 /// Lower a Faun package's expectations as `faun test` builds them: an
@@ -44,7 +44,7 @@ pub(crate) fn expectations_at(
 ) -> Result<Program, String> {
     let mut barb = ::faun_frontend::lower_tests_to_barb(path, &faun_driver::platform(target))?.barb;
     barb::optimize(&mut barb);
-    faun_driver::machine_ir(&barb, target, Pipeline::Stock)
+    faun_driver::machine_ir(&barb, target)
 }
 
 /// The same, without optimizing Barb, for a test of shapes the optimizer
@@ -57,7 +57,7 @@ pub(crate) fn unoptimized(text: &str, target: &dyn Target) -> Result<Program, St
     let (dir, path) = source_file(text);
     let barb = ::faun_frontend::lower_to_barb(&path, &faun_driver::platform(target));
     fs::remove_dir_all(dir).expect("the scratch source to go");
-    faun_driver::machine_ir(&barb?, target, Pipeline::Stock)
+    faun_driver::machine_ir(&barb?, target)
 }
 
 /// Write `text` as the entry module of a fresh scratch directory.

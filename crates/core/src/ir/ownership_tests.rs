@@ -81,7 +81,7 @@ fn projected_children_acquire_claims_when_they_escape_a_borrowed_root() {
             inline_counts: false,
             join_routines: false,
         };
-        let scalar = lab::legalize(&p, config).unwrap();
+        let scalar = legalize(&p, config).unwrap();
         let (after, _) = run(&scalar, 64, &[]);
         assert_eq!(after.returned().unwrap(), [BigUint::from(141u8)]);
         assert_eq!(after.outcome, run(&p, 64, &[]).0.outcome);

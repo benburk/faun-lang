@@ -2,27 +2,23 @@
 //! built: `List.range(n).fold(...)`, `List.repeat(x, n).sum()` and a walk
 //! through `List.range(n).map(...)` cost what the loop written by hand
 //! costs, and so does `key == [grey]`, which the comparison takes apart
-//! where the caller made it, under either pipeline.
+//! where the caller made it.
 mod support;
 
-use faun_core::targets::Pipeline;
-use support::{Package, run_counted_through};
+use support::{Package, run_counted};
 
 /// The fuel a program spends on `steps` bytes of input, which it takes as
 /// how many steps to make, and what it prints.
-fn spent(package: &Package, steps: usize, pipeline: Pipeline) -> (String, u64) {
-    let (status, written, fuel) = run_counted_through(&package.entry(), &vec![0; steps], pipeline);
+fn spent(package: &Package, steps: usize) -> (String, u64) {
+    let (status, written, fuel) = run_counted(&package.entry(), &vec![0; steps]);
     assert_eq!(status, 0);
     (written.trim().to_owned(), fuel)
 }
 
-/// Both lowerings, each held to the same costs.
-const PIPELINES: [Pipeline; 2] = [Pipeline::Stock, Pipeline::Lab];
-
 /// What 100 steps more cost, a step.
-fn per_step(package: &Package, pipeline: Pipeline) -> (String, u64) {
-    let (_, first) = spent(package, 100, pipeline);
-    let (printed, second) = spent(package, 200, pipeline);
+fn per_step(package: &Package) -> (String, u64) {
+    let (_, first) = spent(package, 100);
+    let (printed, second) = spent(package, 200);
     (printed, (second - first) / 100)
 }
 
@@ -53,15 +49,13 @@ fn stepping(name: &str, source: &str) -> Package {
 fn as_cheap(name: &str, slack: u64, natural: &str, by_hand: &str) {
     let natural = stepping(name, natural);
     let by_hand = stepping(&format!("{name}-by-hand"), by_hand);
-    for pipeline in PIPELINES {
-        let (natural_printed, natural_step) = per_step(&natural, pipeline);
-        let (hand_printed, hand_step) = per_step(&by_hand, pipeline);
-        assert_eq!(natural_printed, hand_printed);
-        assert!(
-            natural_step * 100 <= hand_step * (100 + slack),
-            "{pipeline:?}: a step cost {natural_step} fuel written naturally and {hand_step} by hand"
-        );
-    }
+    let (natural_printed, natural_step) = per_step(&natural);
+    let (hand_printed, hand_step) = per_step(&by_hand);
+    assert_eq!(natural_printed, hand_printed);
+    assert!(
+        natural_step * 100 <= hand_step * (100 + slack),
+        "a step cost {natural_step} fuel written naturally and {hand_step} by hand"
+    );
 }
 
 #[test]
@@ -150,15 +144,13 @@ fn a_count_taken_one_from_costs_what_times_costs() {
         )
         ",
     );
-    for pipeline in PIPELINES {
-        let (natural_printed, natural_step) = per_step(&natural, pipeline);
-        let (times_printed, times_step) = per_step(&times, pipeline);
-        assert_eq!(natural_printed, times_printed);
-        assert!(
-            natural_step <= times_step,
-            "{pipeline:?}: a step cost {natural_step} fuel counted down and {times_step} with times"
-        );
-    }
+    let (natural_printed, natural_step) = per_step(&natural);
+    let (times_printed, times_step) = per_step(&times);
+    assert_eq!(natural_printed, times_printed);
+    assert!(
+        natural_step <= times_step,
+        "a step cost {natural_step} fuel counted down and {times_step} with times"
+    );
 }
 
 #[test]

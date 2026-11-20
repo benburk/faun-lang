@@ -149,7 +149,7 @@ fn rows_of_an_immortal_buffer_count_no_claims_to_it() {
         inline_counts: false,
         join_routines: false,
     };
-    let legalized = lab::legalize(&source, config).unwrap();
+    let legalized = legalize(&source, config).unwrap();
     let evaluation = run(&legalized, main, &[], 64);
     assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(3u8)]);
     let retain = legalized
@@ -784,7 +784,7 @@ fn guarded_naturals_decode_only_within_the_immediate_range() {
             b.ret(&result);
         });
         let config = fixed_heap(bits, 512);
-        let scalar = lab::legalize(&p, config).unwrap();
+        let scalar = legalize(&p, config).unwrap();
         for n in [0, limit - 1, limit, limit + 1, u64::MAX >> (64 - bits)] {
             let args = [BigUint::from(n)];
             let actual = run(&scalar, main, &args, bits);

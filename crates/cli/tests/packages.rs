@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use faun_core::targets::{Favour, Pipeline, SymbolTable, Target};
+use faun_core::targets::{Favour, SymbolTable, Target};
 use faun_x86_64_linux::X86_64Linux;
 
 /// A package written to its own directory, removed when dropped.
@@ -67,14 +67,7 @@ fn an_application_builds_only_what_main_reaches() {
     barb::optimize(&mut optimized);
     let machine = faun_core::lower_to_machine_ir(&optimized, &X86_64Linux.routines()).unwrap();
     assert!(!machine.render().contains("unused"));
-    faun_driver::compile_barb(
-        barb,
-        &X86_64Linux,
-        Pipeline::Stock,
-        Favour::Speed,
-        SymbolTable::Omitted,
-    )
-    .unwrap();
+    faun_driver::compile_barb(barb, &X86_64Linux, Favour::Speed, SymbolTable::Omitted).unwrap();
 }
 
 /// A checked constructor's guard bounds its field, though the guard is a

@@ -67,7 +67,6 @@ mod common;
 mod digits;
 pub mod evaluate;
 mod fit;
-pub mod lab;
 mod layout;
 mod legalize;
 mod lower;
@@ -79,6 +78,7 @@ mod packing;
 mod pretty;
 mod program;
 mod prune;
+mod region;
 mod rewrite;
 mod rotate;
 mod sequence;
@@ -87,6 +87,7 @@ mod simplify;
 mod split;
 mod uniqueness;
 mod validate;
+mod word_comparisons;
 
 pub use bounds::conversions_taking_nothing;
 pub use builder::Builder;
@@ -104,6 +105,7 @@ pub use rotate::rotate;
 pub use shifts::expand_shifts;
 pub use split::split;
 pub use validate::validate;
+pub(crate) use word_comparisons::lower as lower_word_comparisons;
 
 #[cfg(test)]
 mod arithmetic_tests;
