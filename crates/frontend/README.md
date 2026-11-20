@@ -14,15 +14,20 @@ the frontend, a program is only refused for what its target cannot do.
 | `check_package`       | a package      | `Library`, or `Application`   |
 | `lower_to_barb`       | an application | its Barb, before optimization |
 | `lower_tests_to_barb` | a package      | Barb running its `expect`s    |
-| `compile_to_image`    | an application | a target's image              |
 
-Each also takes the target. `Library` and `Application` are the two cases
-of `Package`; an application carries its Barb.
+Each also takes the target, as a `Platform`. `Library` and `Application`
+are the two cases of `Package`; an application carries its Barb.
 
 A package whose entry defines `main!` is an application. One that doesn't
 is a library, and the frontend's checks are all a library has: it never
 becomes Barb. The target matters to the frontend only through its host
-module, which says what `Host` offers, and the routines it provides.
+module, which says what `Host` offers, and the routines it provides:
+which there are, and which use up what they are handed. A `Platform` says
+exactly that much, and nothing about words, classes or images.
+
+The frontend depends on `faun-barb` alone. What becomes of its Barb --
+optimization, machine IR, a target's image -- is `faun-driver`'s to
+sequence, and `faun_driver::platform` reads a `Platform` off a target.
 
 ## What it checks
 

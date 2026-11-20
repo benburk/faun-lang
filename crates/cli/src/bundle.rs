@@ -29,7 +29,8 @@ pub(crate) fn bundle(
     target: &dyn Target,
 ) -> Result<PathBuf, Diagnostic> {
     let packages = Fetcher::new()?.resolve(source)?;
-    let modules = faun_frontend::package_modules(source, target, &packages)?;
+    let modules =
+        faun_frontend::package_modules(source, &faun_driver::platform(target), &packages)?;
     for (name, written, _, _) in packages::dependencies(&modules[0].0)? {
         if !PackageUrl::is_url(&written) {
             return Err(Diagnostic::new(format!(

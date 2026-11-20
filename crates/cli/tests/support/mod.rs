@@ -100,7 +100,7 @@ pub(crate) fn run_failing(
     input: &[u8],
     errno: Option<u64>,
 ) -> (u32, String) {
-    let barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
+    let barb = faun_frontend::lower_to_barb(entry, &faun_driver::platform(&X86_64Linux))
         .unwrap_or_else(|error| panic!("{}", error.message));
     run_barb(barb, input, errno)
 }
@@ -108,7 +108,7 @@ pub(crate) fn run_failing(
 /// As [`run_file`], answering also the fuel the interpreter spent: a count
 /// of the work the program did, the same from run to run.
 pub(crate) fn run_counted(entry: &std::path::Path, input: &[u8]) -> (u32, String, u64) {
-    let mut barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
+    let mut barb = faun_frontend::lower_to_barb(entry, &faun_driver::platform(&X86_64Linux))
         .unwrap_or_else(|error| panic!("{}", error.message));
     let mut streams = Streams {
         input: input.iter().copied().collect(),
@@ -128,7 +128,7 @@ pub(crate) type Directory = BTreeMap<String, Vec<u8>>;
 /// The same, run where `files` lie: the status, what it wrote to standard
 /// output, and the files as it left them.
 pub(crate) fn run_among(entry: &std::path::Path, files: Directory) -> (u32, String, Directory) {
-    let mut barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
+    let mut barb = faun_frontend::lower_to_barb(entry, &faun_driver::platform(&X86_64Linux))
         .unwrap_or_else(|error| panic!("{}", error.message));
     let mut streams = Streams {
         files,
@@ -153,7 +153,7 @@ pub(crate) struct Handled {
 /// Run the program at `entry` as [`run_among`] does, among no files: the
 /// status it exits with, and what it did with the files it opened.
 pub(crate) fn run_handling(entry: &std::path::Path) -> (u32, Handled) {
-    let mut barb = faun_frontend::lower_to_barb(entry, &X86_64Linux)
+    let mut barb = faun_frontend::lower_to_barb(entry, &faun_driver::platform(&X86_64Linux))
         .unwrap_or_else(|error| panic!("{}", error.message));
     let mut streams = Streams::default();
     let status = run_on(&mut barb, &mut streams, 100_000_000);
@@ -228,7 +228,7 @@ fn ask(
 ) -> Result<(Vec<(String, String)>, usize), String> {
     let mut tests = faun_frontend::lower_tests_to_barb_using(
         entry,
-        &X86_64Linux,
+        &faun_driver::platform(&X86_64Linux),
         &faun_frontend::packages::Packages::default(),
         faun_frontend::Reporting::Each,
     )

@@ -4,10 +4,10 @@
 //! defines `main!` makes it an application, lowered to Barb starting there;
 //! one that does not is a library, which the frontend's checks are all of.
 //! [`lower_to_barb`] is the same for an application alone, and
-//! [`compile_barb_to_image`] takes an application's Barb on to a target's
-//! image. [`lower_tests_to_barb`] lowers a package whose entry asks its
-//! `expect`s instead. Any [`Target`] will do;
-//! which targets exist is the command line's to say.
+//! [`lower_tests_to_barb`] lowers a package whose entry asks its `expect`s
+//! instead. The target is read as a [`Platform`]: its host module and the
+//! routines it answers for. Which targets exist, and what becomes of Barb
+//! after this, is the driver's to say.
 //!
 //! The frontend is a line of stages, each taking the program as one tree and
 //! answering the next, beside a [`Context`] holding what the trees point
@@ -34,13 +34,8 @@
 //! and numbering on from it (`library`). From specialization on, the stages
 //! see one program. A package within the standard package is the library
 //! itself, and is taken through them once.
-//!
-//! [`compile_barb_to_image`] hands Barb to `faun_core` for the machine tier
-//! and to the target for its image.
 
 use std::path::{Path, PathBuf};
-
-use faun_core::targets::{Favour, SymbolTable, Target};
 
 use context::Context;
 use host::Main;
@@ -75,6 +70,7 @@ pub mod modules;
 pub mod packages;
 mod parse;
 mod pattern_compile;
+pub mod platform;
 pub mod resolve;
 mod second_class;
 mod sorted;
@@ -89,6 +85,7 @@ pub use diagnostic::Diagnostic;
 pub use expectations::Reporting;
 pub use modules::ModuleId;
 pub use parse::{ParseError, parse, parse_in};
+pub use platform::Platform;
 pub use source::{Source, SourceId, Sources};
 pub use symbol::{Symbol, Symbols};
 
@@ -129,7 +126,7 @@ pub enum Package {
     Application(Box<barb::Program>),
 }
 
-/// Check the Faun package at `source` against `target`'s host, and lower it
+/// Check the Faun package at `source` against `platform`'s host, and lower it
 /// to Barb where it is an application.
 ///
 /// Every definition the package writes that can stand on its own is
@@ -137,8 +134,8 @@ pub enum Package {
 ///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
-pub fn check_package(source: &Path, target: &dyn Target) -> Result<Package, Diagnostic> {
-    check_package_using(source, target, &Packages::default())
+pub fn check_package(source: &Path, platform: &Platform) -> Result<Package, Diagnostic> {
+    check_package_using(source, platform, &Packages::default())
 }
 
 /// [`check_package`], reading each URL dependency from where `packages`
@@ -148,37 +145,37 @@ pub fn check_package(source: &Path, target: &dyn Target) -> Result<Package, Diag
 /// Reports loading, resolution, checking or lowering errors.
 pub fn check_package_using(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
 ) -> Result<Package, Diagnostic> {
-    check_package_from(source, target, packages, standard::snapshot())
+    check_package_from(source, platform, packages, standard::snapshot())
 }
 
 /// [`check_package_using`], reading the standard library from `snapshot`
 /// where there is one, and otherwise checking it from its text.
 fn check_package_from(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
     snapshot: Option<&[u8]>,
 ) -> Result<Package, Diagnostic> {
-    let (loaded, mut earlier) = load_after_library_from(source, target, packages, snapshot)?;
+    let (loaded, mut earlier) = load_after_library_from(source, platform, packages, snapshot)?;
     let main = Main::find_in(&loaded)?;
     let facts = test_uses::Facts::of(&loaded);
     let (program, cx) = resolve_after(loaded, &mut earlier)?;
     test_uses::check(&program, &cx, &facts)?;
     let program = host::sign_main(program, &cx, main.as_ref());
-    lower(program, cx, earlier, main.as_ref(), target)
+    lower(program, cx, earlier, main.as_ref(), platform)
 }
 
-/// Check the Faun application at `source` against `target`'s host and lower
+/// Check the Faun application at `source` against `platform`'s host and lower
 /// it to Barb, before any optimization.
 ///
 /// # Errors
 /// Reports a library, which has no `main!` to lower, and loading,
 /// resolution, checking or lowering errors.
-pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
-    lower_to_barb_using(source, target, &Packages::default())
+pub fn lower_to_barb(source: &Path, platform: &Platform) -> Result<barb::Program, Diagnostic> {
+    lower_to_barb_using(source, platform, &Packages::default())
 }
 
 /// [`lower_to_barb`], reading each URL dependency from where `packages`
@@ -189,10 +186,10 @@ pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program
 /// resolution, checking or lowering errors.
 pub fn lower_to_barb_using(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
 ) -> Result<barb::Program, Diagnostic> {
-    match check_package_using(source, target, packages)? {
+    match check_package_using(source, platform, packages)? {
         Package::Application(barb) => Ok(*barb),
         Package::Library => Err(Diagnostic::new("a library has no `main!` to build")
             .help("write `main! : Host -> []` and a clause `main!(host) -> ...`")),
@@ -299,8 +296,8 @@ impl Tests {
 ///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
-pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, Diagnostic> {
-    lower_tests_to_barb_using(source, target, &Packages::default(), Reporting::Failures)
+pub fn lower_tests_to_barb(source: &Path, platform: &Platform) -> Result<Tests, Diagnostic> {
+    lower_tests_to_barb_using(source, platform, &Packages::default(), Reporting::Failures)
 }
 
 /// [`lower_tests_to_barb`], reading each URL dependency from where
@@ -310,11 +307,11 @@ pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, 
 /// Reports loading, resolution, checking or lowering errors.
 pub fn lower_tests_to_barb_using(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
     reporting: Reporting,
 ) -> Result<Tests, Diagnostic> {
-    let (mut loaded, mut earlier) = load_after_library(source, target, packages)?;
+    let (mut loaded, mut earlier) = load_after_library(source, platform, packages)?;
     let application = Main::find_in(&loaded)?;
     let main = expectations::main(&mut loaded);
     let facts = test_uses::Facts::of(&loaded);
@@ -322,7 +319,7 @@ pub fn lower_tests_to_barb_using(
     test_uses::check(&program, &cx, &facts)?;
     let program = host::sign_main(program, &cx, application.as_ref());
     let (program, expectations) = expectations::enter(program, &mut cx, &main, reporting);
-    let Package::Application(barb) = lower(program, cx, earlier, Some(&main), target)? else {
+    let Package::Application(barb) = lower(program, cx, earlier, Some(&main), platform)? else {
         unreachable!("the expectations' runner is an application")
     };
     Ok(Tests {
@@ -331,38 +328,38 @@ pub fn lower_tests_to_barb_using(
     })
 }
 
-/// Read the package at `source`, beside the standard package and `target`'s
+/// Read the package at `source`, beside the standard package and `platform`'s
 /// host.
 fn load(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
 ) -> Result<LoadedProgram, Diagnostic> {
-    modules::load_program_using(source, standard_path(), &host_path(target)?, packages)
+    modules::load_program_using(source, standard_path(), &host_path(platform)?, packages)
 }
 
-/// The standard package checked alone, then `target`'s host and the package
+/// The standard package checked alone, then `platform`'s host and the package
 /// at `source` loaded after it: the whole program, and what checking the
 /// library left for the rest to be checked against. A package within the
 /// standard package is the library itself, loaded with the host, to be
 /// checked in one step.
 fn load_after_library(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
 ) -> Result<(LoadedProgram, Earlier), Diagnostic> {
-    load_after_library_from(source, target, packages, standard::snapshot())
+    load_after_library_from(source, platform, packages, standard::snapshot())
 }
 
 /// [`load_after_library`], reading the library from `snapshot` where there
 /// is one, and otherwise checking it from its text.
 fn load_after_library_from(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
     snapshot: Option<&[u8]>,
 ) -> Result<(LoadedProgram, Earlier), Diagnostic> {
-    let host = host_path(target)?;
+    let host = host_path(platform)?;
     if let Some(snapshot) = snapshot {
         let library = Library::read(snapshot)?;
         // A package within the library is checked with it, from its text.
@@ -387,10 +384,10 @@ fn load_after_library_from(
 /// Never: every loaded module has its source.
 pub fn package_modules(
     source: &Path,
-    target: &dyn Target,
+    platform: &Platform,
     packages: &Packages,
 ) -> Result<Vec<(PathBuf, String)>, Diagnostic> {
-    let loaded = load(source, target, packages)?;
+    let loaded = load(source, platform, packages)?;
     let mut modules = vec![loaded.entry];
     modules.extend(loaded.package.iter().filter(|&&id| id != loaded.entry));
     Ok(modules
@@ -460,23 +457,22 @@ fn lower(
     mut cx: Context,
     mut earlier: Earlier,
     main: Option<&Main>,
-    target: &dyn Target,
+    platform: &Platform,
 ) -> Result<Package, Diagnostic> {
     checked_after(program, &mut cx, &mut earlier)?;
     let typed = earlier.typed;
     if let Some(main) = main {
         host::check_application_abi(&typed, &cx, main)?;
     }
-    let routines = target.routines();
     let program = specialize::monomorphize_package(&typed, &cx, main)?;
     second_class::check(&program, &cx)?;
     let program = callbacks::lower(program, &cx)?;
-    linearity::check(&program, &typed, &cx, &routines)?;
+    linearity::check(&program, &typed, &cx, platform)?;
     let program = pattern_compile::compile(program, &cx)?;
     if main.is_none() {
         return Ok(Package::Library);
     }
-    barb_lower::lower_package_to_barb(program, &cx, &routines)
+    barb_lower::lower_package_to_barb(program, &cx, platform)
         .map(|barb| Package::Application(Box::new(barb)))
 }
 
@@ -515,51 +511,35 @@ fn checked_after(
     exhaustive::check(whole, from, cx)
 }
 
-/// Compile the Faun application at `source` to `target`'s image.
-///
-/// # Errors
-/// Reports the first stage that refuses the program.
-pub fn compile_to_image(source: &Path, target: &dyn Target) -> Result<Vec<u8>, Diagnostic> {
-    compile_barb_to_image(lower_to_barb(source, target)?, target)
-}
-
-/// Compile an application's Barb to `target`'s image: optimize it, lower it
-/// to machine IR, and let the target compile that.
-///
-/// # Errors
-/// Reports what the machine tier or the target cannot represent.
-pub fn compile_barb_to_image(
-    barb: barb::Program,
-    target: &dyn Target,
-) -> Result<Vec<u8>, Diagnostic> {
-    compile_barb_to_image_with(barb, target, Favour::Speed, SymbolTable::Omitted)
-}
-
-/// [`compile_barb_to_image`], favouring speed or size where they pull apart,
-/// with symbols naming each function where `symbols` asks and the target
-/// writes them.
-///
-/// # Errors
-/// As [`compile_barb_to_image`].
-pub fn compile_barb_to_image_with(
-    barb: barb::Program,
-    target: &dyn Target,
-    favour: Favour,
-    symbols: SymbolTable,
-) -> Result<Vec<u8>, Diagnostic> {
-    let mut barb = barb;
-    barb::optimize(&mut barb);
-    let machine =
-        faun_core::lower_to_machine_ir(&barb, &target.routines()).map_err(Diagnostic::new)?;
-    target
-        .compile_machine_ir_with(&machine, favour, symbols)
-        .map_err(Diagnostic::new)
-}
-
 /// The x86-64 Linux host, which frontend tests load their programs with.
 #[cfg(test)]
 fn test_host() -> PathBuf {
     standard_path().with_file_name("hosts/x86_64-linux.fn")
+}
+
+/// The x86-64 Linux target as the frontend reads it, which frontend tests
+/// lower their programs for: every routine a compiler knows, as that
+/// target answers for each.
+#[cfg(test)]
+fn test_platform() -> Platform {
+    let routine = |name: &str| platform::Routine {
+        name: name.to_owned(),
+        consumes: name == "fd_close!",
+    };
+    let names = [
+        "fd_put!",
+        "fd_read!",
+        "fd_open!",
+        "fd_close!",
+        "exit!",
+        "write_fd!",
+        "read_fd!",
+        "open_at!",
+        "write!",
+        "read_byte!",
+        "grow",
+    ];
+    Platform::new("x86_64-linux", names.map(routine))
 }
 
 /// A package checked as [`lower_to_barb`] checks one, for a test to read a
@@ -580,13 +560,13 @@ pub(crate) fn checked_for_test(entry: &Path) -> Checked {
     Checked { program, cx }
 }
 
-/// The host module mounted at `std.host` for `target`.
-fn host_path(target: &dyn Target) -> Result<PathBuf, Diagnostic> {
-    let path = standard_path().with_file_name(format!("hosts/{}.fn", target.name()));
+/// The host module mounted at `std.host` for `platform`.
+fn host_path(platform: &Platform) -> Result<PathBuf, Diagnostic> {
+    let path = standard_path().with_file_name(format!("hosts/{}.fn", platform.name()));
     if !standard::is_module(&path) {
         return Err(Diagnostic::new(format!(
             "no Faun host module for target `{}`",
-            target.name()
+            platform.name()
         )));
     }
     Ok(path)

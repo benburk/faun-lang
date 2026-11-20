@@ -203,10 +203,10 @@ mod tests {
         let mut entries = Vec::new();
         programs(&examples, &mut entries);
         entries.sort();
-        let target = faun_x86_64_linux::X86_64Linux;
+        let platform = crate::test_platform();
         let compile = |entry: &Path, snapshot: Option<&[u8]>| match crate::check_package_from(
             entry,
-            &target,
+            &platform,
             &Packages::default(),
             snapshot,
         ) {

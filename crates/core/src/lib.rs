@@ -2,7 +2,7 @@
 //!
 //! Source-language policy lives in the sibling `faun-frontend` crate, and
 //! Barb, the shared functional core, in `faun-barb`: this crate takes an
-//! optimized [`barb::Program`] from there. [`ir`] decides how a value is
+//! optimized [`barb::Program`] from there, as `faun-driver` hands it on. [`ir`] decides how a value is
 //! held, while [`platform`] describes what a target answers for. A target is
 //! a separate crate implementing [`targets::Target`].
 

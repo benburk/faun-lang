@@ -16,6 +16,7 @@ use crate::diagnostic::{Diagnostic, Refusal};
 use crate::first_order::{Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::pattern_compile::{self as p, Decision, Unpack, Value};
+use crate::platform::Platform;
 use crate::specialize::{self, Connective, FunctionKey, Type};
 use crate::{ModuleId, Symbol};
 
@@ -49,9 +50,9 @@ fn program(checked: &crate::Checked, entry: Symbol) -> Result<barb::Program, Dia
 pub(crate) fn lower_package_to_barb(
     program: p::Program,
     cx: &Context,
-    routines: &faun_core::platform::Routines,
+    platform: &Platform,
 ) -> Result<barb::Program, Diagnostic> {
-    Lowerer::new(program, cx, Some(routines))
+    Lowerer::new(program, cx, Some(platform))
         .and_then(Lowerer::lower)
         .map_err(|error| cx.told(error))
 }
@@ -62,8 +63,8 @@ type Widening = Vec<(Option<Symbol>, Vec<(Type, Type)>)>;
 struct Lowerer<'a> {
     cx: &'a Context,
     prelude: &'a PreludeIds,
-    /// The target's routines, present when lowering an application.
-    routines: Option<&'a faun_core::platform::Routines>,
+    /// The target, present when lowering an application.
+    platform: Option<&'a Platform>,
     program: p::Program,
     types: BTreeSet<Type>,
     /// The declared types found and not yet taken apart for the types
@@ -93,12 +94,12 @@ impl<'a> Lowerer<'a> {
     fn new(
         program: p::Program,
         cx: &'a Context,
-        routines: Option<&'a faun_core::platform::Routines>,
+        platform: Option<&'a Platform>,
     ) -> Result<Self, Refusal> {
         let mut lowerer = Self {
             cx,
             prelude: &cx.prelude,
-            routines,
+            platform,
             program,
             types: BTreeSet::new(),
             unexpanded: Vec::new(),
@@ -125,8 +126,8 @@ impl<'a> Lowerer<'a> {
         self.define_functions();
         self.define_widenings()?;
         self.define_unreachables();
-        if let Some(routines) = self.routines
-            && routines.get("exit!").is_none()
+        if let Some(platform) = self.platform
+            && platform.routine("exit!").is_none()
         {
             return Err(error("the selected target does not provide `exit!`"));
         }
@@ -1564,7 +1565,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_the_host_entry_through_the_machine_boundary() {
+    fn lowers_the_host_entry_as_written() {
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
         let loaded =
             crate::modules::load_program(&entry, crate::standard_path(), &crate::test_host())
@@ -1572,41 +1573,37 @@ mod tests {
         let main = crate::host::Main::find_in(&loaded).unwrap().unwrap();
         let crate::Checked { program: typed, cx } = crate::checked_for_test(&entry);
         crate::host::check_application_abi(&typed, &cx, &main).unwrap();
-        for bits in [16, 32, 64] {
-            let routines = faun_core::platform::Routines::builtin().with_word(bits);
-            let specialized = specialize::monomorphize_package(&typed, &cx, Some(&main)).unwrap();
-            crate::second_class::check(&specialized, &cx).unwrap();
-            let program = crate::callbacks::lower(specialized, &cx).unwrap();
-            let program = p::compile(program, &cx).unwrap();
-            let mut program = lower_package_to_barb(program, &cx, &routines).unwrap();
-            barb::optimize(&mut program);
-            let rendered = program.render();
-            // `Host` holds what its target hands the program; `main!` is the
-            // entry as written, and a routine is asked with the `Host` it
-            // was handed, as the source says.
-            assert!(
-                rendered.contains("\nHost = Host(args: List<Str>)\n"),
-                "{rendered}"
-            );
-            assert!(rendered.contains("main!(v0: Host) -> [] ="), "{rendered}");
-            assert!(rendered.contains("Host.exit!(v0: Host, v1: U8) -> [] = <elsewhere>"));
-            assert!(rendered.contains("Host.exit!(v0, v5)"), "{rendered}");
-            assert!(!rendered.contains("start"));
-            assert!(!rendered.contains('$'));
-            let machine = faun_core::lower_to_machine_ir(&program.clone(), &routines).unwrap();
-            // A program reading only how many arguments it has is handed
-            // `argc` alone, into the entry's frame, as wide as its word.
-            let entry = machine.entry();
-            assert_eq!(machine.parameter_names(entry).collect::<Vec<_>>(), ["argc"]);
-            let body = machine.function(entry).body().unwrap();
-            let argc = machine.values(machine.region(body).params)[0];
-            assert_eq!(machine.class(argc), faun_core::ir::Class::fixed(bits));
-            // A status is a byte, so the count is taken modulo 256 where the
-            // program says so, rather than by whatever the target keeps.
-            let rendered = machine.render();
-            assert!(rendered.contains("= convert v0 to 0..255"), "{rendered}");
-            assert!(rendered.contains("call exit!(v1)"), "{rendered}");
-        }
+        let specialized = specialize::monomorphize_package(&typed, &cx, Some(&main)).unwrap();
+        crate::second_class::check(&specialized, &cx).unwrap();
+        let program = crate::callbacks::lower(specialized, &cx).unwrap();
+        let program = p::compile(program, &cx).unwrap();
+        let mut program = lower_package_to_barb(program, &cx, &crate::test_platform()).unwrap();
+        barb::optimize(&mut program);
+        let rendered = program.render();
+        // `Host` holds what its target hands the program; `main!` is the
+        // entry as written, and a routine is asked with the `Host` it was
+        // handed, as the source says. What the machine tier makes of it is
+        // the driver's test.
+        assert!(
+            rendered.contains("\nHost = Host(args: List<Str>)\n"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("main!(v0: Host) -> [] ="), "{rendered}");
+        assert!(rendered.contains("Host.exit!(v0: Host, v1: U8) -> [] = <elsewhere>"));
+        assert!(rendered.contains("Host.exit!(v0, v5)"), "{rendered}");
+        assert!(!rendered.contains("start"));
+        assert!(!rendered.contains('$'));
+    }
+
+    #[test]
+    fn refuses_a_target_without_exit() {
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
+        let platform = Platform::new("x86_64-linux", []);
+        let refused = crate::lower_to_barb(&entry, &platform).unwrap_err();
+        assert!(
+            refused.to_string().contains("does not provide `exit!`"),
+            "{refused}"
+        );
     }
 
     #[test]

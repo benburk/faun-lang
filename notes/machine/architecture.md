@@ -57,22 +57,38 @@ x86-64 allocates registers and writes a static ELF that makes system calls
 itself; wasm32 writes a module importing WASI; the 6502 target holds a
 16-bit word as two bytes and writes a sim65 image.
 
-The crates follow the tiers, each depending only on those above it:
+The crates follow the tiers, each depending only on those above it, and
+one crate joins them:
 
 ```text
 faun-barb      Barb (read as `barb`), with the indices, IEEE float
                operations and number bounds every tier below reads
+faun-frontend  source to Barb, on faun-barb alone
 faun-core      machine IR, platform, shared codegen, on faun-barb
-faun-frontend  source to Barb, on faun-barb, and faun-core for routines
 faun-<target>  one target each, on faun-core and faun-barb
-faun           the command, on all of them
+faun-driver    the line: source, Barb, optimized Barb, machine IR,
+               image, on faun-frontend, faun-barb and faun-core
+faun           the command: chooses the target and back end, on all
 ```
 
 Barb being a crate of its own keeps its interface what it is `pub`: the
 frontend builds a program with it, the machine tier reads one back with
 its facts, and nothing else of it crosses. A change below Barb rebuilds
-nothing of it. Barb's own test fixtures reach the tiers below through its
-`test-support` feature, which only their dev-dependencies turn on.
+nothing of it, nor of the frontend. Barb's own test fixtures reach the
+tiers below through its `test-support` feature, which only their
+dev-dependencies turn on.
+
+The frontend reads a target as a `faun_frontend::Platform`: the name that
+says which host module a program is checked against, and the routines the
+target answers for, with whether each uses up what it is handed. The
+routines themselves (`faun_core::platform`) are written in machine IR's
+classes and declared into machine programs, so they stay with the machine
+tier, and `faun_driver::platform` reads a frontend's `Platform` off a
+target. The driver depends on no target: the command names the targets
+and chooses between the stock and lab pipelines, which the driver runs,
+and the experimental x86-lab back end, which has a machine tier of its
+own. A target's tests run the whole line with the driver as a
+dev-dependency.
 
 `faun emit barb FILE`, `faun emit machine FILE` and `faun emit target FILE`
 print each stage. A definition counting a list, compiled for x86-64:

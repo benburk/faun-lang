@@ -123,7 +123,7 @@ fn tell(diagnostic: Diagnostic) {
 /// Check a package against the target's host: a library by the frontend
 /// alone, an application by lowering it as far as Barb.
 fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
-    faun_frontend::check_package_using(source, target, &fetched(source)?)?;
+    faun_frontend::check_package_using(source, &faun_driver::platform(target), &fetched(source)?)?;
     println!("checked {}", source.display());
     Ok(())
 }
@@ -140,7 +140,7 @@ fn build(
 ) -> Result<(), Diagnostic> {
     let target = compiler.host();
     let faun_frontend::Package::Application(barb) =
-        faun_frontend::check_package_using(source, target, &fetched(source)?)?
+        faun_frontend::check_package_using(source, &compiler.platform(), &fetched(source)?)?
     else {
         println!(
             "checked {}, a library with no `main!` to build",
@@ -161,7 +161,7 @@ fn run(source: &Path, compiler: Compiler, args: &[String]) -> Result<ExitCode, D
     let target = compiler.host();
     let runner = runner(target)?;
     let image = compiler.compile(
-        faun_frontend::lower_to_barb_using(source, target, &fetched(source)?)?,
+        faun_frontend::lower_to_barb_using(source, &compiler.platform(), &fetched(source)?)?,
         Favour::Speed,
         SymbolTable::Omitted,
     )?;
@@ -199,8 +199,12 @@ fn test(source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
     let target = compiler.host();
     let runner = runner(target)?;
     let packages = fetched(source)?;
-    let mut tests =
-        faun_frontend::lower_tests_to_barb_using(source, target, &packages, Reporting::Each)?;
+    let mut tests = faun_frontend::lower_tests_to_barb_using(
+        source,
+        &compiler.platform(),
+        &packages,
+        Reporting::Each,
+    )?;
     let count = tests.expectations.len();
     if count == 0 {
         println!("no expectations");
@@ -311,8 +315,8 @@ fn execute<T>(
 
 /// Print one stage of a program.
 fn emit(stage: Stage, source: &Path, compiler: Compiler) -> Result<(), Diagnostic> {
-    let target = compiler.host();
-    let mut barb = faun_frontend::lower_to_barb_using(source, target, &fetched(source)?)?;
+    let mut barb =
+        faun_frontend::lower_to_barb_using(source, &compiler.platform(), &fetched(source)?)?;
     barb::optimize(&mut barb);
     let text = compiler.render(stage, &barb).map_err(Diagnostic::new)?;
     print!("{text}");

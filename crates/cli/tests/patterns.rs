@@ -587,7 +587,9 @@ fn calls(function: &Function) -> String {
 /// What checking says of the program at `entry`: a refusal's message, or
 /// what the compiler said where it broke rather than refusing.
 fn lowered(entry: &std::path::Path) -> Result<(), Lowered> {
-    match std::panic::catch_unwind(|| faun_frontend::lower_to_barb(entry, &X86_64Linux)) {
+    match std::panic::catch_unwind(|| {
+        faun_frontend::lower_to_barb(entry, &faun_driver::platform(&X86_64Linux))
+    }) {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(Lowered::Refused(error.message)),
         Err(panic) => Err(Lowered::Broke(said(&*panic))),
