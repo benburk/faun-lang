@@ -3017,10 +3017,16 @@ impl Lowering<'_> {
     ) -> Answer<Held> {
         let (results, answers) = match &self.callees[function.index()] {
             Callee::Instruction(operation) => {
-                // Keep the storage class until machine guard lowering chooses
-                // the decode. Eager narrowing from branch bounds moves masks
-                // across calls and changes code layout without removing work.
-                let args = self.call_arguments(function, arguments, locals);
+                // An operand the enclosing branch bounds is read at the
+                // width it is proven to have. Left a natural, it would be
+                // read at the operation's width, which on a narrow word is
+                // several words and a division to take them apart.
+                let mut args = self.call_arguments(function, arguments, locals);
+                for (value, &bound) in args.iter_mut().zip(self.facts.arguments(expr)) {
+                    if b.class(*value) == Class::Natural && width(bound) != Class::Natural {
+                        *value = b.convert(width(bound), *value);
+                    }
+                }
                 if matches!(operation, barb::Operation::Add | barb::Operation::Mul)
                     && let Some(affine) = self.facts.affine(expr)
                 {
