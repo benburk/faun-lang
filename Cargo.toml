@@ -56,3 +56,13 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# The compiler is split into crates along its tiers, and a function one
+# crate calls in another is inlined there only where it is small or marked:
+# without this, the frontend and the machine tier calling into Barb ran the
+# compiler 4% slower than when Barb was a module of the core. Thin LTO
+# inlines across the crates as across a crate's codegen units, and so
+# compiles the same programs in 5% fewer instructions than the single crate
+# did, for 5 seconds more on a release rebuild that touches only a target.
+[profile.release]
+lto = "thin"
