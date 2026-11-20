@@ -4,7 +4,7 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::WORD_BITS;
-use crate::ir::{Binary, Direction, Function, Op, Program, ValueId};
+use faun_core::ir::{Binary, Direction, Function, Op, Program, ValueId};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Count {
@@ -205,7 +205,7 @@ impl Shapes<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Class;
+    use faun_core::ir::Class;
 
     #[test]
     fn recognition_requires_matching_halves_and_preserves_other_uses() {

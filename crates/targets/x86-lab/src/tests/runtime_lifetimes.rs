@@ -1,6 +1,10 @@
 use super::{TARGET, shared};
-use crate::ir::{Binary, Class, FunctionId, Program, ShapeId};
-use crate::targets::Target;
+use faun_core::ir::{Binary, Class, FunctionId, Program, ShapeId};
+use faun_core::targets::Target;
+use faun_core::{ir, targets};
+
+#[path = "../../../../core/tests/support/runtime_lifetimes.rs"]
+mod fixture;
 
 const W: Class = Class::Word;
 const C: Class = Class::Cell;
@@ -8,7 +12,7 @@ const C: Class = Class::Cell;
 #[test]
 fn nested_loops_reuse_a_tiny_heap_and_preserve_full_naturals() {
     for early_return in [false, true] {
-        crate::lifetime_fixture::check(&crate::X86_64Linux, None, early_return);
+        fixture::check(&crate::X86_64Linux, None, early_return);
     }
 }
 
@@ -166,7 +170,7 @@ fn weight(p: &mut Program, empty: u32, pair: ShapeId) -> FunctionId {
     p.define(read, |b, args| {
         let tag = b.cell_tag(args[0]);
         let nil = b.constant(W, u64::from(empty));
-        let end = b.compare(crate::ir::Relation::Equal, tag, nil);
+        let end = b.compare(ir::Relation::Equal, tag, nil);
         b.if_(
             end,
             &[],
@@ -201,7 +205,7 @@ fn nullable_regions_preserve_tags_and_project_fields_across_chunks() {
                 W,
                 600 * 601 / 2 + 600 * u64::from(link) + 2 * u64::from(empty),
             );
-            let pass = b.compare(crate::ir::Relation::Equal, total, expected);
+            let pass = b.compare(ir::Relation::Equal, total, expected);
             b.ret(&[pass]);
         });
         assert!(p.render().contains("# chain encodes empty as null"));
@@ -243,7 +247,7 @@ fn payload_only_and_tagged_region_trees_can_coexist() {
         let z = b.call_one(sum, &[tagged]);
         let result = b.binary(Binary::Add, a, z);
         let expected = b.constant(W, 300 * 301 / 2 + 300 * 9 + 3 + 300 + 21);
-        let pass = b.compare(crate::ir::Relation::Equal, result, expected);
+        let pass = b.compare(ir::Relation::Equal, result, expected);
         b.ret(&[pass]);
     });
     assert_eq!(p.render().matches("encodes empty as null").count(), 1);

@@ -350,9 +350,6 @@ dependencies = [
  "faun-core",
  "faun-driver",
  "faun-frontend",
- "faun-x86-64-linux",
- "num-bigint",
- "num-traits",
  "rustc-hash",
 ]
 

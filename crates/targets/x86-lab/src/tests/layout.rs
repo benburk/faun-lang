@@ -1,6 +1,6 @@
 use crate::X86_64Linux;
-use crate::ir::{Class, Program, legalize, natural::Config};
-use crate::targets::Target;
+use faun_core::ir::{Class, Program, legalize, natural::Config};
+use faun_core::targets::Target;
 
 #[test]
 fn checked_native_compilation_rejects_foreign_runtime_layouts() {
@@ -103,12 +103,12 @@ main!(host) -> (
     assert!(
         machine
             .walk(entry)
-            .any(|(op, _)| matches!(op, crate::ir::Op::BufferKnown { .. }))
+            .any(|(op, _)| matches!(op, faun_core::ir::Op::BufferKnown { .. }))
     );
     assert_eq!(
         machine
             .every(entry)
-            .filter(|op| matches!(op, crate::ir::Op::BufferKnown { .. }))
+            .filter(|op| matches!(op, faun_core::ir::Op::BufferKnown { .. }))
             .count(),
         1
     );
@@ -146,7 +146,7 @@ main!(host) -> (
 
 #[test]
 fn input_room_covers_every_count_accepted_at_a_parameter() {
-    use crate::ir::{Offset, Width};
+    use faun_core::ir::{Offset, Width};
     let (mut p, main) = Program::new("main");
     let byte = Class::fixed(8);
     let narrow = Class::Held(barb::Bounds::at(128));

@@ -1,8 +1,8 @@
 use super::shared::status;
-use crate::ir::{Binary, Builder, Class, Offset, Program, Relation, ValueId, Width};
 use crate::machine::{Allocated, AllocatedBuilder, Inst, MemoryWidth, Reg, RegisterWidth};
 use barb::float::{Float, Format, Operation};
 use faun_core::codegen::FrameSlot;
+use faun_core::ir::{Binary, Builder, Class, Offset, Program, Relation, ValueId, Width};
 
 const XMMS: [Reg; 16] = [
     Reg::Xmm0,
@@ -150,12 +150,12 @@ fn doubling_by_addition_matches_multiplication_in_either_order() {
             }
             b.ret(&[passed]);
         });
-        let optimized = crate::ir::optimize(&program);
+        let optimized = faun_core::ir::optimize(&program);
         let body = optimized.function(twice).body().unwrap();
         assert!(
             !optimized
                 .every(body)
-                .any(|op| matches!(op, crate::ir::Op::Float { float, .. } if *float == mul))
+                .any(|op| matches!(op, faun_core::ir::Op::Float { float, .. } if *float == mul))
         );
         assert_eq!(status(&optimized), 1, "{format:?}");
     }
@@ -609,7 +609,7 @@ fn allocated_instructions_reject_wrong_banks_before_encoding() {
 /// An input bit pattern keeps every operand live through the frontend. A
 /// runtime loop puts the standard sign observation beside its subtraction.
 fn difference_program(format: Format, expression: &str) -> Program {
-    use crate::targets::Target;
+    use faun_core::targets::Target;
     let bits = format.bits();
     let bytes = if bits == 32 {
         "a,b,c,d"

@@ -85,8 +85,8 @@ routines themselves (`faun_core::platform`) are written in machine IR's
 classes and declared into machine programs, so they stay with the machine
 tier, and `faun_driver::platform` reads a frontend's `Platform` off a
 target. The driver depends on no target: the command names the targets
-and chooses between the line the driver runs and the experimental
-x86-lab back end, which has a machine tier of its own. A target's tests run the whole line with the driver as a
+and, on x86-64 Linux, chooses between the stock emitter and the
+experimental x86-lab one. A target's tests run the whole line with the driver as a
 dev-dependency.
 
 `faun emit barb FILE`, `faun emit machine FILE` and `faun emit target FILE`

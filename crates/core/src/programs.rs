@@ -14,6 +14,8 @@
 pub mod abi;
 #[path = "programs/arithmetic.rs"]
 pub mod arithmetic;
+#[path = "programs/comparisons.rs"]
+pub mod comparisons;
 #[path = "programs/control.rs"]
 pub mod control;
 #[path = "programs/external.rs"]

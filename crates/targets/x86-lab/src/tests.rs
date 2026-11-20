@@ -1,5 +1,5 @@
 //! Target-specific limits and size baselines; conformance cases are shared.
-use crate::targets::Target;
+use faun_core::targets::Target;
 
 use crate::X86_64Linux;
 use shared::{narrow, wide};
@@ -15,8 +15,8 @@ mod layout;
 mod runtime_lifetimes;
 mod runtime_naturals;
 
-use crate as backend_core;
-#[path = "test_frontend.rs"]
+use faun_core as backend_core;
+#[path = "../../../core/tests/support/faun.rs"]
 mod faun;
 
 #[path = "../../../core/tests/support/backend.rs"]
@@ -94,9 +94,9 @@ const ARITHMETIC_SIZES: [usize; 3] = [165, 197, 195];
 fn ladder_code_size_ratchets() {
     let routines = TARGET.routines();
     let mut code = Vec::new();
-    for (name, mut barb) in crate::programs::ladder::every() {
+    for (name, mut barb) in faun_core::programs::ladder::every() {
         barb::optimize(&mut barb);
-        let machine = crate::lower_to_machine_ir(&barb, &routines).unwrap();
+        let machine = faun_core::lower_to_machine_ir(&barb, &routines).unwrap();
         let prepared = TARGET.prepare(&machine).unwrap();
         let allocated = crate::selected::select_and_allocate(&prepared).unwrap();
         code.push((name, crate::encode::encode(&allocated).bytes));
@@ -140,8 +140,8 @@ fn division_case(
     numerator: u64,
     denominator: u64,
     constant_divisor: bool,
-) -> crate::ir::Program {
-    use crate::ir::{Binary, Class, Program, Relation};
+) -> faun_core::ir::Program {
+    use faun_core::ir::{Binary, Class, Program, Relation};
     let (mut program, main) = Program::new("main");
     let left = Class::fixed(dividend_bits);
     let right = Class::fixed(divisor_bits);
@@ -210,7 +210,7 @@ fn unsigned_division_chooses_width_from_both_inputs_and_handles_zero() {
 
 #[test]
 fn low_word_multiplication_preserves_unsigned_high_bits() {
-    use crate::ir::{Binary, Class, Program, Relation};
+    use faun_core::ir::{Binary, Class, Program, Relation};
     for (left, right) in [
         (u64::MAX, u64::MAX),
         (1 << 63, 3),
@@ -281,7 +281,7 @@ fn numbers_of_different_widths_are_compared_at_the_wider() {
 /// them: a bit each for whether they are equal, whether the left is below,
 /// whether it is above, and whether the left less the right is what it is.
 fn compared((left, left_bits): (u64, u16), (right, right_bits): (u64, u16)) -> i32 {
-    use crate::ir::{Binary, Class, Direction, Program, Relation};
+    use faun_core::ir::{Binary, Class, Direction, Program, Relation};
     let class = |bits: u16| {
         if bits == 64 {
             Class::Word
@@ -327,7 +327,7 @@ fn compared((left, left_bits): (u64, u16), (right, right_bits): (u64, u16)) -> i
 fn an_early_way_out_saves_nothing() {
     use crate::machine::Inst;
     use faun_core::targets::Favour;
-    let program = TARGET.prepare(&crate::programs::recurses()).unwrap();
+    let program = TARGET.prepare(&faun_core::programs::recurses()).unwrap();
     let first = |favour| {
         let allocated =
             crate::selected::select_and_allocate_favouring(&program, favour, false).unwrap();
@@ -349,7 +349,7 @@ fn an_early_way_out_saves_nothing() {
 fn a_program_written_with_symbols_chains_its_frames() {
     use crate::machine::{Inst, Reg, RegisterWidth};
     use faun_core::targets::Favour;
-    let program = TARGET.prepare(&crate::programs::recurses()).unwrap();
+    let program = TARGET.prepare(&faun_core::programs::recurses()).unwrap();
     for favour in [Favour::Speed, Favour::Size] {
         let allocated =
             crate::selected::select_and_allocate_favouring(&program, favour, true).unwrap();
@@ -386,12 +386,12 @@ fn a_program_written_with_symbols_chains_its_frames() {
 fn chaining_frames_changes_no_answer() {
     use faun_core::targets::{Favour, SymbolTable};
     let mut programs = vec![
-        crate::programs::recurses(),
-        crate::programs::values_survive_a_call(),
-        crate::programs::calls_a_function(),
+        faun_core::programs::recurses(),
+        faun_core::programs::values_survive_a_call(),
+        faun_core::programs::calls_a_function(),
     ];
     programs.extend(
-        crate::programs::printing()
+        faun_core::programs::printing()
             .into_iter()
             .map(|(_, program, _)| program),
     );

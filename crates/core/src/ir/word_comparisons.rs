@@ -223,3 +223,36 @@ impl rewrite::Pass for Lower {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::lower;
+    use crate::ir::{Class, Op};
+    use crate::programs::comparisons;
+
+    #[test]
+    fn comparison_only_parameters_use_unsigned_words_across_branches() {
+        let (p, order) = comparisons::of_words();
+        let lowered = lower(&p, 64).unwrap();
+        assert_eq!(
+            lowered.signature(lowered.function(order).params),
+            [Class::Word; 2]
+        );
+        assert!(
+            !lowered
+                .every(lowered.function(p.entry()).body().unwrap())
+                .any(|op| matches!(op, Op::Convert { .. }))
+        );
+        assert!(lower(&p, 32).is_none());
+    }
+
+    #[test]
+    fn one_arbitrary_precision_call_preserves_the_comparison_for_every_caller() {
+        assert!(lower(&comparisons::one_past_a_word(), 64).is_none());
+    }
+
+    #[test]
+    fn comparison_parameters_stay_natural_when_their_peer_escapes() {
+        assert!(lower(&comparisons::a_compared_peer_escapes(), 64).is_none());
+    }
+}

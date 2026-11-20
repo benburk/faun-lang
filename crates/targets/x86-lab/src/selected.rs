@@ -10,12 +10,12 @@ mod rotates;
 mod thread;
 
 use super::machine::Reg;
-use crate::ir::{
+use crate::{ARG_COUNT, WORD_BITS};
+use barb::index::{Pool, Range};
+use faun_core::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op as SourceOp, Program, RegionId, Relation,
     Terminator as SourceTerminator, ValueId, Width,
 };
-use crate::{ARG_COUNT, WORD_BITS};
-use barb::index::{Pool, Range};
 
 pub(crate) use faun_core::codegen::registers::{BlockId, InstId, Role, Timing, VReg};
 
@@ -1476,7 +1476,7 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
     let mut selector = Selector {
         source,
         widths,
-        whole: crate::ir::conversions_taking_nothing(source),
+        whole: faun_core::ir::conversions_taking_nothing(source),
         rotates: rotates::Plan::new(source),
         operands: Vec::new(),
         instructions: Pool::default(),
@@ -1832,7 +1832,7 @@ impl Selector<'_> {
                     results.first().copied(),
                     &[value],
                     Immediate::Shift {
-                        up: matches!(direction, crate::ir::Direction::Up),
+                        up: matches!(direction, faun_core::ir::Direction::Up),
                         by: u8::try_from(by).map_err(|_| "x86 shift distance exceeds 255")?,
                         bits: source.class(results[0]).bits(WORD_BITS),
                     },
@@ -2050,11 +2050,11 @@ fn append<T: Clone>(pool: &mut Vec<T>, values: &[T]) -> Range {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::validate;
+    use faun_core::ir::validate;
 
     #[test]
     fn selected_allocation_lowers_to_an_encodable_symbolic_sequence() {
-        let program = crate::programs::carries_a_total_into_an_arm(3);
+        let program = faun_core::programs::carries_a_total_into_an_arm(3);
         let allocated = select_and_allocate(&program).unwrap();
         let code = crate::encode::encode(&allocated);
         assert!(!code.bytes.is_empty());
@@ -2105,7 +2105,7 @@ mod tests {
 
     #[test]
     fn structured_regions_become_blocks_with_parallel_edge_arguments() {
-        let program = crate::programs::carries_a_total_into_an_arm(3);
+        let program = faun_core::programs::carries_a_total_into_an_arm(3);
         validate(&program).unwrap();
         let selected = select(&program).unwrap();
         assert!(selected.blocks.len() > program.functions().len());
@@ -2116,7 +2116,7 @@ mod tests {
 
     #[test]
     fn function_boundaries_name_the_system_v_registers() {
-        let program = crate::programs::abi::function(2, 1);
+        let program = faun_core::programs::abi::function(2, 1);
         let selected = select(&program).unwrap();
         let function = selected
             .functions
@@ -2137,7 +2137,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_a_use_not_dominated_by_its_definition() {
-        let program = crate::programs::carries_a_total_into_an_arm(3);
+        let program = faun_core::programs::carries_a_total_into_an_arm(3);
         let mut selected = select(&program).unwrap();
         let inst = selected
             .instructions
@@ -2202,7 +2202,7 @@ mod tests {
             Opcode::LoadOutgoing,
             Opcode::StoreOutgoing,
         ] {
-            let mut selected = select(&crate::programs::abi::function(8, 3)).unwrap();
+            let mut selected = select(&faun_core::programs::abi::function(8, 3)).unwrap();
             let inst = selected
                 .instructions
                 .iter_mut()
@@ -2217,7 +2217,7 @@ mod tests {
     #[test]
     fn verifier_rejects_incomplete_stack_call_sequences() {
         for results in [false, true] {
-            let mut selected = select(&crate::programs::abi::function(8, 3)).unwrap();
+            let mut selected = select(&faun_core::programs::abi::function(8, 3)).unwrap();
             let function = &mut selected.functions[1];
             if results {
                 function.stack_results += 1;
@@ -2230,7 +2230,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_calls_to_the_logical_entry() {
-        let mut selected = select(&crate::programs::abi::function(0, 1)).unwrap();
+        let mut selected = select(&faun_core::programs::abi::function(0, 1)).unwrap();
         let entry = selected.functions[0].source;
         let call = selected
             .instructions
