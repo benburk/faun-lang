@@ -1682,10 +1682,15 @@ impl Lowering<'_> {
     fn put(&mut self, value: ValueId, from: Operand) {
         let wide = self.wide(value);
         match self.source[value.index()] {
-            Source::Home(home) if matches!(from, Operand::Zp { at, .. } if at == home) => {}
             Source::Home(home) => {
-                self.asm.carry(from.byte(0), home);
-                if wide {
+                let there = matches!(from, Operand::Zp { at, .. } if at == home);
+                if !there {
+                    self.asm.carry(from.byte(0), home);
+                }
+                // A one-byte value already in a two-byte place wrote only
+                // the low byte of it: the high one is whatever the place
+                // held before, until nought is written there.
+                if wide && !(there && matches!(from, Operand::Zp { wide: true, .. })) {
                     self.asm.carry(from.byte(1), home + 1);
                 }
             }
@@ -1863,11 +1868,16 @@ impl Lowering<'_> {
     fn transfer(&mut self, sources: &[ValueId], destinations: &[ValueId]) {
         assert!(sources.len() <= 2, "at most two values cross a region edge");
         // A value that already lives where it is going does not move, which
-        // is what makes a coalesced loop parameter free.
+        // is what makes a coalesced loop parameter free -- unless it is one
+        // byte and where it is going is two: it was written as one, and the
+        // byte above it still has to be made nought.
         let moving: Vec<bool> = sources
             .iter()
             .zip(destinations)
-            .map(|(&source, &destination)| !self.same_place(source, destination))
+            .map(|(&source, &destination)| {
+                !self.same_place(source, destination)
+                    || (self.wide(destination) && !self.wide(source))
+            })
             .collect();
         // Writing one destination can only disturb another pair's source
         // when the two share a place; short of that the moves are

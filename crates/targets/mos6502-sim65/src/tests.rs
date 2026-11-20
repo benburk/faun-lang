@@ -124,6 +124,63 @@ fn narrow_equality_does_not_compare_known_zero_high_bytes() {
     );
 }
 
+/// A one-byte answer an arm leaves with, where the `if`'s answer is read as
+/// both bytes, has its high byte written as nought. The arm works its answer
+/// out in the place the `if`'s lives, a frame slot here since the answer
+/// outlives a call, and leaving moved nothing between a place and itself:
+/// the high byte was whatever the slot held before, and `223` printed as
+/// `65503`. The writer probe's twin printed the wrong checksum this way
+/// with both backends.
+#[test]
+fn a_byte_an_arm_leaves_with_is_read_whole() {
+    let program = shared::read(
+        "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len() * 4030 + 1
+           bits = U64.of_nat(n % 512).shift_left(n % 32)
+           kept = if n % 32 < 23 then bits else bits.shift_right(32)
+           host.println!(kept.to_nat().to_str())
+           host.exit!(0)
+         )",
+    )
+    .expect("a program");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(shared::execute(&prepared), (0, "223\n".to_owned()));
+}
+
+/// The same where both live in zero page: an arm's byte, worked out where
+/// the `if`'s two-byte answer lives, has nought written above it on the way
+/// out, whatever that pair held before.
+#[test]
+fn a_byte_an_arm_leaves_in_a_pair_is_read_whole() {
+    use faun_core::ir::Direction;
+    let (mut program, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
+    let exit = TARGET.routines().declare(&mut program, "exit!");
+    program.define(main, |b, params| {
+        let high = b.constant(Class::Word, 0xAB00);
+        let wide = b.binary(Binary::Add, params[0], high);
+        let zero = b.constant(Class::Word, 0);
+        let none = b.compare(Relation::Equal, params[0], zero);
+        let kept = b.if_(
+            none,
+            &[Class::Word],
+            |b| b.yield_(&[wide]),
+            |b| {
+                let low = b.convert(Class::fixed(8), wide);
+                b.yield_(&[low]);
+            },
+        )[0];
+        let above = b.shift(Class::Word, Direction::Down, kept, 8);
+        let status = b.binary(Binary::Add, above, kept);
+        b.call(exit, &[status]);
+    });
+    assert_eq!(shared::status(&program), 1);
+}
+
 #[test]
 fn it_holds_what_a_program_holds() {
     assert!(TARGET.accepts(&wide(4)).is_ok());
