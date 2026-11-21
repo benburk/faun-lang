@@ -388,6 +388,72 @@ fn a_byte_an_arm_leaves_with_prints_as_itself_everywhere() {
     }
 }
 
+/// `<<` and `>>` are `shift_left` and `shift_right` on `Nat` and every
+/// unsigned word, on every target: at each count from 0 to 70, past every
+/// word's width, where a word shifts to nought. Each type is a program of
+/// its own, so the 6502's image holds one type's shifts.
+#[test]
+fn shift_operators_are_the_shift_methods_everywhere() {
+    for (name, width, expected) in [
+        ("Nat", 64, "0 0 2 1 18446744073709551616 0\n"),
+        ("U8", 8, "0 0 2 1 0 0\n"),
+        ("U16", 16, "0 0 2 1 0 0\n"),
+        ("U32", 32, "0 0 2 1 0 0\n"),
+        ("U64", 64, "0 0 2 1 0 0\n"),
+    ] {
+        let package = support::Package::new(&format!("shift-{name}"), &shifts(name, width));
+        for target in MACHINES {
+            let (status, written, said) = run_on(target, &package.entry(), b"");
+            assert_eq!(
+                (status, written.as_str()),
+                (Some(0), expected),
+                "{name} on {target}: {said}"
+            );
+        }
+    }
+}
+
+/// A program that counts the counts from 0 to 70 at which `<<` and `>>`
+/// differ from `shift_left` and `shift_right` on `name`, and says what one
+/// shifted to its top bit and past it is.
+fn shifts(name: &str, width: u32) -> String {
+    let of = |nat: &str| match name {
+        "Nat" => nat.to_owned(),
+        _ => format!("{name}.of_nat({nat} % {})", 1_u128 << width),
+    };
+    format!(
+        "differ : (Nat, Nat) -> Nat
+         differ(x, n) -> if n > 70 then 0 else (
+           w = {x}
+           same = w << n == w.shift_left(n) & w >> n == w.shift_right(n)
+           (if same then 0 else 1) + differ(x, n + 1)
+         )
+
+         nat : {name} -> Nat
+         nat(w) -> {nat}
+
+         main! : Host -> []
+         main!(host) -> (
+           x = host.args.len() * 0x8421842184218421
+           w = {one}
+           top = w << {last}
+           host.println!([
+             differ(x, 0),
+             differ(x * x + 7, 0),
+             nat(w << 1),
+             nat(top >> {last}),
+             nat(w << {width}),
+             nat(top >> {width}),
+           ].map(|n| n.to_str()).join(\" \"))
+           host.exit!(0)
+         )",
+        x = of("x"),
+        one = of("host.args.len()"),
+        last = width - 1,
+        nat = if name == "Nat" { "w" } else { "w.to_nat()" },
+    )
+}
+
 /// Every target `faun run` builds for.
 const MACHINES: [&str; 3] = ["x86_64-linux", "wasm32-wasi", "mos6502-sim65"];
 

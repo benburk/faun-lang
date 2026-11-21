@@ -1,0 +1,3 @@
+# Shifts do not chain: this is written `(x << a) << b`.
+twice : (Nat, Nat, Nat) -> Nat
+twice(x, a, b) -> x << a << b

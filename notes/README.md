@@ -52,8 +52,9 @@ syntax shown on purpose, marks its fence `` ```ruby ignore ``.
 - [Pattern matching](forms/pattern-matching.md): clauses, `is`, arms,
   leaving lines and coverage
 - [Methods](forms/methods.md): type blocks, derived members and visibility
-- [Operators](forms/operators.md): operators as methods, one `cmp`, and
-  precedence
+- [Operators](forms/operators.md): operators as methods, one `cmp`,
+  shifts, and precedence: what other languages do, the designs considered,
+  and why `^` and the shifts take parentheses
 - [Modules](forms/modules.md): imports, exports, packages and `expect`
 - [Naming](forms/naming.md): conversions, questions, fallbacks, errors and
   where a library's names live
@@ -76,8 +77,6 @@ syntax shown on purpose, marks its fence `` ```ruby ignore ``.
 - [Host effects](host-effects.md), the
   [effects brainstorm](effects/README.md) and its
   [roadmap](effects/roadmap.md): host APIs to come
-- [Operator precedence](operator-precedence.md): what other languages do,
-  the designs considered, and why `^` alone takes parentheses
 - [Lints](lints.md): what a linter should flag and the compiler leaves alone
 - [Grammar audit](grammar-audit.md): whether the grammar stays LL(1) and
   free of ambiguity

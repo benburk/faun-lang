@@ -1,0 +1,5 @@
+# `&` binds looser than `==` and a shift tighter, so this is
+# `flags & ((bit << 2) == 4)`; the help keeps the shift's parentheses,
+# which `&` beside it needs.
+set : (Nat, Nat) -> Bool
+set(flags, bit) -> flags & bit << 2 == 4

@@ -97,6 +97,8 @@ pub(super) const fn binary_member(operator: crate::ast::BinaryOp) -> &'static st
         | crate::ast::BinaryOp::LessEqual
         | crate::ast::BinaryOp::Greater
         | crate::ast::BinaryOp::GreaterEqual => "cmp",
+        crate::ast::BinaryOp::ShiftLeft => "shift_left",
+        crate::ast::BinaryOp::ShiftRight => "shift_right",
         crate::ast::BinaryOp::Add => "add",
         crate::ast::BinaryOp::Subtract => "sub",
         crate::ast::BinaryOp::Multiply => "mul",

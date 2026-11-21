@@ -77,7 +77,9 @@ struct Parser<'a> {
 /// The binding strength of an infix operator, loosest first, and what it
 /// makes. `^` stands at `|`'s level and takes no more than `&` would on
 /// its right, and is refused beside either unparenthesized: it has no
-/// order with them.
+/// order with them. A shift binds tighter than a comparison and takes one
+/// operand on its right, and is refused beside arithmetic, `&`, `|`, `^`
+/// or another shift unparenthesized: it has no order with them.
 const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
     Some(match kind {
         Kind::Bar => (OR, BinaryOp::Or),
@@ -89,11 +91,13 @@ const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
         Kind::Le => (5, BinaryOp::LessEqual),
         Kind::Gt => (5, BinaryOp::Greater),
         Kind::Ge => (5, BinaryOp::GreaterEqual),
-        Kind::Plus => (6, BinaryOp::Add),
-        Kind::Minus => (6, BinaryOp::Subtract),
-        Kind::Slash => (7, BinaryOp::Divide),
-        Kind::Percent => (7, BinaryOp::Remainder),
-        Kind::Star => (7, BinaryOp::Multiply),
+        Kind::Shl => (SHIFT, BinaryOp::ShiftLeft),
+        Kind::Shr => (SHIFT, BinaryOp::ShiftRight),
+        Kind::Plus => (7, BinaryOp::Add),
+        Kind::Minus => (7, BinaryOp::Subtract),
+        Kind::Slash => (8, BinaryOp::Divide),
+        Kind::Percent => (8, BinaryOp::Remainder),
+        Kind::Star => (8, BinaryOp::Multiply),
         _ => return None,
     })
 }
@@ -103,6 +107,11 @@ const OR: u8 = 1;
 
 /// How tightly `&` binds, and `^` on its right: tighter than `|`.
 const AND: u8 = 3;
+
+/// How tightly a shift binds on its left: tighter than a comparison. It
+/// stands below arithmetic only so that arithmetic on its left meets it in
+/// one loop, where the two are refused together.
+const SHIFT: u8 = 6;
 
 /// How tightly `is` binds: looser than a comparison, tighter than `&`.
 const IS: u8 = 4;
@@ -1006,19 +1015,30 @@ impl Parser<'_> {
                 return Ok(left);
             };
             let token = self.bump();
-            let right = self.binary(if op == BinaryOp::Xor { AND } else { level })?;
-            if let Some((before, first, second)) = nearest_combining(&left)
-                && (before == BinaryOp::Xor) != (op == BinaryOp::Xor)
-            {
+            let right = match op {
+                BinaryOp::Xor => self.binary(AND)?,
+                // What would go on from its one operand is unordered with
+                // it, and meets it in this loop.
+                BinaryOp::ShiftLeft | BinaryOp::ShiftRight => self.operand()?,
+                _ => self.binary(level)?,
+            };
+            if let Some((before, first, second)) = nearest_unordered(&left, op) {
                 return Err(self.unordered(before, op, token, [first, second, &right]));
+            }
+            if let Some((after, first, second)) = leading_unordered(op, &right) {
+                let token = self.token_after(first.span.end);
+                return Err(self.unordered(op, after, token, [&left, first, second]));
             }
             left = binary(op, left, right);
         }
     }
 
-    /// Why `a ^ b & c` is refused: `^` has no order with `&` and `|`, so
-    /// it takes parentheses beside either, each grouping offered with the
-    /// operands as written where they are short.
+    /// Why `a ^ b & c` and `x << 3 | y` are refused: `^` has no order with
+    /// `&` and `|`, and a shift none with arithmetic, `&`, `|`, `^` or
+    /// another shift, so they take parentheses together, each grouping
+    /// offered with the operands as written where they are short. A shift
+    /// does not chain, and `x << a << b` is offered as the one grouping a
+    /// chain would have read.
     fn unordered(
         &self,
         before: BinaryOp,
@@ -1026,24 +1046,31 @@ impl Parser<'_> {
         token: Token,
         [a, b, c]: [&Expr; 3],
     ) -> SyntaxError {
-        let symbol = |op: BinaryOp| match op {
-            BinaryOp::And => "&",
-            BinaryOp::Or => "|",
-            BinaryOp::Xor => "^",
-            _ => unreachable!("only `^` with `&` or `|` is unordered"),
-        };
-        let (first, second) = (symbol(before), symbol(op));
+        let (first, second) = (spelled(before), spelled(op));
         let written = [a, b, c].map(|operand| operand.span.text(self.source));
         let short = written.iter().all(|text| !text.contains('\n'))
             && written.iter().map(|text| text.len()).sum::<usize>() <= 48;
         let [a, b, c] = if short { written } else { ["a", "b", "c"] };
-        SyntaxError::new(
-            token.span(),
+        let message = if before == op {
+            format!("`{first}` does not chain: write `({a} {first} {b}) {second} {c}`")
+        } else {
             format!(
                 "`{first}` and `{second}` need parentheses together: \
                  write `({a} {first} {b}) {second} {c}` or `{a} {first} ({b} {second} {c})`"
-            ),
-        )
+            )
+        };
+        SyntaxError::new(token.span(), message)
+    }
+
+    /// The first token at or after `offset` that is not a line's end: the
+    /// operator after an operand ending there.
+    fn token_after(&self, offset: u32) -> Token {
+        let at = self.tokens.partition_point(|token| token.end <= offset);
+        self.tokens[at..]
+            .iter()
+            .copied()
+            .find(|token| token.kind != Kind::Newline)
+            .expect("the text ends with a token")
     }
 
     /// `value is pattern`: one operand after `is`, which is the pattern.
@@ -1645,19 +1672,86 @@ fn unary(op: UnaryOp, token: Token, value: Expr) -> Expr {
     }
 }
 
-/// The `&`, `|` or `^` written last in `expression` without parentheses,
-/// on its right edge, as the operator it is and its two sides: what an
-/// operator written after `expression` stands beside.
-fn nearest_combining(expression: &Expr) -> Option<(BinaryOp, &Expr, &Expr)> {
-    let ExprKind::Binary(op, left, right) = &expression.kind else {
+/// The operator written last in `expression` without parentheses, on its
+/// right edge, that has no order with `op`, as the operator it is and its
+/// two sides: what `op` written after `expression` stands beside. A
+/// comparison orders what is on either side of it.
+fn nearest_unordered(expression: &Expr, op: BinaryOp) -> Option<(BinaryOp, &Expr, &Expr)> {
+    let ExprKind::Binary(before, left, right) = &expression.kind else {
         return None;
     };
-    let combining = matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor);
     // Parenthesized, it begins before its left side does.
-    if !combining || expression.span.start != left.span.start {
+    if !combines_values(*before) || expression.span.start != left.span.start {
         return None;
     }
-    nearest_combining(right).or(Some((*op, left, right)))
+    nearest_unordered(right, op)
+        .or_else(|| unordered(*before, op).then_some((*before, &**left, &**right)))
+}
+
+/// The shift `expression` is, without parentheses, where it has no order
+/// with `op` written before it, as the operator it is and its two sides. A
+/// shift binds tighter than `&`, `|` and `^`, so one on their right is
+/// taken in with its operands; one a comparison takes in is ordered by it.
+fn leading_unordered(op: BinaryOp, expression: &Expr) -> Option<(BinaryOp, &Expr, &Expr)> {
+    let ExprKind::Binary(after, left, right) = &expression.kind else {
+        return None;
+    };
+    (expression.span.start == left.span.start && unordered(op, *after))
+        .then_some((*after, &**left, &**right))
+}
+
+/// Whether an operator works its operands into a value of their kind:
+/// arithmetic, a shift, `&`, `|` or `^`, and not a comparison.
+const fn combines_values(op: BinaryOp) -> bool {
+    !matches!(
+        op,
+        BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual
+    )
+}
+
+const fn bitwise(op: BinaryOp) -> bool {
+    matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+}
+
+const fn shifts(op: BinaryOp) -> bool {
+    matches!(op, BinaryOp::ShiftLeft | BinaryOp::ShiftRight)
+}
+
+/// Whether `before` and `after` have no order, and take parentheses
+/// together: `^` beside `&` or `|`, and a shift beside arithmetic, `&`,
+/// `|`, `^` or a shift.
+const fn unordered(before: BinaryOp, after: BinaryOp) -> bool {
+    if bitwise(before) && bitwise(after) {
+        return matches!(before, BinaryOp::Xor) != matches!(after, BinaryOp::Xor);
+    }
+    (shifts(before) || shifts(after)) && combines_values(before) && combines_values(after)
+}
+
+/// How an operator is written.
+const fn spelled(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Or => "|",
+        BinaryOp::Xor => "^",
+        BinaryOp::And => "&",
+        BinaryOp::Equal => "==",
+        BinaryOp::NotEqual => "!=",
+        BinaryOp::Less => "<",
+        BinaryOp::LessEqual => "<=",
+        BinaryOp::Greater => ">",
+        BinaryOp::GreaterEqual => ">=",
+        BinaryOp::ShiftLeft => "<<",
+        BinaryOp::ShiftRight => ">>",
+        BinaryOp::Add => "+",
+        BinaryOp::Subtract => "-",
+        BinaryOp::Multiply => "*",
+        BinaryOp::Divide => "/",
+        BinaryOp::Remainder => "%",
+    }
 }
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

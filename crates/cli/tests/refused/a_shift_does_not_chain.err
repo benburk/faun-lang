@@ -1,0 +1,5 @@
+error: `<<` does not chain: write `(x << a) << b`
+ --> a_shift_does_not_chain.fn:3:26
+  |
+3 | twice(x, a, b) -> x << a << b
+  |                          ^^

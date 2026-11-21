@@ -52,6 +52,33 @@ total(a, b) ->
       (identifier))))
 
 ========================================
+A shift binds tighter than a comparison, and a line may begin with one
+========================================
+
+f(x, y) -> (x >> 5) & 7 == y
+  << 1
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (binary_expression
+      (tuple
+        (binary_expression
+          (identifier)
+          (number)))
+      (binary_expression
+        (number)
+        (binary_expression
+          (identifier)
+          (number))))))
+
+========================================
 A spaced minus carries a line on; a held one begins a line
 ========================================
 

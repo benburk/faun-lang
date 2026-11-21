@@ -116,6 +116,8 @@ fn terminal(spelling: &str) -> Kind {
         "\"<=\"" => Kind::Le,
         "\">\"" => Kind::Gt,
         "\">=\"" => Kind::Ge,
+        "\"<<\"" => Kind::Shl,
+        "\">>\"" => Kind::Shr,
         "\"+\"" => Kind::Plus,
         "\"-\"" => Kind::Minus,
         "\"/\"" => Kind::Slash,
@@ -572,6 +574,7 @@ const READ: &[&str] = &[
     "f(c) -> {asm.macros: [], depth, *c}\n",
     "f(xs) -> (\n  xs is [x, *_] else return 0\n  y = x\n  y > 1\n    else return (\n      z = y\n      z\n    )\n  y\n)\n",
     "f(a, b, c) -> a & b == c & !a\n  & b | c & a\ng(a, b, c) -> a | b & c | (b ^ c)\nh(a, b) -> a ^ b ^ (a | b & a)\n",
+    "f(x, y) -> x << 3 == y >> 1 & (x >> 5) & 7\ng(x, y) -> (x << 8) | y | (x + 1) << 2 == y\nh(x) -> x\n  << 3\n  == 8 | x * 2 + 1 < -x >> 1 | x << 2 is 8\n",
 ];
 
 /// Programs both refuse.
@@ -621,6 +624,13 @@ const REFUSED: &[&str] = &[
     "f(a, b, c) -> a | b ^ c\n",
     "f(a, b, c) -> a & b ^ c\n",
     "f(a, b, c) -> a ^ b == c\n  | c\n",
+    "f(x, y) -> x << 3 | y\n",
+    "f(x, y) -> x | y << 3\n",
+    "f(x, y) -> x + 1 << 3\n",
+    "f(x, y) -> x >> 1 * y\n",
+    "f(x, y) -> x << 1 << y\n",
+    "f(x, y) -> x == y >> 1 + 1\n",
+    "f(x, y) -> x ^ y << 1 & y\n",
 ];
 
 #[test]

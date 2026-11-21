@@ -50,13 +50,22 @@ fn hint(expression: &h::Expr, at: Span, text: &str) -> Option<String> {
         && right.span == at
     {
         let written = |span: Span| span.text(text);
+        // A shift beside the bitwise operator takes parentheses with it.
+        let beside = |side: &h::Expr| {
+            let written = side.span.text(text);
+            if shifts(side, text) {
+                format!("({written})")
+            } else {
+                written.to_owned()
+            }
+        };
         // `flags & 4 == 0`, read `flags & (4 == 0)`.
         if let Some((compared, (low, high))) = comparison(right, text) {
             let fix = format!(
                 "({} {bitwise} {}) {compared} {}",
                 written(left.span),
-                written(low),
-                written(high)
+                beside(low),
+                written(high.span)
             );
             return Some(told(bitwise, compared, &fix));
         }
@@ -64,8 +73,8 @@ fn hint(expression: &h::Expr, at: Span, text: &str) -> Option<String> {
         if let Some((compared, (low, high))) = comparison(left, text) {
             let fix = format!(
                 "{} {compared} ({} {bitwise} {})",
-                written(low),
-                written(high),
+                written(low.span),
+                beside(high),
                 written(right.span)
             );
             return Some(told(bitwise, compared, &fix));
@@ -93,9 +102,20 @@ const fn bitwise(operator: BinaryOp) -> Option<&'static str> {
     }
 }
 
-/// The operator of a comparison written without parentheses, and the
-/// spans of its two sides.
-fn comparison(expression: &h::Expr, text: &str) -> Option<(&'static str, (Span, Span))> {
+/// Whether `expression` is a shift written without parentheses.
+fn shifts(expression: &h::Expr, text: &str) -> bool {
+    matches!(
+        expression.kind,
+        h::ExprKind::Binary(BinaryOp::ShiftLeft | BinaryOp::ShiftRight, ..)
+    ) && !parenthesized(expression.span.text(text))
+}
+
+/// The operator of a comparison written without parentheses, and its two
+/// sides.
+fn comparison<'a>(
+    expression: &'a h::Expr,
+    text: &str,
+) -> Option<(&'static str, (&'a h::Expr, &'a h::Expr))> {
     let h::ExprKind::Binary(operator, left, right) = &expression.kind else {
         return None;
     };
@@ -111,7 +131,7 @@ fn comparison(expression: &h::Expr, text: &str) -> Option<(&'static str, (Span, 
     if parenthesized(expression.span.text(text)) {
         return None;
     }
-    Some((compared, (left.span, right.span)))
+    Some((compared, (&**left, &**right)))
 }
 
 /// Whether `written` is one parenthesized expression: its first `(`
