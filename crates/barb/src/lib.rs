@@ -170,7 +170,7 @@ pub use rotation::Rotation;
 pub use split::Counted;
 pub use tree::TreeRole;
 
-pub use inline::InlineLimits;
+pub(crate) use inline::InlineLimits;
 pub use model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,
     Range, Symbol, Type, TypeId,
@@ -211,8 +211,10 @@ pub mod test_support {
         normalize::structural(program);
     }
 
-    pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
-        normalize::normalize_with_limits(program, limits);
+    /// Normalize with the budgets [`optimize`](super::optimize) inlines
+    /// within.
+    pub fn normalize(program: &mut Program) {
+        normalize::normalize_with_limits(program, InlineLimits::default());
     }
 
     pub fn fold(program: &mut Program) {

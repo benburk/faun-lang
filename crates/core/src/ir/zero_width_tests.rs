@@ -77,7 +77,7 @@ fn stages(optimized: bool) -> fn(&mut barb::Program) {
 /// outright.
 fn without_laws(program: &mut barb::Program) {
     barb::test_support::structural(program);
-    barb::test_support::normalize_with_limits(program, barb::InlineLimits::default());
+    barb::test_support::normalize(program);
     barb::test_support::fold(program);
 }
 
@@ -408,7 +408,7 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
 
     // Inlining, without the laws or folding that would decide the comparison.
     barb::test_support::structural(&mut p);
-    barb::test_support::normalize_with_limits(&mut p, barb::InlineLimits::default());
+    barb::test_support::normalize(&mut p);
     let lowered = crate::ir::lower(&p, &routines).unwrap();
     validate(&lowered).unwrap();
     let optimized = crate::ir::optimize(&lowered);

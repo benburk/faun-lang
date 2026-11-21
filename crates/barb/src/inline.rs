@@ -4,15 +4,15 @@ use super::{Body, Expr, FnId, Program};
 
 /// Copied arena entries, rather than call count, bound helper expansion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InlineLimits {
-    pub max_callee: usize,
-    pub per_function: usize,
-    pub total: usize,
-    pub max_depth: usize,
+pub(crate) struct InlineLimits {
+    pub(crate) max_callee: usize,
+    pub(crate) per_function: usize,
+    pub(crate) total: usize,
+    pub(crate) max_depth: usize,
     /// A definition costing no more than this is copied wherever it is
     /// called, whatever its caller has spent: a word's arithmetic, a line
     /// in the standard library, is cheaper copied than called.
-    pub small_callee: usize,
+    pub(crate) small_callee: usize,
 }
 
 impl Default for InlineLimits {

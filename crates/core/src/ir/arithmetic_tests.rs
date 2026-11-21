@@ -101,7 +101,7 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
         barb::validate(program).unwrap();
         // Isolate lowering from laws such as mod(n, n) = 0.
         barb::test_support::structural(program);
-        barb::test_support::normalize_with_limits(program, barb::InlineLimits::default());
+        barb::test_support::normalize(program);
         barb::test_support::fold(program);
         let machine = crate::lower_to_machine_ir(program, &routines).unwrap();
         validate(&machine).unwrap();
@@ -175,7 +175,7 @@ fn an_early_exit_refines_the_continuation() {
     p.set_entry(main);
     let mut program = library.program;
     barb::validate(&program).unwrap();
-    barb::test_support::normalize_with_limits(&mut program, barb::InlineLimits::default());
+    barb::test_support::normalize(&mut program);
     barb::test_support::fold(&mut program);
     let facts = program.analyze();
     let body = program.function(program.entry()).body().unwrap();
