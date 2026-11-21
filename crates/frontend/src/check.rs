@@ -2840,6 +2840,49 @@ mod tests {
         assert!(failure.message.contains("must stand on its own"));
     }
 
+    /// The right of `&` or `|` on `Bool` may not be worked out, so an
+    /// effect on a line of a block there would be skipped: it is refused,
+    /// as it is in a block in any other operand or argument.
+    #[test]
+    fn an_effect_in_a_block_inside_an_expression_is_refused() {
+        let fixture = Fixture::new();
+        let stop = "stop! : Bool -> Bool\nstop!(b) -> b\nid : Bool -> Bool\nid(b) -> b\n";
+        for body in [
+            "ok = b & (\n    s = stop!(b)\n    s\n  )",
+            "ok = b | (\n    s = stop!(b)\n    s\n  )",
+            "ok = id((\n    s = stop!(b)\n    s\n  ))",
+            "ok = b & (if b then (\n    s = stop!(b)\n    s\n  ) else False)",
+        ] {
+            let source = format!("{stop}bad! : Bool -> Bool\nbad!(b) -> (\n  {body}\n  ok\n)\n");
+            let (program, mut cx) = fixture.load(&source);
+            let failure = crate::checked(program, &mut cx).unwrap_err();
+            assert_eq!(
+                failure.message, "effect `stop!` must stand on its own",
+                "{body}"
+            );
+            assert_eq!(
+                failure.labels[0].text, "on a line of a block inside an expression",
+                "{body}"
+            );
+        }
+    }
+
+    /// A block standing where a line's value does keeps its lines on their
+    /// own, an `if`'s branches included.
+    #[test]
+    fn an_effect_in_a_block_standing_alone_is_allowed() {
+        let fixture = Fixture::new();
+        let stop = "stop! : Bool -> Bool\nstop!(b) -> b\n";
+        for body in [
+            "ok = (\n    s = stop!(b)\n    s\n  )",
+            "ok = if b then (\n    s = stop!(b)\n    s\n  ) else False",
+        ] {
+            let source = format!("{stop}fine! : Bool -> Bool\nfine!(b) -> (\n  {body}\n  ok\n)\n");
+            let (program, mut cx) = fixture.load(&source);
+            crate::checked(program, &mut cx).expect(body);
+        }
+    }
+
     /// A constructor handed where its position wants another type says what
     /// it builds and what is wanted, rather than that there is no method.
     #[test]

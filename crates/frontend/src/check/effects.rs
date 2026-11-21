@@ -18,34 +18,53 @@ pub(super) fn check(program: &n::Program, symbols: &Symbols) -> Result<(), Refus
     Ok(())
 }
 
+/// Where an expression stands, which says whether an effect may be called
+/// there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Standing {
+    /// At the top of a line of a body, or where such a line's value does.
+    Alone,
+    /// Inside an expression: an argument, an operand, a guard.
+    Inside,
+    /// On a line of a block that is itself inside an expression, which
+    /// runs where, and whether, that expression works out the block.
+    InBlockInside,
+}
+
 fn in_clause(module: ModuleId, clause: &h::Clause, symbols: &Symbols) -> Result<(), Refusal> {
     let effectful = symbols.text(clause.name).ends_with('!');
     if let Some(guard) = &clause.guard {
-        expr(module, guard, effectful, false, symbols)?;
+        expr(module, guard, effectful, Standing::Inside, symbols)?;
     }
     for binding in &clause.body.bindings {
-        expr(module, &binding.value, effectful, true, symbols)?;
+        expr(module, &binding.value, effectful, Standing::Alone, symbols)?;
     }
-    expr(module, &clause.body.result, effectful, true, symbols)
+    expr(
+        module,
+        &clause.body.result,
+        effectful,
+        Standing::Alone,
+        symbols,
+    )
 }
 
 fn expr(
     module: ModuleId,
     expression: &h::Expr,
     owner_effectful: bool,
-    stands_alone: bool,
+    standing: Standing,
     symbols: &Symbols,
 ) -> Result<(), Refusal> {
     let effect = |name: Symbol| symbols.text(name).ends_with('!');
     let within =
-        |inner: &h::Expr, stands_alone| expr(module, inner, owner_effectful, stands_alone, symbols);
+        |inner: &h::Expr, standing| expr(module, inner, owner_effectful, standing, symbols);
     let called = |name| {
         call(
             module,
             expression.span,
             name,
             owner_effectful,
-            stands_alone,
+            standing,
             symbols,
         )
     };
@@ -61,46 +80,53 @@ fn expr(
         // What `?` propagates, or `return` answers, stands where it does;
         // what `is` tests is worked out first, once, so it stands there too.
         h::ExprKind::Try(value) | h::ExprKind::Return(value) | h::ExprKind::Is(value, _) => {
-            within(value, stands_alone)
+            within(value, standing)
         }
-        // A block's lines stand on their own, and its answer where the
-        // block does.
+        // A block's lines stand on their own where the block does, and its
+        // answer where the block does. A block inside an expression is
+        // worked out where, and only if, the expression works it out: on
+        // the right of `&` or `|` on `Bool` perhaps not at all, so an
+        // effect on one of its lines could be skipped.
         h::ExprKind::Block(body) => {
+            let line = match standing {
+                Standing::Alone => Standing::Alone,
+                Standing::Inside | Standing::InBlockInside => Standing::InBlockInside,
+            };
             for binding in &body.bindings {
-                within(&binding.value, true)?;
+                within(&binding.value, line)?;
             }
-            within(&body.result, stands_alone)
+            within(&body.result, standing)
         }
         h::ExprKind::Call(head, arguments) => match &head.kind {
             h::ExprKind::Global(name) if effect(*name) => {
                 called(*name)?;
                 arguments
                     .iter()
-                    .try_for_each(|argument| within(argument, false))
+                    .try_for_each(|argument| within(argument, Standing::Inside))
             }
-            _ => expression.try_for_each_child(|inner| within(inner, false)),
+            _ => expression.try_for_each_child(|inner| within(inner, Standing::Inside)),
         },
         h::ExprKind::Member(_, name) | h::ExprKind::Method(_, name, _, _) => {
             if effect(*name) {
                 called(*name)?;
             }
-            expression.try_for_each_child(|inner| within(inner, false))
+            expression.try_for_each_child(|inner| within(inner, Standing::Inside))
         }
-        h::ExprKind::Lambda(_, body) => expr(module, body, false, false, symbols),
+        h::ExprKind::Lambda(_, body) => expr(module, body, false, Standing::Inside, symbols),
         // An arm stands where the `is` does, as a branch does.
         h::ExprKind::Match(value, arms) => {
-            within(value, stands_alone)?;
+            within(value, standing)?;
             arms.iter().try_for_each(|arm| {
                 if let Some(guard) = &arm.guard {
-                    within(guard, false)?;
+                    within(guard, Standing::Inside)?;
                 }
-                within(&arm.body, stands_alone)
+                within(&arm.body, standing)
             })
         }
         // A condition is worked out first, once, and a branch is taken
         // after it: each stands where the `if` does.
-        h::ExprKind::If(..) => expression.try_for_each_child(|inner| within(inner, stands_alone)),
-        _ => expression.try_for_each_child(|inner| within(inner, false)),
+        h::ExprKind::If(..) => expression.try_for_each_child(|inner| within(inner, standing)),
+        _ => expression.try_for_each_child(|inner| within(inner, Standing::Inside)),
     }
 }
 
@@ -109,7 +135,7 @@ fn call(
     span: crate::ast::Span,
     effect: Symbol,
     owner_effectful: bool,
-    stands_alone: bool,
+    standing: Standing,
     symbols: &Symbols,
 ) -> Result<(), Refusal> {
     if !owner_effectful {
@@ -124,8 +150,8 @@ fn call(
     }
     // An effect inside an expression would happen in an order the line's
     // reader must work out; standing alone, it happens where its line is.
-    if !stands_alone {
-        return Err(failure(
+    let refused = || {
+        failure(
             module,
             span,
             format!(
@@ -133,10 +159,17 @@ fn call(
                 source_name(symbols, effect)
             ),
         )
-        .label("inside an expression")
-        .help("bind what it answers to a name on a line of its own, and use the name here"));
+    };
+    match standing {
+        Standing::Alone => Ok(()),
+        Standing::Inside => Err(refused().label("inside an expression").help(
+            "bind what it answers to a name on a line of its own, and use the name here",
+        )),
+        Standing::InBlockInside => Err(refused()
+            .label("on a line of a block inside an expression")
+            .note("a block inside an expression is worked out where the expression works it out, and on the right of `&` or `|` perhaps not at all")
+            .help("move the line out of the block, before the line the block is in")),
     }
-    Ok(())
 }
 
 fn source_name(symbols: &Symbols, symbol: Symbol) -> &str {

@@ -1,0 +1,8 @@
+error: effect `close!` must stand on its own
+  --> a_file_closed_in_a_block_on_the_right_of_an_or.fn:13:14
+   |
+13 |     closed = file.close!()
+   |              ^^^^^^^^^^^^^ on a line of a block inside an expression
+   |
+   = note: a block inside an expression is worked out where the expression works it out, and on the right of `&` or `|` perhaps not at all
+   = help: move the line out of the block, before the line the block is in
