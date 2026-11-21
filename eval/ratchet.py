@@ -1171,14 +1171,15 @@ def standings(report):
         "and sizes are bytes. K, M and G are thousands, millions and billions.",
         "`vs C` is Faun's measure over the C twin's: below one, Faun is ahead.",
         "Under the suite are the probes, each program's natural spelling beside",
-        "its workaround in Faun: `vs twin` above one is the compiler's to close.",
+        "its workaround in Faun, its twin: there `vs` is the natural spelling's",
+        "measure over the twin's, and above one is the compiler's to close.",
         "Last are the families, one computation spelled several natural ways,",
         "each a probe: a spread is the worst spelling's measure over the best's,",
         "and above one is a cliff, the slowest and the largest spelling named.",
     ]
-    for probing, twin in ((False, "vs C"), (True, "vs twin")):
+    for probing in (False, True):
         for target in TARGETS:
-            lines += standing(report, target, probing, twin)
+            lines += standing(report, target, probing)
     for target in TARGETS:
         lines += family_standing(report, target)
     return "\n".join(lines) + "\n"
@@ -1211,8 +1212,9 @@ def family_standing(report, target):
     return lines
 
 
-def standing(report, target, probing, twin):
-    """One target's table of the suite, or of the probes."""
+def standing(report, target, probing):
+    """One target's table of the suite, or of the probes. A table row is held
+    to 80 characters, so a probe's columns are headed `vs`, not `vs twin`."""
     lines = []
     cells = [
         c
@@ -1221,7 +1223,8 @@ def standing(report, target, probing, twin):
     ]
     if not cells:
         return []
-    rows = [["Program", "Speed", twin, "Memory", twin, "Size", twin, "Small"]]
+    name, twin = ("Probe", "vs") if probing else ("Program", "vs C")
+    rows = [[name, "Speed", twin, "Memory", twin, "Size", twin, "Small"]]
     ratios, failing = {"speed": [], "memory": [], "size": []}, []
     for cell in cells:
         ours, c = cell["candidate"], cell["c"]

@@ -700,6 +700,30 @@ class Backend(unittest.TestCase):
         self.assertNotIn("stock", written)
         self.assertIn("| program-0", written)
 
+    def test_a_probes_table_row_fits_eighty_characters(self):
+        measured = cell(speed=12_345_678, memory=1_234_567, size=55_372, small=55_372)
+        cells = probing([measured], [measured])
+        cells = {(t, f"{PROBE}count-recursion"): s for (t, _), s in cells.items()}
+        report = {
+            "candidate": {"commit": "abcdef0"},
+            "started": "2026-11-19T00:00:00",
+            "cells": [
+                {
+                    "target": t,
+                    "workload": w,
+                    "c": {"speed": 9_000_000, "memory": 999_999},
+                }
+                | sides
+                for (t, w), sides in cells.items()
+            ],
+        }
+        written = standings(report)
+        self.assertIn("| count-recursion |", written)
+        rows = [line for line in written.splitlines() if line.startswith("|")]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertLessEqual(len(row), 80, row)
+
 
 class Series(unittest.TestCase):
     def test_a_log_row_is_in_the_evaluators_series_not_the_last_rows(self):
