@@ -75,12 +75,14 @@ struct Parser<'a> {
 }
 
 /// The binding strength of an infix operator, loosest first, and what it
-/// makes.
+/// makes. `^` stands at `|`'s level and takes no more than `&` would on
+/// its right, and is refused beside either unparenthesized: it has no
+/// order with them.
 const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
     Some(match kind {
-        Kind::Bar => (1, BinaryOp::Or),
-        Kind::Caret => (2, BinaryOp::Xor),
-        Kind::Amp => (3, BinaryOp::And),
+        Kind::Bar => (OR, BinaryOp::Or),
+        Kind::Caret => (OR, BinaryOp::Xor),
+        Kind::Amp => (AND, BinaryOp::And),
         Kind::EqEq => (5, BinaryOp::Equal),
         Kind::Ne => (5, BinaryOp::NotEqual),
         Kind::Lt => (5, BinaryOp::Less),
@@ -95,6 +97,12 @@ const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
         _ => return None,
     })
 }
+
+/// How tightly `|` binds, and `^` on its left: looser than everything else.
+const OR: u8 = 1;
+
+/// How tightly `&` binds, and `^` on its right: tighter than `|`.
+const AND: u8 = 3;
 
 /// How tightly `is` binds: looser than a comparison, tighter than `&`.
 const IS: u8 = 4;
@@ -997,10 +1005,45 @@ impl Parser<'_> {
             let Some((level, op)) = infix(self.peek()).filter(|(level, _)| *level > looser) else {
                 return Ok(left);
             };
-            self.bump();
-            let right = self.binary(level)?;
+            let token = self.bump();
+            let right = self.binary(if op == BinaryOp::Xor { AND } else { level })?;
+            if let Some((before, first, second)) = nearest_combining(&left)
+                && (before == BinaryOp::Xor) != (op == BinaryOp::Xor)
+            {
+                return Err(self.unordered(before, op, token, [first, second, &right]));
+            }
             left = binary(op, left, right);
         }
+    }
+
+    /// Why `a ^ b & c` is refused: `^` has no order with `&` and `|`, so
+    /// it takes parentheses beside either, each grouping offered with the
+    /// operands as written where they are short.
+    fn unordered(
+        &self,
+        before: BinaryOp,
+        op: BinaryOp,
+        token: Token,
+        [a, b, c]: [&Expr; 3],
+    ) -> SyntaxError {
+        let symbol = |op: BinaryOp| match op {
+            BinaryOp::And => "&",
+            BinaryOp::Or => "|",
+            BinaryOp::Xor => "^",
+            _ => unreachable!("only `^` with `&` or `|` is unordered"),
+        };
+        let (first, second) = (symbol(before), symbol(op));
+        let written = [a, b, c].map(|operand| operand.span.text(self.source));
+        let short = written.iter().all(|text| !text.contains('\n'))
+            && written.iter().map(|text| text.len()).sum::<usize>() <= 48;
+        let [a, b, c] = if short { written } else { ["a", "b", "c"] };
+        SyntaxError::new(
+            token.span(),
+            format!(
+                "`{first}` and `{second}` need parentheses together: \
+                 write `({a} {first} {b}) {second} {c}` or `{a} {first} ({b} {second} {c})`"
+            ),
+        )
     }
 
     /// `value is pattern`: one operand after `is`, which is the pattern.
@@ -1600,6 +1643,21 @@ fn unary(op: UnaryOp, token: Token, value: Expr) -> Expr {
         span: token.span().through(value.span),
         kind: ExprKind::Unary(op, Box::new(value)),
     }
+}
+
+/// The `&`, `|` or `^` written last in `expression` without parentheses,
+/// on its right edge, as the operator it is and its two sides: what an
+/// operator written after `expression` stands beside.
+fn nearest_combining(expression: &Expr) -> Option<(BinaryOp, &Expr, &Expr)> {
+    let ExprKind::Binary(op, left, right) = &expression.kind else {
+        return None;
+    };
+    let combining = matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor);
+    // Parenthesized, it begins before its left side does.
+    if !combining || expression.span.start != left.span.start {
+        return None;
+    }
+    nearest_combining(right).or(Some((*op, left, right)))
 }
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {

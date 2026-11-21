@@ -530,7 +530,9 @@ fn the_grammar_is_ll1_and_every_rule_is_used() {
 fn the_grammar_reads_every_program_in_the_repository_as_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
     for (path, source) in sources() {
-        assert!(agree(&grammar, &path, &source), "{path} is read");
+        // A refused program may be refused as it is read; both must agree.
+        let read = agree(&grammar, &path, &source);
+        assert!(read || path.contains("tests/refused/"), "{path} is read");
     }
 }
 
@@ -569,6 +571,7 @@ const READ: &[&str] = &[
     "f(x) -> (\n  y = x is (\n    A(v) return v\n    B if b return 2\n    _ then 1\n  )\n  y\n)\n",
     "f(c) -> {asm.macros: [], depth, *c}\n",
     "f(xs) -> (\n  xs is [x, *_] else return 0\n  y = x\n  y > 1\n    else return (\n      z = y\n      z\n    )\n  y\n)\n",
+    "f(a, b, c) -> a & b == c & !a\n  & b | c & a\ng(a, b, c) -> a | b & c | (b ^ c)\nh(a, b) -> a ^ b ^ (a | b & a)\n",
 ];
 
 /// Programs both refuse.
@@ -614,6 +617,10 @@ const REFUSED: &[&str] = &[
     "f(x) -> x is (\n  A then 1\n  B then\n)\n",
     "f(x) -> x is (\n  A -> 1\n)\n",
     "f(x) -> x is (\n  A return\n)\n",
+    "f(a, b, c) -> a ^ b & c\n",
+    "f(a, b, c) -> a | b ^ c\n",
+    "f(a, b, c) -> a & b ^ c\n",
+    "f(a, b, c) -> a ^ b == c\n  | c\n",
 ];
 
 #[test]

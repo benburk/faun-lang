@@ -12,7 +12,10 @@
 /// <reference types="tree-sitter-cli/dsl" />
 // @ts-check
 
-// Infix operators, loosest first, each level left-associative.
+// Infix operators, loosest first, each level left-associative. The
+// compiler gives `^` no order with `&` and `|` and refuses it beside either
+// unparenthesized; here it reads between them, as C's does, so an editor
+// still highlights a line the compiler will refuse.
 const INFIX = [
   ['|'],
   ['^'],

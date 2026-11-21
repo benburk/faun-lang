@@ -1,0 +1,5 @@
+error: `^` and `&` need parentheses together: write `(a ^ b) & c` or `a ^ (b & c)`
+ --> xor_takes_parentheses_beside_and.fn:4:26
+  |
+4 | differ(a, b, c) -> a ^ b & c
+  |                          ^
