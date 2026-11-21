@@ -49,7 +49,7 @@ APPROVED = "origin/main"
 TRUNK = os.environ.get("RATCHET_TRUNK", APPROVED)
 # The log's series: a protected change, once merged, starts the next one, and
 # bumps this with it.
-SERIES = 8
+SERIES = 9
 
 X86, WASM, MOS = "x86_64-linux", "wasm32-wasi", "mos6502-sim65"
 TARGETS = (X86, WASM, MOS)
@@ -76,6 +76,9 @@ MINIMUM = 0.001  # a gain below a tenth of a percent overall is neutral
 SLACK = {(X86, "memory"): 16, (WASM, "memory"): 16 << 10, (MOS, "memory"): 128}
 MARGIN = 2.0  # gains must outweigh losses this many times over
 REPAIRED = 0.5  # a cell that starts working counts as a halving
+# What a cell's status ends with where its image, or its probe's twin built
+# by the same compiler, printed other than the reference: wrong code.
+WRONG = "wrong output"
 # A family's spread on a target and metric, its worst spelling over
 # its best, counts in the probes' group as half one spelling's cell: closing
 # a gap earns half again what the faster spelling earns, opening one costs
@@ -564,16 +567,18 @@ def faun_command(binary, target, small):
     return command + ["--small"] if small else command
 
 
-def faun_cell(side, label, target, workload, check, oracle, work):
+def faun_cell(side, label, target, workload, check, oracle, work, file="main.fn"):
     """Build a workload both ways for one target, hold both images to the
     oracle at a seeded size, and measure the one built for speed at the
-    target's size."""
+    target's size. A probe's twin, `twin.fn`, is held the same way."""
     directory = work / label / target
+    if file != "main.fn":
+        directory = directory / Path(file).stem
     cell = {"status": "ok"}
     images, builds = {}, {}
     for metric, small in (("size", False), ("small", True)):
         image, status, size, builds[metric] = faun_build(
-            side, target, small, workload, directory / metric
+            side, target, small, workload, directory / metric, file
         )
         cell[metric] = size
         if image is None:
@@ -609,6 +614,29 @@ def faun_cell(side, label, target, workload, check, oracle, work):
         | {k: said.get(k) for k in ("speed", "memory", "ns", "branches")}
         | {"image": str(image)}
     )
+
+
+# What a cell keeps of its run, and loses where it, or its twin, ran wrong.
+RAN = ("speed", "memory", "ns", "branches", "image")
+
+
+def twin_wrong(twin):
+    """Whether a probe's twin, built by one side's compiler, built and then
+    ran wrong: printed what the reference does not, or failed. A twin that
+    does not build or fit says nothing of the code that side writes."""
+    status = twin["status"]
+    return status != "ok" and status != "too large" and not status.startswith("build")
+
+
+def held_to_twin(cell, twin):
+    """A probe's cell on one side, broken there where that side's compiler
+    built the probe's twin and it ran wrong: the twin is Faun printing what
+    the natural spelling prints, so a side whose compiler gets it wrong
+    writes wrong code, whichever of the two shows it."""
+    if cell["status"] != "ok" or not twin_wrong(twin):
+        return cell
+    kept = {k: v for k, v in cell.items() if k not in RAN}
+    return kept | {"status": f"twin {twin['status']}"}
 
 
 def c_cell(target, workload, oracle, work):
@@ -821,6 +849,7 @@ def score(cells):
             (c for c in changes if c["ratio"] != 1), key=lambda c: c["ratio"]
         ),
         "broken": broken,
+        "corrected": corrected(cells),
         "spreads": widths,
         "spread": {
             metric: geomean(c["ratio"] for c in widths if c["metric"] == metric)
@@ -828,6 +857,20 @@ def score(cells):
             if any(c["metric"] == metric for c in widths)
         },
     }
+
+
+def corrected(cells):
+    """The cells whose output was wrong on the incumbent and is right on the
+    candidate: the program, or its probe's twin built by the incumbent's
+    compiler, printed other than the reference, and the candidate's prints
+    it and runs. The incumbent is the trunk, which a candidate cannot
+    change, so a wrong output can only be fixed here, not made to fix."""
+    return [
+        {"target": target, "workload": name, "status": sides["incumbent"]["status"]}
+        for (target, name), sides in sorted(cells.items())
+        if sides["incumbent"]["status"].endswith(WRONG)
+        and sides["candidate"]["status"] == "ok"
+    ]
 
 
 def spread(target, metric, members, label, steady=False):
@@ -944,7 +987,10 @@ def decide(scored, protected=(), slowed=()):
         )
     if reasons:
         return "reject", reasons
-    if gain - loss < MINIMUM:
+    # Wrong code fixed is worth having however little else moves: a repair
+    # it is, counted as one, and where every guard above holds, nothing else
+    # is worse beyond what the gain pays for twice over.
+    if gain - loss < MINIMUM and not scored.get("corrected"):
         return "neutral", [f"net gain {gain - loss:.5f} is below {MINIMUM:g}"]
     return "accept", []
 
@@ -967,6 +1013,11 @@ def noted(scored, steady=()):
         notes.append(
             f"{place(cell)} runs {cell['ratio'] - 1:.1%} longer with as many"
             " instructions and branches and the same memory"
+        )
+    for cell in scored.get("corrected", []):
+        notes.append(
+            f"corrects {cell['target']} {cell['workload']}, on the incumbent"
+            f" {cell['status']}"
         )
     return notes
 
@@ -1048,10 +1099,30 @@ def measure(sides, seed, jobs, only, work):
                     cells[key][label] = pool.submit(
                         faun_cell, side, label, target, workload, check, oracle, work
                     )
+                    # Each side's compiler builds the twin too, held to the
+                    # reference as the natural spelling is.
+                    if workload.probe:
+                        cells[key][f"{label} twin"] = pool.submit(
+                            faun_cell,
+                            side,
+                            label,
+                            target,
+                            workload,
+                            check,
+                            oracle,
+                            work,
+                            "twin.fn",
+                        )
         cells = {
             key: {label: pending.result() for label, pending in found.items()}
             for key, found in cells.items()
         }
+    for sides in cells.values():
+        for label in [label for label in sides if label.endswith(" twin")]:
+            twin = sides.pop(label)
+            side = label.removesuffix(" twin")
+            sides[side] = held_to_twin(sides[side], twin)
+            sides[side]["twin"] = twin["status"]
     return cells, checks, oracle, {w.name: w for w in chosen}
 
 
