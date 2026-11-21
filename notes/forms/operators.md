@@ -400,23 +400,25 @@ either way, `1 << (n - 1)` in C and `(1 << n) - 1` in Go, and `a ^ b & c`
 on words is a word either way. Those are the places Faun asks, and the
 only ones.
 
-So most lines need no parentheses at all. Rounding half to even in the
-standard library reads the same with or without them:
+So the rule is quiet where everyone agrees and explicit where languages
+disagree. A line built from arithmetic, comparisons and and-before-or
+needs no parentheses; the lines that need them are the ones a reader
+would otherwise have to stop at:
 
 ```ruby ignore
-up = (dropped > half) | ((dropped == half) & (kept % 2 == 1))
+# none needed: school arithmetic, compare, then and before or
 up = dropped > half | dropped == half & kept % 2 == 1
+
+# needed, each where a reader could misread
+mask = (1 << n) - 1   # 1 << n - 1 is 1 << (n - 1) in C, (1 << n) - 1 in Go
+flip = x ^ (y & 1)    # where ^ sits among & and | differs between languages
+odd = (x & 1) == 1    # x & 1 == 1 is a number and a Bool handed to one and
 ```
 
-and the lines that need them are the ones a reader would otherwise have to
-stop at:
-
-```ruby ignore
-seen = if (bits & U64.of_nat(0x7fffffffffffffff)) > U64.of_nat(0x7ff0000000000000)
-mix(b, c, d, i) -> (c ^ (b | !d), 7 * i % 16)
-opcode = (byte >> 5) & 7
-address = (hi << 8) | lo
-```
+The first is the standard library's rounding half to even, which writes
+its parentheses anyway, `(dropped > half) | ((dropped == half) & …)`; a
+writer may add parentheses wherever they help, and the rule only decides
+where they must be.
 
 A common way to say what precedence should be is by type: operations from
 numbers to numbers first, then from numbers to `Bool`, then from `Bool` to
@@ -436,6 +438,27 @@ expert who has the rule right in one language has it wrong in the next,
 and GCC and Clang warn on these groupings under `-Wall` because experts
 get them wrong. Faun spends a pair of parentheses where two common
 languages disagree and the types cannot tell, and nowhere else.
+
+### Why an error, and not a warning or a style rule?
+
+A warning reaches the author, when they compile. The reader of what was
+committed does not see it: a change under review, a diff in a log, an
+example in a post or a document is read where no warning is shown, and a
+warning turned off for a project or a file is not shown in an editor
+either. If the author let it pass, the ambiguous form is in the text, and
+the reader is back to knowing which language's table applies. Only a
+refusal makes the text itself unambiguous wherever it is read. The
+compiler has no warnings at all: it refuses what has no meaning or one a
+reader would misread, and leaves what is plainly meant but likely a slip
+to a [linter](../lints.md).
+
+A style guide or a project's rules could ask for the same parentheses,
+but each project would have to choose and enforce them, and code moves
+between projects, while a snippet in a post or an answer has no project at
+all. The language asking makes the rule one rule everywhere, and starting
+strict is the direction that can be undone: a grouping refused today can
+be given an order later without breaking any program, while one given an
+order cannot be refused without breaking programs that use it.
 
 ### Why not take the reading that checks?
 
