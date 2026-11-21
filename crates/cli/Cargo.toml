@@ -33,7 +33,10 @@ zstd = "0.14.4"
 [build-dependencies]
 faun-frontend.workspace = true
 
+# The recognition tests name what a program holds by position, and write
+# Barb's table of the standard's float code.
 [dev-dependencies]
+faun-barb = { workspace = true, features = ["test-support"] }
 libtest-mimic = "0.8"
 num-bigint = "0.4.8"
 

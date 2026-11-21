@@ -233,8 +233,8 @@ fn only_what_a_function_consumes_is_owned() {
     // round; called from two, it is a function of its own.
     let mut source = round_trip(3);
     let named = |source: &barb::Program, name: &str| {
-        (0..source.functions().len())
-            .map(barb::FnId::at)
+        source
+            .function_ids()
             .find(|&id| source.name(source.function(id).name) == name)
             .expect("a definition by that name")
     };

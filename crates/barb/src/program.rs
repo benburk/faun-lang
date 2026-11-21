@@ -333,6 +333,14 @@ impl Program {
     pub fn functions(&self) -> &[Function] {
         self.functions.as_slice()
     }
+
+    /// Every function's ID, in the order [`Self::functions`] holds them.
+    #[must_use]
+    pub fn function_ids(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = FnId> + ExactSizeIterator + use<> {
+        self.functions.ids()
+    }
 }
 
 impl Program {

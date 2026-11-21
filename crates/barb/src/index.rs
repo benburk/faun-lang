@@ -17,9 +17,35 @@
 
 /// Declare dense index types: `index!(pub(crate) BlockId, InstId)`. Each
 /// type, its `u32` field, and its `at` and `index` take the given visibility.
+/// `index!(pub FnId; at pub(crate))` gives the field and `at` their own, for
+/// IDs only their program hands out.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __index {
+    ($vis:vis $($name:ident),+ ; at $at:vis) => {$(
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        $vis struct $name($at u32);
+
+        impl $crate::index::Id for $name {
+            fn at(index: usize) -> Self { Self::at(index) }
+            fn index(self) -> usize { self.index() }
+        }
+
+        impl $name {
+            /// # Panics
+            ///
+            /// If the program outgrew the four billion of these it may have.
+            #[must_use]
+            $at fn at(index: usize) -> Self {
+                Self(u32::try_from(index).expect("a program within 4G of these"))
+            }
+
+            #[must_use]
+            $vis fn index(self) -> usize {
+                usize::try_from(self.0).expect("an index that fits a pointer")
+            }
+        }
+    )+};
     ($vis:vis $($name:ident),+ $(,)?) => {$(
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         $vis struct $name($vis u32);

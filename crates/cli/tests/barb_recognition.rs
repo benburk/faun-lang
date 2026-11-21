@@ -4,7 +4,6 @@ mod support;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use barb::FnId;
 use faun_core::targets::Target;
 use faun_x86_64_linux::X86_64Linux;
 use support::Package;
@@ -47,10 +46,8 @@ fn rotations_are_recognized_by_equations_with_a_checked_input_range() {
         let facts = program.analyze();
         assert_eq!(
             program
-                .functions()
-                .iter()
-                .enumerate()
-                .any(|(at, _)| { facts.rotation(FnId::at(at)).is_some_and(|r| r.bits == 8) }),
+                .function_ids()
+                .any(|id| facts.rotation(id).is_some_and(|r| r.bits == 8)),
             recognized
         );
     }
@@ -86,8 +83,9 @@ fn final_tree_facts_identify_the_builder_and_reader_before_lowering() {
         faun_frontend::lower_to_barb(&path, &faun_driver::platform(&X86_64Linux)).unwrap();
     barb::optimize(&mut program);
     let facts = program.analyze();
-    let roles: Vec<_> = (0..program.functions().len())
-        .map(|at| facts.tree_role(FnId::at(at)))
+    let roles: Vec<_> = program
+        .function_ids()
+        .map(|id| facts.tree_role(id))
         .collect();
     assert!(roles.contains(&barb::TreeRole::Builder));
     assert!(roles.contains(&barb::TreeRole::Reader));
@@ -190,8 +188,8 @@ fn reference_fingerprints() -> BTreeMap<u128, (&'static str, &'static str)> {
         for (float, format) in FLOATS {
             for (method, operation) in OPERATIONS {
                 let name = format!("{float}.{method}");
-                let id = (0..program.functions().len())
-                    .map(FnId::at)
+                let id = program
+                    .function_ids()
                     .find(|&id| program.name(program.function(id).name) == name)
                     .unwrap_or_else(|| panic!("the standard has no `{name}`"));
                 let print = barb::fingerprint(&program, id)
@@ -292,8 +290,8 @@ fn every_float_operation_is_recognized_by_its_code() {
             let facts = with_floats(&program);
             // A recognized definition is never inlined, so one swept from a
             // program asking it was not recognized either.
-            let recognized = (0..program.functions().len())
-                .map(FnId::at)
+            let recognized = program
+                .function_ids()
                 .find(|&id| program.name(program.function(id).name) == name)
                 .and_then(|id| facts.float(id))
                 .unwrap_or_else(|| panic!("`{name}` is not recognized: {STALE}"));

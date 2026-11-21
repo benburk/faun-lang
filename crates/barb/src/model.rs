@@ -10,7 +10,16 @@ use crate::index::index;
 // to render it. The table belongs to the program, like every other pool
 // here, so a program is a self-contained value and two of them cannot
 // disagree about what a symbol means.
-index!(pub ExprId, FnId, TypeId, CtorId, ConstId, Local, Symbol);
+//
+// Each ID is handed out by the program that holds what it names, and read
+// back by position only to key a side table: what a program has is walked
+// through it, as `Program::function_ids` walks its functions, and no tier
+// below makes an ID from a position. The tests of those tiers do, to name
+// what a fixture built, so `test-support` makes one public for them.
+#[cfg(not(feature = "test-support"))]
+index!(pub ExprId, FnId, TypeId, CtorId, ConstId, Local, Symbol; at pub(crate));
+#[cfg(feature = "test-support")]
+index!(pub ExprId, FnId, TypeId, CtorId, ConstId, Local, Symbol; at pub);
 
 /// An argument: a local, and nothing else. That is what A-normal form buys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

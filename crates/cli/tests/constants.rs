@@ -4,7 +4,6 @@
 //! read, to be fused with what reads it.
 mod support;
 
-use barb::FnId;
 use faun_x86_64_linux::X86_64Linux;
 use support::{Package, run_counted};
 
@@ -57,11 +56,10 @@ fn optimized(package: &Package) -> barb::Program {
 
 /// Whether any definition is named `name`, or takes a parameter named so.
 fn named(program: &barb::Program, name: &str) -> (bool, bool) {
-    let ids = (0..program.functions().len()).map(FnId::at);
-    let defined = ids
-        .clone()
+    let defined = program
+        .function_ids()
         .any(|id| program.name(program.function(id).name) == name);
-    let taken = ids.into_iter().any(|id| {
+    let taken = program.function_ids().any(|id| {
         program
             .parameter_names(id)
             .any(|parameter| parameter == name)
