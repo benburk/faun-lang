@@ -111,16 +111,15 @@ fn lower_with(
 ) -> Result<Program, String> {
     barb::validate(program)?;
     // A counted walk handed numbers the target holds in half a word runs
-    // on a copy whose numbers analysis can then bound.
-    let split =
-        counted_most(routines).and_then(|(most, lists)| barb::counted(program, most, lists));
-    let program = split.as_ref().unwrap_or(program);
-    let facts = &program.assuming(&assumed(program, routines));
-    lowered(program, routines, facts, wanted)
+    // on a copy whose numbers analysis can then bound. What is assumed of
+    // values from outside is the same of the split program: the copies
+    // have bodies, and no type or the entry changes.
+    let (program, facts) = program.for_target(&assumed(program, routines), counted_walks(routines));
+    lowered(&program, routines, &facts, wanted)
 }
 
 /// The most a counted walk is handed for its copy to run with narrow
-/// numbers ([`barb::counted`]), and whether a walk holding a list is
+/// numbers ([`barb::Counted`]), and whether a walk holding a list is
 /// copied: a list's length, and no more than half a word holds, so that two
 /// numbers it counts up multiplied still fit a word. A 16-bit target runs
 /// short of room before it runs short of time, and its narrow arithmetic is
@@ -128,14 +127,17 @@ fn lower_with(
 /// program there as much as a tenth of its size: it copies only a walk of
 /// numbers alone, whose numbers are otherwise naturals of any size, and not
 /// one holding a list, whose length bounds what it counts already.
-fn counted_most(routines: &Routines) -> Option<(u64, bool)> {
+fn counted_walks(routines: &Routines) -> Option<barb::Counted> {
     let word = routines.word()?;
     let half = (1u64 << (word / 2)) - 1;
     let most = routines
         .length()
         .high
         .map_or(half, |length| length.min(half));
-    Some((most, word >= 32))
+    Some(barb::Counted {
+        most,
+        lists: word >= 32,
+    })
 }
 
 /// [`lower_with`], given the program's facts.
@@ -152,7 +154,7 @@ fn lowered(
     let (entry_params, arguments) = entry_parameters(&demand, entry, routines, wanted)?;
     let (mut machine, main) = begun(program, entry, &entry_params);
     let callees = declare(&demand, routines, &mut machine, (entry, main))?;
-    transfer_facts(&mut machine, &callees, facts);
+    transfer_facts(&mut machine, program, &callees, facts);
     let bytes = argument_bytes(program, facts, entry, &demand.carries);
 
     let lowering = Lowering {
@@ -174,8 +176,7 @@ fn lowered(
             (at, made)
         }),
     };
-    for (at, callee) in lowering.callees.iter().enumerate() {
-        let id = barb::FnId::at(at);
+    for (id, callee) in program.function_ids().zip(&lowering.callees) {
         if matches!(callee, Callee::Function(_)) && program.function(id).body().is_some() {
             lowering.function(&mut machine, id)?;
         }
@@ -185,12 +186,16 @@ fn lowered(
 }
 
 /// Carry semantic summaries into machine IR; never remove its terminators.
-fn transfer_facts(machine: &mut Program, callees: &[Callee<'_>], facts: &barb::Facts) {
-    for (at, callee) in callees.iter().enumerate() {
+fn transfer_facts(
+    machine: &mut Program,
+    program: &barb::Program,
+    callees: &[Callee<'_>],
+    facts: &barb::Facts,
+) {
+    for (at, callee) in program.function_ids().zip(callees) {
         if let Callee::Function(id) = callee {
-            machine.functions[*id].tree_role = Some(facts.tree_role(barb::FnId::at(at)));
-            if facts.pure(barb::FnId::at(at))
-                && matches!(machine.functions[*id].returns, super::Returns::Values(_))
+            machine.functions[*id].tree_role = Some(facts.tree_role(at));
+            if facts.pure(at) && matches!(machine.functions[*id].returns, super::Returns::Values(_))
             {
                 machine.mark_inert(*id);
             }
@@ -349,8 +354,7 @@ fn declare<'a>(
     let (program, facts) = (demand.program, demand.facts);
     let mut callees = Vec::with_capacity(program.functions().len());
     let written = written_where_called(demand, entry);
-    for (at, reached) in demand.reached.iter().enumerate() {
-        let id = barb::FnId::at(at);
+    for (id, reached) in program.function_ids().zip(&demand.reached) {
         if id == entry {
             callees.push(Callee::Function(main));
             continue;
@@ -388,7 +392,7 @@ fn declare<'a>(
             .collect();
         // External functions carry the provider's machine contract. They
         // share function IDs and calls with bodies, not the narrowing policy.
-        if written[at] {
+        if written[id.index()] {
             let (params, returns) = demand.signature(id);
             callees.push(Callee::Inline { params, returns });
             continue;
@@ -461,12 +465,12 @@ fn declare<'a>(
 /// as a loop, other than the entry, or held itself.
 fn written_where_called(demand: &Demand<'_>, entry: barb::FnId) -> Vec<bool> {
     let program = demand.program;
-    let count = demand.reached.len();
     let looping = loops(demand, entry);
-    let sites: Vec<Vec<(barb::FnId, barb::ExprId)>> = (0..count)
-        .map(|at| outside_calls(program, &demand.reached, barb::FnId::at(at)))
+    let sites: Vec<Vec<(barb::FnId, barb::ExprId)>> = program
+        .function_ids()
+        .map(|id| outside_calls(program, &demand.reached, id))
         .collect();
-    let mut hosts: Vec<Option<(barb::FnId, barb::ExprId)>> = (0..count)
+    let mut hosts: Vec<Option<(barb::FnId, barb::ExprId)>> = (0..sites.len())
         .map(|at| match sites[at].as_slice() {
             &[site] if looping[at] => Some(site),
             _ => None,
@@ -474,11 +478,11 @@ fn written_where_called(demand: &Demand<'_>, entry: barb::FnId) -> Vec<bool> {
         .collect();
     loop {
         let mut more = false;
-        for at in 0..count {
+        for id in program.function_ids() {
+            let at = id.index();
             if !looping[at] || hosts[at].is_some() {
                 continue;
             }
-            let id = barb::FnId::at(at);
             let rest: Vec<_> = sites[at]
                 .iter()
                 .filter(|&&(caller, _)| !held_in(program, &hosts, entry, caller, id))
@@ -504,10 +508,10 @@ fn written_where_called(demand: &Demand<'_>, entry: barb::FnId) -> Vec<bool> {
 /// called: neither the entry nor answered by the tier below.
 fn loops(demand: &Demand<'_>, entry: barb::FnId) -> Vec<bool> {
     let (program, facts) = (demand.program, demand.facts);
-    (0..demand.reached.len())
-        .map(|at| {
-            let id = barb::FnId::at(at);
-            demand.reached[at]
+    program
+        .function_ids()
+        .map(|id| {
+            demand.reached[id.index()]
                 && id != entry
                 && facts.operation(id).is_none()
                 && facts.float(id).is_none()
@@ -543,8 +547,7 @@ fn outside_calls(
     id: barb::FnId,
 ) -> Vec<(barb::FnId, barb::ExprId)> {
     let mut found = Vec::new();
-    for (at, &reached) in reached.iter().enumerate() {
-        let caller = barb::FnId::at(at);
+    for (caller, &reached) in program.function_ids().zip(reached) {
         let Some(body) = program
             .function(caller)
             .body()
@@ -629,11 +632,11 @@ fn unbounded_callers(
     callee: barb::FnId,
 ) -> Vec<String> {
     let mut callers = Vec::new();
-    for (at, function) in program.functions().iter().enumerate() {
+    for (id, function) in program.function_ids().zip(program.functions()) {
         let Some(body) = function.body() else {
             continue;
         };
-        let locals = facts.takes(barb::FnId::at(at)).to_vec();
+        let locals = facts.takes(id).to_vec();
         if hands_unbounded(program, facts, callee, body, locals) {
             callers.push(format!("`{}`", program.name(function.name)));
         }
@@ -963,11 +966,11 @@ impl<'a> Demand<'a> {
     }
 
     fn represent_parameters(&mut self) -> Result<(), String> {
-        for at in 0..self.program.functions().len() {
+        for id in self.program.function_ids() {
+            let at = id.index();
             if !self.reached[at] {
                 continue;
             }
-            let id = barb::FnId::at(at);
             let types: Vec<_> = self
                 .program
                 .params(id)
@@ -986,8 +989,8 @@ impl<'a> Demand<'a> {
         loop {
             let previous = self.takes.clone();
             let mut changed = false;
-            for at in 0..self.program.functions().len() {
-                let id = barb::FnId::at(at);
+            for id in self.program.function_ids() {
+                let at = id.index();
                 if !self.reached[at] || self.facts.answered(id) {
                     continue;
                 }
@@ -1580,11 +1583,9 @@ fn read_before_walking(
     routines: &Routines,
 ) -> Vec<Vec<bool>> {
     program
-        .functions()
-        .iter()
-        .enumerate()
-        .map(|(at, function)| {
-            let id = barb::FnId::at(at);
+        .function_ids()
+        .zip(program.functions())
+        .map(|(id, function)| {
             let mut takes =
                 vec![function.body().is_none() || facts.answered(id); program.params(id).len()];
             if let Some(first) = takes.first_mut()
@@ -1623,13 +1624,13 @@ fn assumed(program: &barb::Program, routines: &Routines) -> barb::Assumed {
         floats: routines.floats(),
         ..barb::Assumed::default()
     };
-    for (at, function) in program.functions().iter().enumerate() {
+    for (id, function) in program.function_ids().zip(program.functions()) {
         if let Some(provider) = function.provider()
             && let Some(bounds) = routines
                 .get(program.name(provider))
                 .and_then(Routine::bounds)
         {
-            assumed.results.push((barb::FnId::at(at), bounds));
+            assumed.results.push((id, bounds));
         }
         if let Some(provider) = function.provider()
             && routines
@@ -2773,15 +2774,7 @@ impl Lowering<'_> {
         ctor: barb::ConstructorView<'_>,
         out: &mut Vec<ValueId>,
     ) {
-        let mut budget = barb::Budget::new(barb::FoldLimits {
-            work: u64::MAX,
-            work_per_function: u64::MAX,
-            max_bytes: usize::MAX,
-            max_depth: usize::MAX,
-        });
-        let values = ctor
-            .fields(&mut budget)
-            .expect("validated constants can be revisited");
+        let values = ctor.fields();
         for (carried, value) in self.fields_carried(ctor.constructor()).zip(values) {
             match carried {
                 Some(Carried::One(class)) => out.push(self.static_value(b, class, value)),
@@ -2882,15 +2875,7 @@ impl Lowering<'_> {
         push: barb::CtorId,
         recursive: usize,
     ) -> [ValueId; 3] {
-        let mut budget = barb::Budget::new(barb::FoldLimits {
-            work: u64::MAX,
-            work_per_function: u64::MAX,
-            max_bytes: usize::MAX,
-            max_depth: usize::MAX,
-        });
-        let elements = spine
-            .elements(&mut budget)
-            .expect("validated constants can be revisited");
+        let elements = spine.elements();
         let shape = self.element_shape(b, push, usize::from(recursive == 0));
         if let Some(sequence) = self.inline_rows(b, &elements, shape, push, recursive) {
             return sequence;

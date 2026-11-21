@@ -281,11 +281,13 @@ Then:
    invalid input.
 4. `optimize(&mut program)` runs the schedule below.
 5. `program.analyze()` or `program.assuming(&assumed)` gives the `Facts`.
+   The tier lowering for a target asks `program.for_target(&assumed,
+   counted)` instead, for the program it lowers with its facts: where the
+   target says how small a number it holds narrowly (`Counted`), each
+   counted walk is split from a copy handed only numbers that small, a
+   trade of work for time only the target can price.
 6. `Program::render_analyzed` shows a program with its facts;
    `faun emit barb` prints it from the command line.
-
-`canonical` and `fingerprint` are public so the float table can be written
-from the standard. A frontend doesn't need them.
 
 Barb is its own crate, `faun-barb`, read as `barb`, so what crosses the
 boundary is exactly what is `pub` here. The frontend depends on it to build
@@ -296,7 +298,10 @@ pools and ranges every tier keeps a program in; `float`, the IEEE 754
 operations it recognizes; and `Bounds`, what is known of a number, which
 machine IR holds a value at. The `test-support` feature adds `fixture`, a small standard
 library built with the builder, and `test_support`, the optimizer's single
-steps, for the tests of the tiers below; only dev-dependencies turn it on.
+steps and the `canonical` and `fingerprint` that write the float table from
+the standard, for the tests of the tiers below; it also makes an ID from a
+position, which a program alone does otherwise. Only dev-dependencies turn
+it on.
 
 ## Optimization passes
 

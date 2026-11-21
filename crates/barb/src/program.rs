@@ -99,7 +99,7 @@ pub fn single_field_constant<'a>(program: &'a Program, mut value: Constant<'a>) 
             unreachable!("a one-field product is constructor encoded")
         };
         let fields = product
-            .fields(&mut budget)
+            .fields_within(&mut budget)
             .expect("validated constant fields can be revisited");
         value = fields[0];
     }
@@ -222,6 +222,24 @@ impl Program {
         super::facts::analyze(self, self.recognition().into_owned(), assumed)
     }
 
+    /// The program a target lowers, and its facts under `assumed`: this
+    /// one, or, where the target asks for `counted` and the program has a
+    /// counted walk, a copy with each such walk split from one handed only
+    /// numbers that small. Whether that trade is worth it, and how small,
+    /// is the target's to say; the rewrite is Barb's.
+    #[must_use]
+    pub fn for_target(
+        &self,
+        assumed: &super::Assumed,
+        counted: Option<super::Counted>,
+    ) -> (Cow<'_, Self>, Facts) {
+        let program = counted
+            .and_then(|super::Counted { most, lists }| super::split::counted(self, most, lists))
+            .map_or(Cow::Borrowed(self), Cow::Owned);
+        let facts = program.assuming(assumed);
+        (program, facts)
+    }
+
     /// Forget what was recognised of this program: a declaration or a body
     /// now says something it did not.
     pub(super) fn redefined(&mut self) {
@@ -314,6 +332,14 @@ impl Program {
     #[must_use]
     pub fn functions(&self) -> &[Function] {
         self.functions.as_slice()
+    }
+
+    /// Every function's ID, in the order [`Self::functions`] holds them.
+    #[must_use]
+    pub fn function_ids(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = FnId> + ExactSizeIterator + use<> {
+        self.functions.ids()
     }
 }
 

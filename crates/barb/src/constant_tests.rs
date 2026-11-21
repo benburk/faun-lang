@@ -41,7 +41,7 @@ fn check_view(program: &mut Program, owner: TypeId, value: &Value) {
     assert_eq!(rebuilt.owner(), owner);
     assert_eq!(rebuilt.encoded(), view.encoded());
     if let ConstantView::Constructor(ctor) = view.view() {
-        let borrowed = ctor.fields(&mut budget).unwrap();
+        let borrowed = ctor.fields_within(&mut budget).unwrap();
         assert_eq!(borrowed.len(), fields.len());
         for (borrowed, owned) in borrowed.iter().zip(&fields) {
             assert_eq!(borrowed.owner(), owned.owner());

@@ -528,11 +528,7 @@ impl Constants<'_> {
             }
             return;
         };
-        let mut budget = super::Budget::new(unlimited());
-        let fields = ctor
-            .fields(&mut budget)
-            .expect("validated constants can be revisited");
-        for (at, field) in fields.into_iter().enumerate() {
+        for (at, field) in ctor.fields().into_iter().enumerate() {
             let place = super::ranges::slot(self.program, ctor.constructor(), at);
             self.stores
                 .push((place, constant_bounds(self.program, field)));
@@ -573,11 +569,7 @@ impl Constants<'_> {
     }
 
     fn spine_elements(&mut self, spine: super::SpineView<'_>, cons: CtorId, recursive: usize) {
-        let mut budget = super::Budget::new(unlimited());
-        let elements = spine
-            .elements(&mut budget)
-            .expect("validated constants can be revisited");
-        for fields in elements {
+        for fields in spine.elements() {
             for (at, field) in fields.into_iter().enumerate() {
                 let at = if at >= recursive { at + 1 } else { at };
                 self.stores.push((
@@ -587,15 +579,6 @@ impl Constants<'_> {
                 self.fields(field);
             }
         }
-    }
-}
-
-const fn unlimited() -> super::FoldLimits {
-    super::FoldLimits {
-        work: u64::MAX,
-        work_per_function: u64::MAX,
-        max_bytes: usize::MAX,
-        max_depth: usize::MAX,
     }
 }
 

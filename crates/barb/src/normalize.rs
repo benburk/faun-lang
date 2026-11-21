@@ -87,7 +87,7 @@ struct Rules {
 /// to depends on its own body, never on budgets or the rest of the program,
 /// and two ways of writing one equation that differ only in aliases, record
 /// reads or decided matches are recognized alike.
-pub fn canonical(program: &mut Program) {
+pub(crate) fn canonical(program: &mut Program) {
     let rules = Rules {
         blind: true,
         ..Rules::default()
@@ -1096,7 +1096,7 @@ impl Rewrite<'_> {
         let fields: Vec<_> = match constant.view() {
             super::ConstantView::Constructor(view) => {
                 let mut budget = Budget::new(FoldLimits::default());
-                let fields = view.fields(&mut budget).ok()?;
+                let fields = view.fields_within(&mut budget).ok()?;
                 fields
                     .into_iter()
                     .map(|field| field.to_owned(&mut budget))

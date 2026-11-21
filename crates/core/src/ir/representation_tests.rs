@@ -272,7 +272,7 @@ fn default_pipeline_removes_folded_library_temporaries() {
         // Without cleanup, which would remove what folding left behind.
         let mut uncleaned = source;
         barb::test_support::structural(&mut uncleaned);
-        barb::test_support::normalize_with_limits(&mut uncleaned, barb::InlineLimits::default());
+        barb::test_support::normalize(&mut uncleaned);
         barb::test_support::fold(&mut uncleaned);
         let uncleaned = crate::lower_to_machine_ir(&uncleaned, &routines()).unwrap();
         validate(&uncleaned).unwrap();
@@ -537,10 +537,7 @@ fn unsupported_values_after_nonreturning_bindings_are_not_lowered() {
             let mut source = source.clone();
             if normalized {
                 // The second case becomes a match whose every arm leaves.
-                barb::test_support::normalize_with_limits(
-                    &mut source,
-                    barb::InlineLimits::default(),
-                );
+                barb::test_support::normalize(&mut source);
             }
             lower_program(&source).unwrap();
         }
