@@ -701,6 +701,144 @@ class Backend(unittest.TestCase):
         self.assertIn("| program-0", written)
 
 
+def wrong(status="at 100: wrong output", **measures):
+    """A cell whose image ran and printed other than the reference."""
+    return cell(speed=None, memory=None, status=status, **measures)
+
+
+class WrongCode(unittest.TestCase):
+    """Wrong output fixed is accepted where nothing else is worse beyond
+    what it pays for; and a probe's twin, built by each side, is held to
+    the reference as its natural spelling is."""
+
+    def many_probes(self, old, new, others=100, target=MOS):
+        """One probe going from `old` to `new` among many unchanged, beside
+        a suite on every target, so that its repair alone is below the
+        neutral line, as one probe's is among the trunk's."""
+        cells = probing([cell()] * others)
+        for where in (X86, WASM, MOS):
+            cells |= suite([cell()], target=where)
+        cells[target, f"{PROBE}writer"] = {"incumbent": old, "candidate": new}
+        return cells
+
+    def test_wrong_output_fixed_with_nothing_else_moving_is_accepted(self):
+        cells = self.many_probes(wrong(), cell())
+        scored = score(cells)
+        self.assertLess(scored["gain"] - scored["loss"], ratchet.MINIMUM)
+        self.assertEqual(decide(scored), ("accept", []))
+        [fixed] = scored["corrected"]
+        self.assertEqual(fixed["workload"], f"{PROBE}writer")
+        self.assertIn(f"corrects {MOS} {PROBE}writer", noted(scored)[0])
+
+    def test_a_suite_programs_wrong_output_fixed_is_accepted(self):
+        cells = suite([cell(), cell()], [wrong(), cell()], X86)
+        self.assertEqual(verdict(cells), "accept")
+
+    def test_a_program_that_only_starts_to_fit_corrects_nothing(self):
+        absent = wrong(status="too large")
+        scored = score(self.many_probes(absent, cell()))
+        self.assertEqual(scored["corrected"], [])
+        self.assertEqual(decide(scored)[0], "neutral")
+
+    def test_a_fix_with_a_cell_past_the_guard_is_rejected(self):
+        cells = self.many_probes(wrong(), cell())
+        cells[X86, "program-0"]["candidate"] = cell(size=5600, image="large")
+        self.assertEqual(verdict(cells), "reject")
+
+    def test_a_fix_pays_for_no_more_than_half_its_repair(self):
+        cells = self.many_probes(wrong(), cell())
+        # The repair is two halvings among the probes; a suite cell a few
+        # percent larger costs more than half of that.
+        cells[X86, "program-0"]["candidate"] = cell(size=5100, image="large")
+        scored = score(cells)
+        self.assertGreater(2 * scored["loss"], scored["gain"])
+        self.assertEqual(decide(scored)[0], "reject")
+        cells[X86, "program-0"]["candidate"] = cell(size=5001, image="larger")
+        self.assertEqual(verdict(cells), "accept")
+
+    def test_a_fix_beside_a_break_is_rejected(self):
+        cells = self.many_probes(wrong(), cell())
+        cells[X86, "program-0"]["candidate"] = wrong()
+        self.assertEqual(verdict(cells), "reject")
+
+    def test_the_same_wrong_output_on_both_sides_is_no_change(self):
+        cells = self.many_probes(wrong(), wrong())
+        scored = score(cells)
+        self.assertEqual(scored["corrected"], [])
+        self.assertEqual(decide(scored)[0], "no change")
+
+    def test_a_twin_that_runs_wrong_breaks_its_probes_cell(self):
+        natural = cell() | {"image": "/i", "ns": 5, "branches": 9}
+        held = ratchet.held_to_twin(natural, {"status": "at 8: wrong output"})
+        self.assertEqual(held["status"], "twin at 8: wrong output")
+        self.assertTrue(held["status"].endswith(ratchet.WRONG))
+        for gone in ("speed", "memory", "ns", "branches", "image"):
+            self.assertNotIn(gone, held)
+        self.assertEqual((held["size"], held["small"]), (5000, 4000))
+        crashed = ratchet.held_to_twin(natural, {"status": "at 8: exit 3: stack"})
+        self.assertEqual(crashed["status"], "twin at 8: exit 3: stack")
+
+    def test_a_twin_that_does_not_build_or_fit_says_nothing(self):
+        for status in ("ok", "too large", "build: error: no"):
+            self.assertEqual(ratchet.held_to_twin(cell(), {"status": status}), cell())
+        # A natural spelling already not running keeps its own status.
+        own = wrong()
+        self.assertEqual(
+            ratchet.held_to_twin(own, {"status": "at 8: wrong output"}), own
+        )
+
+    def test_a_twin_fixed_on_the_candidate_is_accepted(self):
+        # The incumbent's compiler wrote the twin's wrong total on the 6502,
+        # the natural spelling right on both sides: PR #64.
+        twin_wrong = {"status": "at 8: wrong output"}
+        old = ratchet.held_to_twin(cell(), twin_wrong)
+        new = ratchet.held_to_twin(cell(), {"status": "ok"})
+        self.assertEqual(verdict(self.many_probes(old, new)), "accept")
+
+    def test_a_twin_broken_on_the_candidate_rejects(self):
+        new = ratchet.held_to_twin(cell(), {"status": "small image at 3: wrong output"})
+        scored = score(self.many_probes(cell(), new))
+        self.assertEqual(len(scored["broken"]), 2)
+        self.assertEqual(decide(scored)[0], "reject")
+
+    def test_each_side_builds_and_holds_each_probes_twin(self):
+        built = []
+
+        def cell_of(side, label, target, workload, check, oracle, work, file="main.fn"):
+            built.append((label, target, workload.name, file))
+            if file == "twin.fn" and label == "incumbent":
+                return {"status": "at 8: wrong output"}
+            return cell()
+
+        probe = ratchet.Workload(f"{PROBE}writer", Path(), "argument", {MOS: 8})
+        kernel = ratchet.Workload("sieve", Path(), "argument", {MOS: 8})
+        oracle = SimpleNamespace(case=lambda workload, size: None)
+        sides = {"candidate": object(), "incumbent": object()}
+        with (
+            mock.patch.object(ratchet, "WORKLOADS", [kernel]),
+            mock.patch.object(ratchet, "probes", lambda: [probe]),
+            mock.patch.object(ratchet, "Oracle", lambda *_: oracle),
+            mock.patch.object(ratchet, "faun_cell", cell_of),
+            mock.patch.object(ratchet, "c_cell", lambda *_: {"status": "ok"}),
+        ):
+            cells, *_ = ratchet.measure(sides, 1, 2, "", Path())
+        twins = sorted(b for b in built if b[3] == "twin.fn")
+        self.assertEqual(
+            twins,
+            [
+                ("candidate", MOS, f"{PROBE}writer", "twin.fn"),
+                ("incumbent", MOS, f"{PROBE}writer", "twin.fn"),
+            ],
+        )
+        writer = cells[MOS, f"{PROBE}writer"]
+        self.assertEqual(set(writer), {"c", "incumbent", "candidate"})
+        self.assertEqual(writer["incumbent"]["status"], "twin at 8: wrong output")
+        self.assertEqual(writer["candidate"]["status"], "ok")
+        self.assertEqual(writer["candidate"]["twin"], "ok")
+        self.assertNotIn("twin", cells[MOS, "sieve"]["candidate"])
+        self.assertEqual(verdict(cells), "accept")
+
+
 class Series(unittest.TestCase):
     def test_a_log_row_is_in_the_evaluators_series_not_the_last_rows(self):
         summary = dict(
