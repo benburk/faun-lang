@@ -98,8 +98,8 @@ round(words, (a, b, c, d), (i, (k, s))) -> (
 
 # Each round's function of b, c and d, and which word of the block it adds.
 mix : (U32, U32, U32, Nat) -> (U32, Nat)
-mix(b, c, d, i) if i < 16 -> (b & c | !b & d, i)
-mix(b, c, d, i) if i < 32 -> (d & b | !d & c, (5 * i + 1) % 16)
+mix(b, c, d, i) if i < 16 -> ((b & c) | (!b & d), i)
+mix(b, c, d, i) if i < 32 -> ((d & b) | (!d & c), (5 * i + 1) % 16)
 mix(b, c, d, i) if i < 48 -> (b ^ c ^ d, (3 * i + 5) % 16)
 mix(b, c, d, i) -> (c ^ (b | !d), 7 * i % 16)
 
