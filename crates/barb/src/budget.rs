@@ -5,14 +5,14 @@ use std::fmt;
 /// Resource limits for one folding pass, not language integer limits.
 /// Work counts visits, copied bytes and conservative bigint word operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FoldLimits {
+pub(crate) struct FoldLimits {
     /// What a whole pass may spend.
-    pub work: u64,
+    pub(crate) work: u64,
     /// What one definition may spend of it, so that a costly answer
     /// declined in one leaves the rest something to fold with.
-    pub work_per_function: u64,
-    pub max_bytes: usize,
-    pub max_depth: usize,
+    pub(crate) work_per_function: u64,
+    pub(crate) max_bytes: usize,
+    pub(crate) max_depth: usize,
 }
 
 impl Default for FoldLimits {
@@ -42,7 +42,7 @@ impl fmt::Display for LimitExceeded {
 impl std::error::Error for LimitExceeded {}
 
 #[derive(Debug)]
-pub struct Budget {
+pub(crate) struct Budget {
     pub(super) remaining: u64,
     limits: FoldLimits,
     depth: usize,
@@ -50,12 +50,24 @@ pub struct Budget {
 
 impl Budget {
     #[must_use]
-    pub const fn new(limits: FoldLimits) -> Self {
+    pub(crate) const fn new(limits: FoldLimits) -> Self {
         Self {
             remaining: limits.work,
             limits,
             depth: 0,
         }
+    }
+
+    /// A budget nothing exhausts, for revisiting what was already built
+    /// within one.
+    #[must_use]
+    pub(crate) const fn unlimited() -> Self {
+        Self::new(FoldLimits {
+            work: u64::MAX,
+            work_per_function: u64::MAX,
+            max_bytes: usize::MAX,
+            max_depth: usize::MAX,
+        })
     }
 
     pub(super) const fn spend(&mut self, work: u64) -> Result<(), LimitExceeded> {

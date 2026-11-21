@@ -99,7 +99,7 @@ pub fn single_field_constant<'a>(program: &'a Program, mut value: Constant<'a>) 
             unreachable!("a one-field product is constructor encoded")
         };
         let fields = product
-            .fields(&mut budget)
+            .fields_within(&mut budget)
             .expect("validated constant fields can be revisited");
         value = fields[0];
     }

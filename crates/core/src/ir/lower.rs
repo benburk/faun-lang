@@ -2775,15 +2775,7 @@ impl Lowering<'_> {
         ctor: barb::ConstructorView<'_>,
         out: &mut Vec<ValueId>,
     ) {
-        let mut budget = barb::Budget::new(barb::FoldLimits {
-            work: u64::MAX,
-            work_per_function: u64::MAX,
-            max_bytes: usize::MAX,
-            max_depth: usize::MAX,
-        });
-        let values = ctor
-            .fields(&mut budget)
-            .expect("validated constants can be revisited");
+        let values = ctor.fields();
         for (carried, value) in self.fields_carried(ctor.constructor()).zip(values) {
             match carried {
                 Some(Carried::One(class)) => out.push(self.static_value(b, class, value)),
@@ -2884,15 +2876,7 @@ impl Lowering<'_> {
         push: barb::CtorId,
         recursive: usize,
     ) -> [ValueId; 3] {
-        let mut budget = barb::Budget::new(barb::FoldLimits {
-            work: u64::MAX,
-            work_per_function: u64::MAX,
-            max_bytes: usize::MAX,
-            max_depth: usize::MAX,
-        });
-        let elements = spine
-            .elements(&mut budget)
-            .expect("validated constants can be revisited");
+        let elements = spine.elements();
         let shape = self.element_shape(b, push, usize::from(recursive == 0));
         if let Some(sequence) = self.inline_rows(b, &elements, shape, push, recursive) {
             return sequence;

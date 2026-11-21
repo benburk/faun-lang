@@ -151,7 +151,9 @@ mod walk;
 
 pub use affine::Affine;
 pub use bounds::Bounds;
-pub use budget::{Budget, FoldLimits, LimitExceeded};
+pub(crate) use budget::FoldLimits;
+// A constant too large to build says so through `ConstructionError`.
+pub use budget::LimitExceeded;
 pub use builder::Builder;
 pub use constant::{
     ByteView, Constant, ConstantView, ConstructionError, ConstructorView, NaturalView, SpineView,

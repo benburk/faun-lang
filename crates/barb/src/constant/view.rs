@@ -144,10 +144,25 @@ impl<'a> SpineView<'a> {
     /// Borrow each element's fields but the rest, first element first,
     /// without materializing them.
     ///
+    /// # Panics
+    /// If the spine has more elements than a word counts; never otherwise
+    /// for a constant the program holds, which was checked whole when it
+    /// was built.
+    #[must_use]
+    pub fn elements(self) -> Vec<Vec<Constant<'a>>> {
+        self.elements_within(&mut Budget::unlimited())
+            .expect("a known spine's elements can be found")
+    }
+
+    /// [`Self::elements`], within `budget`.
+    ///
     /// # Errors
     /// If locating encoded field boundaries exceeds the budget, or the
     /// spine has more elements than a word counts.
-    pub fn elements(self, budget: &mut Budget) -> Result<Vec<Vec<Constant<'a>>>, LimitExceeded> {
+    pub(crate) fn elements_within(
+        self,
+        budget: &mut Budget,
+    ) -> Result<Vec<Vec<Constant<'a>>>, LimitExceeded> {
         let Shape::Spine {
             cons, recursive, ..
         } = shape(self.0.types, self.0.owner)
@@ -188,9 +203,23 @@ impl<'a> ConstructorView<'a> {
 
     /// Borrow fields without materializing their constructor trees.
     ///
+    /// # Panics
+    /// Never for a constant the program holds, which was checked whole
+    /// when it was built.
+    #[must_use]
+    pub fn fields(self) -> Vec<Constant<'a>> {
+        self.fields_within(&mut Budget::unlimited())
+            .expect("a known constructor's fields can be found")
+    }
+
+    /// [`Self::fields`], within `budget`.
+    ///
     /// # Errors
     /// If locating encoded field boundaries exceeds the budget.
-    pub fn fields(self, budget: &mut Budget) -> Result<Vec<Constant<'a>>, LimitExceeded> {
+    pub(crate) fn fields_within(
+        self,
+        budget: &mut Budget,
+    ) -> Result<Vec<Constant<'a>>, LimitExceeded> {
         let value = self.constant;
         budget.bytes(value.bytes.len())?;
         budget.spend(
