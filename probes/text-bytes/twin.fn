@@ -1,0 +1,34 @@
+# The numbers below `n`, each modulo 1000, written out parted by commas:
+# a recursion writing each number's digits as bytes, read as text at the
+# end. The family's twin.
+package {}
+
+import std.host {Host}
+
+listed : Nat -> Str
+listed(n) -> Str.from_ascii(written(0, n, [])).ok_or("")
+
+written : (Nat, Nat, List(U8)) -> List(U8)
+written(i, n, bytes) -> (
+  if i >= n return bytes
+  separated = if i == 0 then bytes else bytes.append(',')
+  written(i + 1, n, digits(i % 1000, separated))
+)
+
+# `bytes` with `value`'s decimal digits after it.
+digits : (Nat, List(U8)) -> List(U8)
+digits(value, bytes) -> (
+  front = if value >= 10 then digits(value / 10, bytes) else bytes
+  front.append(U8.of_nat(value % 10) + '0')
+)
+
+digest : Str -> Nat
+digest(text) -> text.to_utf8().fold(0, |h, byte| (h * 31 + byte.to_nat()) % 1000003)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  text = listed(n)
+  printed = host.println!("${text.len()} ${digest(text)}")
+  host.exit!(0)
+)

@@ -1,0 +1,20 @@
+# `n` items, item `i` scoring `i * 7919 % 101`, in order of score, then of
+# position, and the positions so ordered hashed:
+# each item a record, sorted on its score, a stable sort keeping
+# positions in order.
+package {}
+
+import std.host {Host}
+
+ordered : Nat -> List(Nat)
+ordered(n) -> List.range(n).map(|i| {id: i, score: i * 7919 % 101}).sort_on(|item| item.score).map(|item| item.id)
+
+digest : List(Nat) -> Nat
+digest(ids) -> ids.fold(0, |h, id| (h * 31 + id) % 1000003)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${digest(ordered(n))}")
+  host.exit!(0)
+)

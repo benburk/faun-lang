@@ -1,0 +1,19 @@
+# The numbers below `n`, each modulo 1000, written out parted by commas:
+# a fold splicing each onto the text so far.
+package {}
+
+import std.host {Host}
+
+listed : Nat -> Str
+listed(n) -> List.range(n).fold("", |text, i| if i == 0 then "${i % 1000}" else "${text},${i % 1000}")
+
+digest : Str -> Nat
+digest(text) -> text.to_utf8().fold(0, |h, byte| (h * 31 + byte.to_nat()) % 1000003)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  text = listed(n)
+  printed = host.println!("${text.len()} ${digest(text)}")
+  host.exit!(0)
+)

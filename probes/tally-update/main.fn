@@ -1,0 +1,16 @@
+# How often each of `n` keys, the squares modulo 97, occurs: a fold
+# updating each key's count, from 0 where it is missing.
+package {}
+
+import std.host {Host}
+
+tallied : List(Nat) -> Map(Nat, Nat)
+tallied(keys) -> keys.fold(Map.empty, |counts, key| counts.update_or(key, 0, |count| count + 1))
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  counts = tallied(List.range(n).map(|i| i * i % 97))
+  printed = host.println!("${counts.len()} ${counts.fold(0, |sum, key, count| sum + key * count)}")
+  host.exit!(0)
+)

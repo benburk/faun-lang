@@ -1,0 +1,25 @@
+# `n` items, item `i` scoring `i * 7919 % 101`, in order of score, then of
+# position, and the positions so ordered hashed:
+# each item a type of its own, whose `cmp` compares scores, then
+# positions.
+package {}
+
+import std.host {Host}
+
+Item : {id: Nat, score: Nat}.(
+  cmp : (Item, Item) -> Order
+  cmp(Item(a), Item(b)) -> a.score.cmp(b.score).or(a.id.cmp(b.id))
+)
+
+ordered : Nat -> List(Nat)
+ordered(n) -> List.range(n).map(|i| Item({id: i, score: i * 7919 % 101})).sort().map(|Item(item)| item.id)
+
+digest : List(Nat) -> Nat
+digest(ids) -> ids.fold(0, |h, id| (h * 31 + id) % 1000003)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  printed = host.println!("${digest(ordered(n))}")
+  host.exit!(0)
+)

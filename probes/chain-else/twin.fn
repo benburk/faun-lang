@@ -1,0 +1,33 @@
+# `n` readings, each two steps that may fail, added up with 1 for a failed one:
+# each step matched, its error passed on. The family's twin.
+package {}
+
+import std.host {Host}
+
+Fault = [Unreadable, TooLarge]
+
+# The last digit of `i`, unreadable at every multiple of 11.
+digit : Nat -> Result(Nat, Fault)
+digit(i) -> if i % 11 == 0 then Err(Unreadable) else Ok(i % 10)
+
+# A digit scaled, too large where it is 7.
+scaled : Nat -> Result(Nat, Fault)
+scaled(7) -> Err(TooLarge)
+scaled(d) -> Ok(d * 3 + 1)
+
+reading : Nat -> Result(Nat, Fault)
+reading(i) -> digit(i) is (
+  Ok(d) then scaled(d) is (
+    Ok(s) then Ok(d + s)
+    Err(fault) then Err(fault)
+  )
+  Err(fault) then Err(fault)
+)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  total = List.range(n).fold(0, |sum, i| sum + reading(i).ok_or(1))
+  printed = host.println!("${total}")
+  host.exit!(0)
+)
