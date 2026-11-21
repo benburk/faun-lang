@@ -24,8 +24,9 @@ error: pure definitions cannot call effect `println!`
 An effect stands at the top of a line: as a binding's value, as a body, as
 what a line's `if` or `is` tests, or on a line of its own, where what
 it answers is thrown away. It never stands inside an argument, an operand,
-a guard or the right of `&`, so the order effects run in is the order of
-the lines. A line `call!()?` passes a failure on. Only an effect may stand
+a guard or the right of `&`, nor on a line of a block in parentheses inside
+one, so the order effects run in is the order of the lines, and no effect
+is skipped by `&` or `|` leaving their right side unworked. A line `call!()?` passes a failure on. Only an effect may stand
 alone on a line; any other value is bound to a name.
 
 ```ruby ignore
@@ -265,6 +266,11 @@ instead.
 - **2026-11-10:** loops were removed ([iteration](../iteration.md)), so an
   effect is no longer tested by one, and an effectful walk is a recursive
   `!` definition.
+- **2026-11-21:** a block in parentheses inside an expression stopped
+  letting its lines stand alone. An effect on one ran where the
+  expression worked the block out: inside an argument out of line order,
+  and on the right of `&` or `|` on `Bool` not at all where the left
+  decided.
 
 ## Related
 

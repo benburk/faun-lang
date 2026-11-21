@@ -1,0 +1,17 @@
+import std.host {Host, Files, File, IoError, Mode.*}
+
+main! : Host -> []
+main!(host) -> (
+  ran = program!(host.files, host.args.is_empty())
+  host.exit!(0)
+)
+
+paired : File -> (Bool, File)
+paired(file) -> (True, file)
+
+program! : (Files, Bool) -> Result(Nat, IoError)
+program!(files, ready) -> (
+  file = files.open!("a.tmp", Overwrite)?
+  closed = if ready & (paired(file) is (_, held)) then held.close!() else file.close!()
+  Ok(0)
+)

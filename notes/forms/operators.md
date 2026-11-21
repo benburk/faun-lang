@@ -118,11 +118,17 @@ side, with the right side only in the arm that needs it. The method call
 `a.or(b)` is not the operator: it is an ordinary call, and works out both
 arguments first, as every call does.
 
-Three rules follow from the right side perhaps not running. `?` on the
+Four rules follow from the right side perhaps not running. `?` on the
 right of `&` or `|` is refused, since it would leave from a side that may
-not be worked out; `=` binds no name of the body there; and a name a test
-on the left binds is seen on the right, along an `&`, only because the
-right runs only where the test held: `r is Ok(v) & v < 100`.
+not be worked out; `=` binds no name of the body there; a `!` call there
+is refused, on a line of a block in parentheses as anywhere else in an
+operand, since an effect stands at the top of a line
+([effects](effects.md)) and a skipped one would be silent; and a name a
+test on the left binds is seen on the right, along an `&`, only because
+the right runs only where the test held: `r is Ok(v) & v < 100`. The
+linearity check reads the right side as a branch too: a `File` a test
+there takes apart is still held where the left decided, and is refused
+as used up on one way and kept on the other.
 
 For any other type an operator's right side is an argument like any other.
 Where the method reads it on some paths only, the optimizer may leave it
@@ -490,8 +496,8 @@ side, `n == 0 | odd(n - 1)`, and a test on the left binds names the right
 side reads, `xs.first() is Ok(x) & x > 10`, where the right side has no
 `x` to read unless the test held. Without the promise, every such line
 would be an `if` or a guard. The cost is that `&` and `|` on `Bool` are the
-one place an operator is not an ordinary call, which is why `?` on their
-right is refused.
+one place an operator is not an ordinary call, which is why `?` and a `!`
+call on their right are refused.
 
 ### Why may an operator's operands differ in type?
 
@@ -522,6 +528,12 @@ it does.
 
 ## History
 
+- **2026-11-21:** a `!` call on a line of a block in parentheses on the
+  right of `&` or `|` was accepted and skipped where the left decided, a
+  `close!` there leaking its `File` unseen by the linearity check, which
+  takes the right side to use nothing up. A block inside any expression
+  now keeps its lines from standing alone, so the effect is refused as in
+  any operand. No program changed.
 - **2026-11-21:** `<<` and `>>` became operators, `shift_left` and
   `shift_right` as every operator is a method, on `Nat` and the unsigned
   words. A shift binds tighter than a comparison and has no order with

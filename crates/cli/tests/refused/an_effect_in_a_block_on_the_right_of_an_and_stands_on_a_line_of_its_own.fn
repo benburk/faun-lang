@@ -1,0 +1,10 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  ok = host.args.is_empty() & (
+    printed = host.println!("the right side ran")
+    printed.is_ok()
+  )
+  host.exit!(if ok then 0 else 1)
+)
