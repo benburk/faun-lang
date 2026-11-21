@@ -43,13 +43,22 @@ use super::{
     TypeId, TypeShape, type_shape, walk,
 };
 
+/// What a target asks of its counted walks: the most one is handed for a
+/// copy of it to run with narrow numbers, and whether a walk holding a list
+/// is copied too, rather than only a walk of numbers alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Counted {
+    pub most: u64,
+    pub lists: bool,
+}
+
 /// `program` with each counted walk split, where it has one.
 ///
 /// Every call of a counted walk from outside it asks whether the numbers
 /// it counts with are at most `most`, and calls a copy of the walk where
 /// they are; nothing comes back where there is no such walk.
 #[must_use]
-pub fn counted(program: &Program, most: u64, lists: bool) -> Option<Program> {
+pub(crate) fn counted(program: &Program, most: u64, lists: bool) -> Option<Program> {
     let below = most.checked_add(1)?;
     let recognised = program.recognition();
     let found: Vec<(FnId, Vec<usize>)> = (0..program.functions().len())

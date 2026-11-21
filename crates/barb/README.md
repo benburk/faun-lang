@@ -281,6 +281,11 @@ Then:
    invalid input.
 4. `optimize(&mut program)` runs the schedule below.
 5. `program.analyze()` or `program.assuming(&assumed)` gives the `Facts`.
+   The tier lowering for a target asks `program.for_target(&assumed,
+   counted)` instead, for the program it lowers with its facts: where the
+   target says how small a number it holds narrowly (`Counted`), each
+   counted walk is split from a copy handed only numbers that small, a
+   trade of work for time only the target can price.
 6. `Program::render_analyzed` shows a program with its facts;
    `faun emit barb` prints it from the command line.
 

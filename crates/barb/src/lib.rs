@@ -80,7 +80,9 @@
 //!
 //! Build with [`Program`] and [`Builder`], call [`validate`], then [`optimize`].
 //! Analyze the resulting program with [`Program::analyze`] or, when lowering
-//! supplies external guarantees, [`Program::assuming`]. [`Facts`] records
+//! supplies external guarantees, [`Program::assuming`]; the tier lowering it
+//! for a target asks [`Program::for_target`], which also makes what the
+//! target trades work for time on. [`Facts`] records
 //! recognized operations, value ranges and affine summaries for that revision.
 //! [`optimize`] documents the ordered rewrite schedule. The adjacent README
 //! describes tier responsibilities, recognition and the API in more detail.
@@ -163,7 +165,7 @@ pub(crate) use constant::Shape;
 pub use facts::{Facts, Operation, SequenceOperation};
 pub use float_compare::FloatComparison;
 pub use rotation::Rotation;
-pub use split::counted;
+pub use split::Counted;
 pub use tree::TreeRole;
 
 pub use fingerprint::fingerprint;

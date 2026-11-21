@@ -111,16 +111,15 @@ fn lower_with(
 ) -> Result<Program, String> {
     barb::validate(program)?;
     // A counted walk handed numbers the target holds in half a word runs
-    // on a copy whose numbers analysis can then bound.
-    let split =
-        counted_most(routines).and_then(|(most, lists)| barb::counted(program, most, lists));
-    let program = split.as_ref().unwrap_or(program);
-    let facts = &program.assuming(&assumed(program, routines));
-    lowered(program, routines, facts, wanted)
+    // on a copy whose numbers analysis can then bound. What is assumed of
+    // values from outside is the same of the split program: the copies
+    // have bodies, and no type or the entry changes.
+    let (program, facts) = program.for_target(&assumed(program, routines), counted_walks(routines));
+    lowered(&program, routines, &facts, wanted)
 }
 
 /// The most a counted walk is handed for its copy to run with narrow
-/// numbers ([`barb::counted`]), and whether a walk holding a list is
+/// numbers ([`barb::Counted`]), and whether a walk holding a list is
 /// copied: a list's length, and no more than half a word holds, so that two
 /// numbers it counts up multiplied still fit a word. A 16-bit target runs
 /// short of room before it runs short of time, and its narrow arithmetic is
@@ -128,14 +127,17 @@ fn lower_with(
 /// program there as much as a tenth of its size: it copies only a walk of
 /// numbers alone, whose numbers are otherwise naturals of any size, and not
 /// one holding a list, whose length bounds what it counts already.
-fn counted_most(routines: &Routines) -> Option<(u64, bool)> {
+fn counted_walks(routines: &Routines) -> Option<barb::Counted> {
     let word = routines.word()?;
     let half = (1u64 << (word / 2)) - 1;
     let most = routines
         .length()
         .high
         .map_or(half, |length| length.min(half));
-    Some((most, word >= 32))
+    Some(barb::Counted {
+        most,
+        lists: word >= 32,
+    })
 }
 
 /// [`lower_with`], given the program's facts.
