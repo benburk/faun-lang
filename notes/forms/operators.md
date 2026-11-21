@@ -254,7 +254,11 @@ also does not make an order lawful: that it is transitive, or that
 
 On `Bool`, logical and is bitwise and on a single bit, so the two are one
 operation. Faun has one method per type, `and`, so one symbol is enough,
-and `&&` and `||` would be second spellings of the same call. Word
+and `&&` and `||` would be second spellings of the same call. A second
+symbol would not settle the mask either: C has both `&` and `&&`, and
+still reads `x & 2 == 2` as `x & (2 == 2)`. On `Bool`, `&` already does
+what Python's `and` keyword does, working out its right side only where
+the left has not decided the answer. Word
 operators, `and` and `or`, which would leave `|` to patterns, were
 considered with conditions and declined: every `Bool` expression
 would change.
@@ -384,6 +388,65 @@ A [linter](../lints.md) could flag them without the language refusing
 them. The tree-sitter grammar keeps an order for `^` and the shifts, C's,
 and accepts them mixed, so an editor does not underline them; the compiler
 refuses them.
+
+### Where are parentheses asked for, and where do types answer?
+
+A grouping can go wrong in two ways. Where one reading fails to check, the
+type checker already settles it: `x & 2 == 2` hands a number and a `Bool`
+to one `and`, so it is refused with the parenthesized form as help, as
+Java and C# refuse it, and no parenthesis rule is needed. Where both
+readings check, nothing settles it but the text. `1 << n - 1` is a number
+either way, `1 << (n - 1)` in C and `(1 << n) - 1` in Go, and `a ^ b & c`
+on words is a word either way. Those are the places Faun asks, and the
+only ones.
+
+So most lines need no parentheses at all. Rounding half to even in the
+standard library reads the same with or without them:
+
+```ruby ignore
+up = (dropped > half) | ((dropped == half) & (kept % 2 == 1))
+up = dropped > half | dropped == half & kept % 2 == 1
+```
+
+and the lines that need them are the ones a reader would otherwise have to
+stop at:
+
+```ruby ignore
+seen = if (bits & U64.of_nat(0x7fffffffffffffff)) > U64.of_nat(0x7ff0000000000000)
+mix(b, c, d, i) -> (c ^ (b | !d), 7 * i % 16)
+opcode = (byte >> 5) & 7
+address = (hi << 8) | lo
+```
+
+A common way to say what precedence should be is by type: operations from
+numbers to numbers first, then from numbers to `Bool`, then from `Bool` to
+`Bool`. Faun's table is that order, with one exception it chooses: `&`,
+`|` and `^` are one symbol each for bits and logic, so on numbers they sit
+in the `Bool`-to-`Bool` place, and a mask needs its parentheses. The type
+checker refuses the mask written without them.
+
+### Who are the parentheses for?
+
+For the reader. A writer who knows a rule can apply it, and one who does
+not can add parentheses; the reader of someone else's code can do neither.
+The reader is often not a beginner. It is anyone reading code in a
+language other than the one they use most, which for most programmers is
+often: reviewing a change, porting from C or Go, skimming a library. An
+expert who has the rule right in one language has it wrong in the next,
+and GCC and Clang warn on these groupings under `-Wall` because experts
+get them wrong. Faun spends a pair of parentheses where two common
+languages disagree and the types cannot tell, and nowhere else.
+
+### Why not take the reading that checks?
+
+Where only one grouping checks, the compiler could take it, and the
+programmer would never see an error. Faun does not, because that makes
+the parse depend on types. A reader could not see an expression's shape
+without knowing every operand's type; a change of type elsewhere, a `Bool`
+becoming a `U8`, could regroup an expression with no error; and editors,
+formatters and highlighters could not parse a line without running the
+type checker. The grouping is read from the text, and where the text
+leaves it open the compiler says so.
 
 ### Why do `&`, `|` and `^` sit looser than comparisons?
 
