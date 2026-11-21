@@ -184,7 +184,7 @@ fn reference_fingerprints() -> BTreeMap<u128, (&'static str, &'static str)> {
     for target in targets {
         let mut program =
             faun_frontend::lower_to_barb(&package.entry(), &faun_driver::platform(target)).unwrap();
-        barb::canonical(&mut program);
+        barb::test_support::canonical(&mut program);
         for (float, format) in FLOATS {
             for (method, operation) in OPERATIONS {
                 let name = format!("{float}.{method}");
@@ -192,7 +192,7 @@ fn reference_fingerprints() -> BTreeMap<u128, (&'static str, &'static str)> {
                     .function_ids()
                     .find(|&id| program.name(program.function(id).name) == name)
                     .unwrap_or_else(|| panic!("the standard has no `{name}`"));
-                let print = barb::fingerprint(&program, id)
+                let print = barb::test_support::fingerprint(&program, id)
                     .unwrap_or_else(|| panic!("`{name}` has no fingerprint"));
                 known.insert(print, (operation, format));
             }

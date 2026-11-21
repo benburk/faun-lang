@@ -170,13 +170,12 @@ pub use rotation::Rotation;
 pub use split::Counted;
 pub use tree::TreeRole;
 
-pub use fingerprint::fingerprint;
 pub use inline::InlineLimits;
 pub use model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,
     Range, Symbol, Type, TypeId,
 };
-pub use normalize::canonical;
+pub(crate) use normalize::canonical;
 #[cfg(test)]
 pub(crate) use normalize::fold;
 #[cfg(test)]
@@ -190,10 +189,23 @@ pub use types::TypeShape;
 pub use validate::{Refusal, validate};
 
 /// Individual optimizer steps, for the tests of the tiers below to build
-/// their inputs with.
+/// their inputs with, and what writing the table of the standard's float
+/// code takes.
 #[cfg(feature = "test-support")]
 pub mod test_support {
-    use super::{InlineLimits, Program, normalize};
+    use super::{FnId, InlineLimits, Program, normalize};
+
+    /// Rewrite every body alone, as Barb does before it recognizes floats.
+    pub fn canonical(program: &mut Program) {
+        normalize::canonical(program);
+    }
+
+    /// `id`'s fingerprint, as Barb knows a standard float routine by, or
+    /// nothing where it has none.
+    #[must_use]
+    pub fn fingerprint(program: &Program, id: FnId) -> Option<u128> {
+        super::fingerprint::fingerprint(program, id)
+    }
 
     pub fn structural(program: &mut Program) {
         normalize::structural(program);

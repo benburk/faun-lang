@@ -27,7 +27,7 @@ const WORK: usize = 200_000;
 /// `id`'s fingerprint, or nothing where it reaches a definition with no
 /// body or a type not yet defined, or holds more than 200,000 expressions.
 #[must_use]
-pub fn fingerprint(program: &Program, id: FnId) -> Option<u128> {
+pub(crate) fn fingerprint(program: &Program, id: FnId) -> Option<u128> {
     let mut writer = Writer {
         program,
         hash: Fnv::new(),

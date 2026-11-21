@@ -87,7 +87,7 @@ struct Rules {
 /// to depends on its own body, never on budgets or the rest of the program,
 /// and two ways of writing one equation that differ only in aliases, record
 /// reads or decided matches are recognized alike.
-pub fn canonical(program: &mut Program) {
+pub(crate) fn canonical(program: &mut Program) {
     let rules = Rules {
         blind: true,
         ..Rules::default()
