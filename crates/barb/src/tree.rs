@@ -1,11 +1,19 @@
 //! Representation-independent roles of recursive tree builders and readers.
 use super::{Atom, Body, Expr, FnId, Program, TypeId, TypeShape, type_shape};
 
+/// What a definition does with a recursive tree of scalars.
+///
+/// One of Barb's facts, as [`Facts::tree_role`](super::Facts::tree_role)
+/// answers it, which machine lowering carries on the function it lowers the
+/// definition to, for its storage proofs to read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TreeRole {
+    /// Neither builds nor reads one.
     #[default]
     Other,
+    /// Builds a tree from scalars alone.
     Builder,
+    /// Reads one tree, beside scalars, into a scalar.
     Reader,
 }
 
