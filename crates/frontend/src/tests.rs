@@ -505,6 +505,130 @@ fn a_test_is_not_tested_again_or_compared() {
     assert!(parse("f(x) -> (x is 3) == y").is_ok());
 }
 
+/// `^` has no order with `&` or `|`: beside either unparenthesized it is
+/// refused at the second operator, offering both groupings, which are
+/// read.
+#[test]
+fn xor_takes_parentheses_beside_and_or_or() {
+    for (source, first, second) in [
+        ("f(a, b, c) -> a ^ b & c", "^", "&"),
+        ("f(a, b, c) -> a & b ^ c", "&", "^"),
+        ("f(a, b, c) -> a ^ b | c", "^", "|"),
+        ("f(a, b, c) -> a | b ^ c", "|", "^"),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!(
+                "`{first}` and `{second}` need parentheses together: \
+                 write `(a {first} b) {second} c` or `a {first} (b {second} c)`"
+            ),
+            "{source}"
+        );
+        assert_eq!(&source[error.offset..error.end], second, "{source}");
+        for grouped in [
+            format!("f(a, b, c) -> (a {first} b) {second} c"),
+            format!("f(a, b, c) -> a {first} (b {second} c)"),
+        ] {
+            parse(&grouped).unwrap_or_else(|error| panic!("{grouped}: {error}"));
+        }
+    }
+}
+
+/// A refusal of `^` beside `&` or `|` shows the operands as written, the
+/// nearest operator on the left being the one it stands beside, and falls
+/// on a line beginning with the second, which goes on with the line before.
+#[test]
+fn xor_beside_and_or_or_is_refused_as_written() {
+    let error = parse("f(x, y) -> x == 1 ^ y < 2 ^ !x & y").unwrap_err();
+    assert!(
+        error
+            .message
+            .ends_with("write `(x == 1 ^ y < 2 ^ !x) & y` or `x == 1 ^ y < 2 ^ (!x & y)`"),
+        "{error}"
+    );
+    let error = parse("f(a, b, c, d) -> a | b & c ^ d").unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("`&` and `^` need parentheses together: write `(b & c) ^ d`"),
+        "{error}"
+    );
+    let error = parse("f(a, b, c) -> a & b\n  ^ c").unwrap_err();
+    assert!(
+        error.message.contains("need parentheses together"),
+        "{error}"
+    );
+    assert_eq!((error.line, error.column), (2, 3), "{error}");
+}
+
+/// `&` binds tighter than `|` without parentheses, and each of `&`, `|`
+/// and `^` chains with itself, left first.
+#[test]
+fn and_binds_before_or_and_each_chains() {
+    for (source, outer, inner_left) in [
+        ("f(a, b, c) -> a & b | c", BinaryOp::Or, Some(BinaryOp::And)),
+        ("f(a, b, c) -> a | b & c", BinaryOp::Or, None),
+        (
+            "f(a, b, c) -> a & b & c",
+            BinaryOp::And,
+            Some(BinaryOp::And),
+        ),
+        ("f(a, b, c) -> a | b | c", BinaryOp::Or, Some(BinaryOp::Or)),
+        (
+            "f(a, b, c) -> a ^ b ^ c",
+            BinaryOp::Xor,
+            Some(BinaryOp::Xor),
+        ),
+    ] {
+        let clause = clauses(source).remove(0);
+        let ExprKind::Binary(op, left, right) = &clause.body.result.kind else {
+            panic!("{source}: {:?}", clause.body.result);
+        };
+        assert_eq!(*op, outer, "{source}");
+        match inner_left {
+            Some(inner) => assert!(
+                matches!(&left.kind, ExprKind::Binary(op, ..) if *op == inner),
+                "{source}: left first"
+            ),
+            None => assert!(
+                matches!(&right.kind, ExprKind::Binary(BinaryOp::And, ..)),
+                "{source}: `&` first"
+            ),
+        }
+    }
+}
+
+/// `&`, `|` and `^` are looser than comparisons and arithmetic, so
+/// conditions join without parentheses, and parenthesized and broken
+/// across lines they are read.
+#[test]
+fn and_or_and_xor_join_comparisons() {
+    for source in [
+        "f(x, y) -> x == 3 & y == 5",
+        "f(x, y) -> x + 1 < y * 2 | x - 1 >= y % 3",
+        "f(x, y) -> x == 1 ^ y + 1 > 2",
+        "f(x, y) -> x is Ok(v) & v < 100",
+        "f(x, y) -> (x & y) == y ^ x != y",
+        "f(x, y, z) -> ((x ^ y) | z) == x",
+        "f(a, b, c) -> a ^ (b | c) ^ (a & b)",
+        "f(a, b, c) -> a &\n  b |\n  c",
+        "f(a, b, c) -> a\n  ^ b\n  ^ c",
+        "f(a, b, c) -> (a ^ b)\n  | c",
+    ] {
+        parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    let clause = clauses("f(x, y) -> x == 3 ^ y + 1 > 5").remove(0);
+    let ExprKind::Binary(BinaryOp::Xor, left, right) = &clause.body.result.kind else {
+        panic!("{:?}", clause.body.result);
+    };
+    assert!(matches!(left.kind, ExprKind::Binary(BinaryOp::Equal, ..)));
+    assert!(matches!(
+        right.kind,
+        ExprKind::Binary(BinaryOp::Greater, ..)
+    ));
+}
+
 /// A block answers its last line where that is a value, and `{}` where it
 /// is a binding or a leaving line.
 #[test]

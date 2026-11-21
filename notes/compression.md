@@ -240,9 +240,11 @@ hash ran past the table, and every lookup missed. Nothing failed: the
 output still read back, every expectation held, and compression was
 merely 1.9 times bigger, 2.32 MB where zlib writes 1.21. Only comparing
 sizes with zlib showed it, so the deflate test now holds every output to
-within 2% of zlib's size at the same level. The precedence is the usual
+within 2% of zlib's size at the same level. The precedence was the usual
 one; the lesson is that a compressor's tests need a size oracle, not only
-a round trip. The hash is now a product's top bits, which needs no mask.
+a round trip. Since 2026-11-20 `^` beside `&` without parentheses is
+refused, so the line can no longer be written. The hash is now a product's
+top bits, which needs no mask.
 
 ### Expectations run on a budget, and a stream has a fixed cost
 

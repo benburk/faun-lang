@@ -94,6 +94,12 @@ Without the parentheses, `b & U8.of_nat(8) == U8.of_nat(8)` is
 `b & (… == …)`, a `U8` and a `Bool`, and is refused: "argument 1 of `and`
 should be `U8`, but is `Bool`".
 
+`&` binds before `|`, so `b & c | !b & d` is `(b & c) | (!b & d)`. `^`
+has no order with either: beside `&` or `|` it takes parentheses, and
+`a ^ b & c` is refused as it is read, "`^` and `&` need parentheses
+together: write `(a ^ b) & c` or `a ^ (b & c)`". It chains with itself,
+`a ^ b ^ c`, read left first.
+
 ### On `Bool`, the right side waits
 
 On `Bool`, `&` and `|` work out their right side only where the left has
@@ -151,20 +157,23 @@ and a type's operators keep to it by convention:
 
 Loosest first; each level is left-associative:
 
-| Level | Operators                        |
-| ----- | -------------------------------- |
-| 1     | `\|`                             |
-| 2     | `^`                              |
-| 3     | `&`                              |
-| 4     | `is`                             |
-| 5     | `==`, `!=`, `<`, `<=`, `>`, `>=` |
-| 6     | `+`, `-`                         |
-| 7     | `*`, `/`, `%`                    |
-| 8     | prefix `-` and `!`               |
-| 9     | calls, `.member`, `?`            |
+| Level | Operators                                         |
+| ----- | ------------------------------------------------- |
+| 1     | `\|`, and `^` (beside `&` or `\|`, parenthesized) |
+| 2     | `&`                                               |
+| 3     | `is`                                              |
+| 4     | `==`, `!=`, `<`, `<=`, `>`, `>=`                  |
+| 5     | `+`, `-`                                          |
+| 6     | `*`, `/`, `%`                                     |
+| 7     | prefix `-` and `!`                                |
+| 8     | calls, `.member`, `?`                             |
 
-So `True ^ False | False & False` is `(True ^ False) | (False & False)`,
-and `!!True` is `!(!True)`. A prefix takes the whole call after it:
+So `True | False & False` is `True | (False & False)`, and `!!True` is
+`!(!True)`. `^` is at `|`'s level against everything but `&` and `|`:
+`x == 1 ^ y == 2` is `(x == 1) ^ (y == 2)`. Beside `&` or `|`, as
+`a ^ b & c`, `a & b ^ c`, `a ^ b | c` or `a | b ^ c`, it is refused at the
+second operator, which offers both groupings, `(a ^ b) & c` and
+`a ^ (b & c)`. A prefix takes the whole call after it:
 `-x.abs()` is `-(x.abs())`; where that fails to check, the compiler's help
 offers `(-x).abs()`. A test tested again or compared,
 `x is A is B` or `x is 3 == y`, is refused. A line beginning with an infix
@@ -248,6 +257,25 @@ The inflate that met the trap wrote ten mask tests unparenthesized before
 parenthesizing all of them; with the help, each costs one reading of a
 refusal rather than a search.
 
+### Why has `^` no order with `&` and `|`?
+
+Because languages disagree on it, while they agree on the rest. C, Rust, Go
+and Python all bind and before or, as Boolean algebra writes products
+before sums, so `a & b | c` is `(a & b) | c` in each and in Faun. Where `^`
+goes they do not agree: C, Rust and Python put it between `&` and `|`, Go
+at `|`'s level, beside `+`. So `a | b ^ c` is `a | (b ^ c)` to a reader
+from C and `(a | b) ^ c` to a reader from Go, and neither is wrong about
+their language. So Faun refuses it rather than guess, and the parentheses
+say which is meant. This is Carbon's rule, "if in doubt, leave it out": an
+operator pair whose order a reader may doubt has none, and takes
+parentheses.
+
+The cost is parentheses where `^` meets `&` or `|`, as in a hash that
+masks a mixture, `(a ^ b) & mask`, which is where C's order once let one
+through unmasked (in the [compression note](../compression.md)). `^` with
+itself, `a ^ b ^ c`, needs none, since `xor` associates, and against
+comparisons and arithmetic it stands where `|` does.
+
 ### Why do `&` and `|` on `Bool` skip their right side?
 
 Conditions are written to rely on it. A recursion's base case is the left
@@ -287,6 +315,10 @@ it does.
 
 ## History
 
+- **2026-11-20:** `^` lost its place between `|` and `&`: beside either
+  it is refused without parentheses, and against everything else it
+  stands at `|`'s level, chaining with itself. `&` before `|` is kept. No
+  program mixed them.
 - **2026-11-17:** a type error at the operand of `&`, `|` or `^` whose
   other side, or whose right, is a comparison written without parentheses
   came to say the precedence and the parenthesized form, after inflate met

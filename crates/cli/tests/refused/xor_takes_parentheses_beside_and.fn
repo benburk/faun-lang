@@ -1,0 +1,4 @@
+# `^` has no order with `&` or `|`, so beside either it takes parentheses:
+# this could be `(a ^ b) & c` or `a ^ (b & c)`.
+differ : (Bool, Bool, Bool) -> Bool
+differ(a, b, c) -> a ^ b & c
