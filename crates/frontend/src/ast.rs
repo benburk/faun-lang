@@ -684,6 +684,8 @@ pub enum BinaryOp {
     LessEqual,
     Greater,
     GreaterEqual,
+    ShiftLeft,
+    ShiftRight,
     Add,
     Subtract,
     Multiply,

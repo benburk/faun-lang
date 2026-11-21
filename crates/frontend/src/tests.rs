@@ -629,6 +629,136 @@ fn and_or_and_xor_join_comparisons() {
     ));
 }
 
+/// A shift has no order with arithmetic, `&`, `|`, `^` or the other shift:
+/// beside any of them unparenthesized it is refused at the second
+/// operator, either way round, offering both groupings, which are read.
+#[test]
+fn a_shift_takes_parentheses_beside_arithmetic_and_bits() {
+    for shift in ["<<", ">>"] {
+        for other in ["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"] {
+            if other == shift {
+                continue;
+            }
+            for (first, second) in [(shift, other), (other, shift)] {
+                let source = format!("f(a, b, c) -> a {first} b {second} c");
+                let error = parse(&source).unwrap_err();
+                assert_eq!(
+                    error.message,
+                    format!(
+                        "`{first}` and `{second}` need parentheses together: \
+                         write `(a {first} b) {second} c` or `a {first} (b {second} c)`"
+                    ),
+                    "{source}"
+                );
+                assert_eq!(&source[error.offset..error.end], second, "{source}");
+                for grouped in [
+                    format!("f(a, b, c) -> (a {first} b) {second} c"),
+                    format!("f(a, b, c) -> a {first} (b {second} c)"),
+                ] {
+                    parse(&grouped).unwrap_or_else(|error| panic!("{grouped}: {error}"));
+                }
+            }
+        }
+    }
+}
+
+/// A shift does not chain: `x << a << b` is refused at the second, which
+/// offers the grouping a chain would read.
+#[test]
+fn a_shift_does_not_chain() {
+    for shift in ["<<", ">>"] {
+        let source = format!("f(x, a, b) -> x {shift} a {shift} b");
+        let error = parse(&source).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!("`{shift}` does not chain: write `(x {shift} a) {shift} b`"),
+            "{source}"
+        );
+        assert_eq!(&source[error.offset..error.end], shift, "{source}");
+        for grouped in [
+            format!("f(x, a, b) -> (x {shift} a) {shift} b"),
+            format!("f(x, a, b) -> x {shift} (a {shift} b)"),
+        ] {
+            parse(&grouped).unwrap_or_else(|error| panic!("{grouped}: {error}"));
+        }
+    }
+}
+
+/// A refusal of a shift shows the operands as written, the operator it
+/// stands beside being the nearest, across a call, a prefix or a line
+/// beginning with it; one a comparison takes in is ordered by it, on
+/// either side.
+#[test]
+fn a_shift_is_refused_as_written() {
+    for (source, message) in [
+        (
+            "f(x, y) -> x.low() << 8 | y",
+            "`<<` and `|` need parentheses together: write `(x.low() << 8) | y` or `x.low() << (8 | y)`",
+        ),
+        (
+            "f(x, y) -> x * 2 + y >> 1",
+            "`+` and `>>` need parentheses together: write `(x * 2 + y) >> 1` or `x * 2 + (y >> 1)`",
+        ),
+        (
+            "f(x, y) -> x | y & x << 2",
+            "`&` and `<<` need parentheses together: write `(y & x) << 2` or `y & (x << 2)`",
+        ),
+        (
+            "f(x, y) -> x ^ -y << 2",
+            "`^` and `<<` need parentheses together: write `(x ^ -y) << 2` or `x ^ (-y << 2)`",
+        ),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert_eq!(error.message, message, "{source}");
+    }
+    let error = parse("f(x, y) -> x\n  << 8\n  | y").unwrap_err();
+    assert!(
+        error
+            .message
+            .starts_with("`<<` and `|` need parentheses together"),
+        "{error}"
+    );
+    assert_eq!((error.line, error.column), (3, 3), "{error}");
+    let error = parse("f(x, y) -> x & y\n  << 8").unwrap_err();
+    assert_eq!((error.line, error.column), (2, 3), "{error}");
+}
+
+/// A shift binds tighter than a comparison and looser than a call or a
+/// prefix, so a comparison of shifts, and shifts joined by comparisons,
+/// need no parentheses, and parenthesized shifts mix with anything.
+#[test]
+fn a_shift_binds_tighter_than_a_comparison() {
+    for source in [
+        "f(x, y) -> x << 3 == y",
+        "f(x, y) -> y == x << 3",
+        "f(x, y) -> x >> 1 < y << 1",
+        "f(x, y) -> x == 1 & y >> 3 == 2",
+        "f(x, y) -> y >> 3 == 2 & x == 1",
+        "f(x, y) -> x & y << 2 == y",
+        "f(x, y) -> x == y << 2 | y",
+        "f(x, y) -> x << 2 is 8",
+        "f(x, y) -> (x >> 5) & 7",
+        "f(x, y) -> (x << 8) | y",
+        "f(x, y) -> ((x << 8) | y) >> 4 == (x + 1) << 2",
+        "f(x, y) -> x.shift_left(3) == x << 3",
+        "f(x, y) -> x\n  << 3\n  == y",
+    ] {
+        parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    let clause = clauses("f(x, y) -> -x.low() << 3 == y >> 1").remove(0);
+    let ExprKind::Binary(BinaryOp::Equal, left, right) = &clause.body.result.kind else {
+        panic!("{:?}", clause.body.result);
+    };
+    let ExprKind::Binary(BinaryOp::ShiftLeft, shifted, _) = &left.kind else {
+        panic!("{left:?}");
+    };
+    assert!(matches!(shifted.kind, ExprKind::Unary(..)), "{shifted:?}");
+    assert!(matches!(
+        right.kind,
+        ExprKind::Binary(BinaryOp::ShiftRight, ..)
+    ));
+}
+
 /// A block answers its last line where that is a value, and `{}` where it
 /// is a binding or a leaving line.
 #[test]

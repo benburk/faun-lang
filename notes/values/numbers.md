@@ -146,9 +146,9 @@ U8 : Nat.(
 
 (Excerpt from `u8.fn`.) Division and remainder work on the unsigned
 representatives, with the same zero rules, and so does the order. The words
-have `&`, `|`, `^`, `!`, `shift_left`, `shift_right`, `rotate_left` and
-`rotate_right`; a shift by the width or more is zero. `Int` has no bitwise
-operations. `of_nat` wraps; `from_nat` refuses instead, `U8.from_nat(256)`
+have `&`, `|`, `^`, `!`, `shift_left` and `shift_right`, written `<<` and
+`>>`, `rotate_left` and `rotate_right`; a shift by the width or more is
+zero. `Int` has no bitwise operations. `of_nat` wraps; `from_nat` refuses instead, `U8.from_nat(256)`
 being `Err(TooBig)`; and widening, `U64.of_u8`, cannot wrap.
 
 Each word is held in machine words, and so is its arithmetic. A `U32`'s

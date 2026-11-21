@@ -79,6 +79,10 @@ pub enum Kind {
     Le,
     Gt,
     Ge,
+    /// `<<`, a shift left.
+    Shl,
+    /// `>>`, a shift right.
+    Shr,
     Plus,
     /// `-`: a subtraction, or a negation.
     Minus,
@@ -165,6 +169,8 @@ impl Kind {
                 | Self::Le
                 | Self::Gt
                 | Self::Ge
+                | Self::Shl
+                | Self::Shr
                 | Self::Plus
                 | Self::Star
                 | Self::Slash
@@ -629,8 +635,10 @@ impl Lexer<'_> {
             b'!' if next == Some(b'=') => two(self, Kind::Ne),
             b'!' => one(self, Kind::Bang),
             b'<' if next == Some(b'=') => two(self, Kind::Le),
+            b'<' if next == Some(b'<') => two(self, Kind::Shl),
             b'<' => one(self, Kind::Lt),
             b'>' if next == Some(b'=') => two(self, Kind::Ge),
+            b'>' if next == Some(b'>') => two(self, Kind::Shr),
             b'>' => one(self, Kind::Gt),
             b'+' => one(self, Kind::Plus),
             b'*' => one(self, Kind::Star),
@@ -844,5 +852,47 @@ mod tests {
         assert_eq!(kinds("_x")[0], Kind::Ident);
         assert_eq!(kinds("iffy")[0], Kind::Ident);
         assert_eq!(kinds("if")[0], Kind::KwIf);
+    }
+
+    /// `<<` and `>>` are one token where the two angles touch, and leave
+    /// every other `<` and `>` as it was: the comparisons, `->`, and a
+    /// splice's alignment.
+    #[test]
+    fn shifts_are_two_angles_touching() {
+        use Kind::{Arrow, Ge, Gt, Ident, Le, Lt, Minus, Number, Shl, Shr};
+        for (source, expected) in [
+            ("a << b", &[Ident, Shl, Ident][..]),
+            ("a>>b", &[Ident, Shr, Ident]),
+            ("a < < b", &[Ident, Lt, Lt, Ident]),
+            ("a > > b", &[Ident, Gt, Gt, Ident]),
+            ("a <<= b", &[Ident, Shl, Kind::Eq, Ident]),
+            ("a <= b", &[Ident, Le, Ident]),
+            ("a >= b", &[Ident, Ge, Ident]),
+            ("a < b", &[Ident, Lt, Ident]),
+            ("a<-1", &[Ident, Lt, Minus, Number]),
+            ("a -> b", &[Ident, Arrow, Ident]),
+            ("a ->> b", &[Ident, Arrow, Gt, Ident]),
+            ("a\n  << b", &[Ident, Shl, Ident]),
+            ("a\n  >> b", &[Ident, Shr, Ident]),
+        ] {
+            let mut expected = expected.to_vec();
+            expected.push(Kind::Eof);
+            assert_eq!(kinds(source), expected, "{source}");
+        }
+        let aligned = ["\"${x:", "<5}${y:", ">3}\""].concat();
+        assert_eq!(
+            kinds(&aligned)[..9],
+            [
+                Kind::StrStart,
+                Kind::SpliceStart,
+                Ident,
+                Kind::Colon,
+                Lt,
+                Number,
+                Kind::SpliceEnd,
+                Kind::SpliceStart,
+                Ident
+            ]
+        );
     }
 }

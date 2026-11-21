@@ -1,0 +1,4 @@
+# A shift has no order with `|`, so beside it it takes parentheses: this
+# could be `(hi << 8) | lo` or `hi << (8 | lo)`.
+word : (Nat, Nat) -> Nat
+word(hi, lo) -> hi << 8 | lo

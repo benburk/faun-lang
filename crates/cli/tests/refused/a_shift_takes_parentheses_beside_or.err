@@ -1,0 +1,5 @@
+error: `<<` and `|` need parentheses together: write `(hi << 8) | lo` or `hi << (8 | lo)`
+ --> a_shift_takes_parentheses_beside_or.fn:4:25
+  |
+4 | word(hi, lo) -> hi << 8 | lo
+  |                         ^

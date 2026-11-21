@@ -15,12 +15,15 @@
 // Infix operators, loosest first, each level left-associative. The
 // compiler gives `^` no order with `&` and `|` and refuses it beside either
 // unparenthesized; here it reads between them, as C's does, so an editor
-// still highlights a line the compiler will refuse.
+// still highlights a line the compiler will refuse. Likewise a shift has no
+// order with arithmetic, `&`, `|`, `^` or a shift, and is refused beside
+// any of them; here it reads between the comparisons and `+`, as C's does.
 const INFIX = [
   ['|'],
   ['^'],
   ['&'],
   ['==', '!=', '<', '<=', '>', '>='],
+  ['<<', '>>'],
   ['+', '-'],
   ['/', '%', '*'],
 ];
