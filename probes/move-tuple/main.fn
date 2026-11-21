@@ -1,0 +1,24 @@
+# A walker on a 1000 by 1000 torus, `n` steps: at step `i` it turns by
+# `(i * i + i / 7) % 3` quarters, then goes on a square east, north, west
+# or south:
+# the walker a tuple of its position, heading and step count.
+package {}
+
+import std.host {Host}
+
+step : ((Nat, Nat, Nat, Nat), Nat) -> (Nat, Nat, Nat, Nat)
+step((x, y, heading, steps), i) -> (
+  turned = (heading + (i * i + i / 7) % 3) % 4
+  if turned == 0 then ((x + 1) % 1000, y, turned, steps + 1)
+  else if turned == 1 then (x, (y + 1) % 1000, turned, steps + 1)
+  else if turned == 2 then ((x + 999) % 1000, y, turned, steps + 1)
+  else (x, (y + 999) % 1000, turned, steps + 1)
+)
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  (x, y, heading, steps) = List.range(n).fold((0, 0, 0, 0), step)
+  printed = host.println!("${x} ${y} ${heading} ${steps}")
+  host.exit!(0)
+)

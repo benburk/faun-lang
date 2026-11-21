@@ -1,0 +1,17 @@
+# The dot product of two lists of `n` numbers: the lists zipped, each pair
+# multiplied, and the products summed.
+package {}
+
+import std.host {Host}
+
+dot : (List(Nat), List(Nat)) -> Nat
+dot(xs, ys) -> xs.zip(ys).map(|(x, y)| x * y).sum()
+
+main! : Host -> []
+main!(host) -> (
+  n = Nat.from_str(host.args.get(1).ok_or("1000")).ok_or(1000)
+  xs = List.range(n).map(|i| i * 7919 % 251)
+  ys = List.range(n).map(|i| i * 31 % 97)
+  printed = host.println!("${dot(xs, ys)}")
+  host.exit!(0)
+)

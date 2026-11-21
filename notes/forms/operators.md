@@ -254,11 +254,7 @@ also does not make an order lawful: that it is transitive, or that
 
 On `Bool`, logical and is bitwise and on a single bit, so the two are one
 operation. Faun has one method per type, `and`, so one symbol is enough,
-and `&&` and `||` would be second spellings of the same call. A second
-symbol would not settle the mask either: C has both `&` and `&&`, and
-still reads `x & 2 == 2` as `x & (2 == 2)`. On `Bool`, `&` already does
-what Python's `and` keyword does, working out its right side only where
-the left has not decided the answer. Word
+and `&&` and `||` would be second spellings of the same call. Word
 operators, `and` and `or`, which would leave `|` to patterns, were
 considered with conditions and declined: every `Bool` expression
 would change.
@@ -388,88 +384,6 @@ A [linter](../lints.md) could flag them without the language refusing
 them. The tree-sitter grammar keeps an order for `^` and the shifts, C's,
 and accepts them mixed, so an editor does not underline them; the compiler
 refuses them.
-
-### Where are parentheses asked for, and where do types answer?
-
-A grouping can go wrong in two ways. Where one reading fails to check, the
-type checker already settles it: `x & 2 == 2` hands a number and a `Bool`
-to one `and`, so it is refused with the parenthesized form as help, as
-Java and C# refuse it, and no parenthesis rule is needed. Where both
-readings check, nothing settles it but the text. `1 << n - 1` is a number
-either way, `1 << (n - 1)` in C and `(1 << n) - 1` in Go, and `a ^ b & c`
-on words is a word either way. Those are the places Faun asks, and the
-only ones.
-
-So the rule is quiet where everyone agrees and explicit where languages
-disagree. A line built from arithmetic, comparisons and and-before-or
-needs no parentheses; the lines that need them are the ones a reader
-would otherwise have to stop at:
-
-```ruby ignore
-# none needed: school arithmetic, compare, then and before or
-up = dropped > half | dropped == half & kept % 2 == 1
-
-# needed, each where a reader could misread
-mask = (1 << n) - 1   # 1 << n - 1 is 1 << (n - 1) in C, (1 << n) - 1 in Go
-flip = x ^ (y & 1)    # where ^ sits among & and | differs between languages
-odd = (x & 1) == 1    # x & 1 == 1 is a number and a Bool handed to one and
-```
-
-The first is the standard library's rounding half to even, which writes
-its parentheses anyway, `(dropped > half) | ((dropped == half) & …)`; a
-writer may add parentheses wherever they help, and the rule only decides
-where they must be.
-
-A common way to say what precedence should be is by type: operations from
-numbers to numbers first, then from numbers to `Bool`, then from `Bool` to
-`Bool`. Faun's table is that order, with one exception it chooses: `&`,
-`|` and `^` are one symbol each for bits and logic, so on numbers they sit
-in the `Bool`-to-`Bool` place, and a mask needs its parentheses. The type
-checker refuses the mask written without them.
-
-### Who are the parentheses for?
-
-For the reader. A writer who knows a rule can apply it, and one who does
-not can add parentheses; the reader of someone else's code can do neither.
-The reader is often not a beginner. It is anyone reading code in a
-language other than the one they use most, which for most programmers is
-often: reviewing a change, porting from C or Go, skimming a library. An
-expert who has the rule right in one language has it wrong in the next,
-and GCC and Clang warn on these groupings under `-Wall` because experts
-get them wrong. Faun spends a pair of parentheses where two common
-languages disagree and the types cannot tell, and nowhere else.
-
-### Why an error, and not a warning or a style rule?
-
-A warning reaches the author, when they compile. The reader of what was
-committed does not see it: a change under review, a diff in a log, an
-example in a post or a document is read where no warning is shown, and a
-warning turned off for a project or a file is not shown in an editor
-either. If the author let it pass, the ambiguous form is in the text, and
-the reader is back to knowing which language's table applies. Only a
-refusal makes the text itself unambiguous wherever it is read. The
-compiler has no warnings at all: it refuses what has no meaning or one a
-reader would misread, and leaves what is plainly meant but likely a slip
-to a [linter](../lints.md).
-
-A style guide or a project's rules could ask for the same parentheses,
-but each project would have to choose and enforce them, and code moves
-between projects, while a snippet in a post or an answer has no project at
-all. The language asking makes the rule one rule everywhere, and starting
-strict is the direction that can be undone: a grouping refused today can
-be given an order later without breaking any program, while one given an
-order cannot be refused without breaking programs that use it.
-
-### Why not take the reading that checks?
-
-Where only one grouping checks, the compiler could take it, and the
-programmer would never see an error. Faun does not, because that makes
-the parse depend on types. A reader could not see an expression's shape
-without knowing every operand's type; a change of type elsewhere, a `Bool`
-becoming a `U8`, could regroup an expression with no error; and editors,
-formatters and highlighters could not parse a line without running the
-type checker. The grouping is read from the text, and where the text
-leaves it open the compiler says so.
 
 ### Why do `&`, `|` and `^` sit looser than comparisons?
 
