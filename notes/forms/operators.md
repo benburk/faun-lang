@@ -327,6 +327,8 @@ it does.
 
 ## Related
 
+- [Operator precedence](../operator-precedence.md): the space, the
+  designs considered, and why this order
 - [Methods](methods.md): `equals` and `cmp`, derived or written, and why a
   type has at most one
 - [Pattern matching](pattern-matching.md): `is`, and the names a test binds

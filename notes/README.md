@@ -76,6 +76,8 @@ syntax shown on purpose, marks its fence `` ```ruby ignore ``.
 - [Host effects](host-effects.md), the
   [effects brainstorm](effects/README.md) and its
   [roadmap](effects/roadmap.md): host APIs to come
+- [Operator precedence](operator-precedence.md): what other languages do,
+  the designs considered, and why `^` alone takes parentheses
 - [Lints](lints.md): what a linter should flag and the compiler leaves alone
 - [Grammar audit](grammar-audit.md): whether the grammar stays LL(1) and
   free of ambiguity
